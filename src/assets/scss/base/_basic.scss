@@ -1,0 +1,26 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@100;300;400;500;700;900&display=swap');
+
+* {
+  box-sizing: border-box;
+  -moz-box-sizing: border-box;
+  -webkit-box-sizing: border-box;
+}
+
+html, body {
+  color: #303133;
+  margin: 0;
+  padding: 0;
+  background-color: #F2F3F4;
+}
+
+html, body, div, p, span, h1, h2, h3, h4, h5, h6, button, input, .headline, .v-application .display-1, .v-application .display-2, .v-application .display-3, .title, .v-application .title, .v-application .headline {
+  font-family: 'Noto Sans TC', sans-serif, "Helvetica Neue", Helvetica, "Hiragino Sans GB", "Microsoft YaHei", "微軟雅黑", Arial, sans-serif !important;
+}
+
+hr {
+  border: 0;
+  height: 1px;
+  background-color: #d4d4d4;
+  color: #d4d4d4;
+  /* IE6 */
+}

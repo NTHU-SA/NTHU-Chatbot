@@ -1,0 +1,28 @@
+// 超過隱藏內容
+.ellipsis-1 {
+  overflow: hidden;  
+  text-overflow: ellipsis;  
+  white-space: normal;  
+  display: -webkit-box;  
+  -webkit-box-orient: vertical;  
+  -webkit-line-clamp: 1; /*最多顯示一行*/  
+}
+
+.ellipsis-2 {
+  overflow: hidden;  
+  text-overflow: ellipsis;  
+  white-space: normal;  
+  display: -webkit-box;  
+  -webkit-box-orient: vertical;  
+  -webkit-line-clamp: 2; /*最多顯示兩行*/  
+}
+
+.ellipsis-3 {
+  overflow: hidden;  
+  text-overflow: ellipsis;  
+  white-space: normal;  
+  display: -webkit-box;
+  -webkit-box-orient: vertical;  
+  -webkit-line-clamp: 3; /*最多顯示三行*/  
+}
+
