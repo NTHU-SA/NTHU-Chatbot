@@ -6,13 +6,16 @@
 
 
 # # build stage
-FROM node:lts-alpine as build-stage
+FROM node:14-alpine as build-stage
 WORKDIR /app
 
-RUN apk update && apk add python3 make g++
+RUN apk update && apk add python3 make g++ curl
 
+# # build stage
 COPY package.json ./
 COPY yarn.lock ./
+RUN npm install -g npm@8.4.1
+RUN npx browserslist@latest --update-db
 RUN yarn install
 COPY . .
 RUN yarn build
