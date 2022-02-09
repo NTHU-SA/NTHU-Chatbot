@@ -9,7 +9,7 @@
 FROM node:lts-alpine as build-stage
 WORKDIR /app
 
-RUN apk update && apk add python make g++
+RUN apk update && apk add python3 make g++
 
 COPY package.json ./
 COPY yarn.lock ./
