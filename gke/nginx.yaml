@@ -16,7 +16,7 @@ spec:
         app: nginx
     spec:
       containers:
-      - image: gcr.io/${PROJECT_ID}/nthu-chatbot-client:latest
+      - image: gcr.io/$(PROJECT_ID)/nthu-chatbot-client:latest
         imagePullPolicy: Always
         name: nthu-chatbot-client
         ports:
