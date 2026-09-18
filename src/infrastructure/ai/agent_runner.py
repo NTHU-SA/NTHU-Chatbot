@@ -5,6 +5,7 @@
 由 chat route 轉成 SSE 送到 LIFF 頁面：
 
   thinking        {delta}      模型的思考摘要（需 REASONING_SUMMARY=true 與 reasoning 模型）
+  suggestions     {options}    模型反問時提供的快速回覆選項
   tool_call_start {call_id, name, args}
   tool_call_end   {call_id, name, ok, duration_ms, result_preview}
   token           {delta}
@@ -28,6 +29,7 @@ from agents import (
     OpenAIChatCompletionsModel,
     OpenAIResponsesModel,
     Runner,
+    function_tool,
     set_tracing_disabled,
 )
 from agents.mcp import MCPServerStreamableHttp, create_static_tool_filter
@@ -40,6 +42,9 @@ from src.core.config import Settings
 from src.infrastructure.ai.prompts import build_instructions
 
 TOOL_ERROR_PREFIX = "[TOOL_ERROR]"
+SUGGEST_TOOL = "suggest_replies"
+MAX_SUGGESTIONS = 4
+MAX_SUGGESTION_CHARS = 30
 TRUNCATION_NOTE = "\n\n[結果過長已截斷；如需更多請縮小查詢範圍（例如減少 limit 或加 keyword）]"
 MCP_UNAVAILABLE_MESSAGE = "校園資料服務暫時無法連線，本汪晚點再幫你查，請稍後再試。"
 
@@ -117,6 +122,26 @@ def _instructions(_ctx, _agent) -> str:
     return build_instructions()
 
 
+@function_tool(name_override=SUGGEST_TOOL)
+def suggest_replies(options: list[str]) -> str:
+    """向使用者反問時呼叫，提供 2 到 4 個可以一鍵回覆的簡短選項（每個一句話）。"""
+    return "ok"
+
+
+def clean_suggestions(raw: Any) -> list[str]:
+    """整理模型給的選項：去空白、去重、截長、最多 MAX_SUGGESTIONS 個。"""
+    if not isinstance(raw, list):
+        return []
+    options: list[str] = []
+    for item in raw:
+        text = " ".join(str(item).split())[:MAX_SUGGESTION_CHARS]
+        if text and text not in options:
+            options.append(text)
+        if len(options) == MAX_SUGGESTIONS:
+            break
+    return options
+
+
 class AgentRunner:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -166,6 +191,7 @@ class AgentRunner:
             instructions=_instructions,
             model=model,
             model_settings=model_settings,
+            tools=[suggest_replies],
             mcp_servers=[self._mcp],
         )
 
@@ -219,6 +245,7 @@ class AgentRunner:
         items.append({"role": "user", "content": user_text})
 
         pending: dict[str, tuple[str, dict[str, Any], float]] = {}
+        suggestion_calls: set[str] = set()
         tool_calls: list[ToolCall] = []
         text_parts: list[str] = []
         preview_chars = self._settings.tool_result_preview_chars
@@ -253,6 +280,16 @@ class AgentRunner:
                     call_id = getattr(raw, "call_id", None) or f"call_{len(pending)}"
                     name = getattr(raw, "name", "unknown")
                     args = _parse_args(getattr(raw, "arguments", None))
+                    if name == SUGGEST_TOOL:
+                        # 不是真的查資料：轉成快速回覆選項，並記進 tool_calls 供重新載入時重繪
+                        suggestion_calls.add(call_id)
+                        options = clean_suggestions(args.get("options"))
+                        if options:
+                            tool_calls.append(
+                                ToolCall(name=SUGGEST_TOOL, args={"options": options})
+                            )
+                            yield AgentEvent("suggestions", {"options": options})
+                        continue
                     pending[call_id] = (name, args, time.monotonic())
                     yield AgentEvent(
                         "tool_call_start",
@@ -266,6 +303,8 @@ class AgentRunner:
                         if isinstance(raw, dict)
                         else getattr(raw, "call_id", None)
                     )
+                    if call_id in suggestion_calls:
+                        continue
                     name, args, started = pending.pop(
                         call_id, ("unknown", {}, time.monotonic())
                     )

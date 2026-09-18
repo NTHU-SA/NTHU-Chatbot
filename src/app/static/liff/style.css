@@ -116,6 +116,9 @@ body {
 }
 
 .msg { display: flex; flex-direction: column; max-width: 88%; }
+.msg .suggestions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.msg .suggestions .chip { font-size: 13px; padding: 6px 12px; border-color: var(--brand); color: var(--brand); }
+.msg .suggestions.used .chip { opacity: .5; pointer-events: none; border-color: var(--line); color: var(--muted); }
 .msg.user { align-self: flex-end; align-items: flex-end; }
 .msg.assistant { align-self: flex-start; align-items: flex-start; }
 .bubble {

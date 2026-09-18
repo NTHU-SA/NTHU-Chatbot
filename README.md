@@ -20,6 +20,7 @@ LIFF 網頁 (/liff/) ──Bearer id_token──▶ /api/* ──▶ AgentRunner
 - LLM 可接任何 OpenAI 相容端點（`OPENAI_BASE_URL`），預設 `gpt-4.1-mini`；MCP 工具由後端呼叫，白名單 `MCP_ALLOWED_TOOLS`。
 - 群組內只使用 `@` 指令；其他文字會回不帶問題的 LIFF 按鈕，不讀取私人對話。
 - 輸入「說明」、「help」或 `@說明` 會回使用說明泡泡（指令清單依 `bot_config.yaml` 自動產生）。
+- LIFF 對話：`REASONING_SUMMARY=true` 時會把模型的思考摘要串流顯示；模型缺少必要資訊時會反問並提供快速回覆按鈕（`suggest_replies` 工具）。
 - 回呼等待處理完成才回應，沒有會在 Cloud Run 回應後被暫停的背景工作。
 - 啟動時不建立 Rich Menu；更新選單請另外執行 `python -m scripts.rich_menu`（需要 `.env` 的 `LINE_CHANNEL_ACCESS_TOKEN` 與 `LIFF_ID`，第二頁最下方的區塊會直接開啟 LIFF 對話）。
 

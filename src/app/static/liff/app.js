@@ -214,18 +214,53 @@
     for (const n of [...el.messages.children]) if (n !== el.empty) n.remove();
   }
 
+  const SUGGEST_TOOL = "suggest_replies";
+
   function appendMessage(role, content, toolCalls) {
     const node = el.tplMessage.content.firstElementChild.cloneNode(true);
     node.classList.add(role);
     const bubble = node.querySelector(".bubble");
     bubble.innerHTML = role === "assistant" ? renderMarkdown(content) : escapeHtml(content);
     const tools = node.querySelector(".tools");
-    for (const tc of toolCalls) tools.append(toolNode(tc.name, tc.args, tc, true));
-    tools.hidden = toolCalls.length === 0;
+    let shown = 0;
+    for (const tc of toolCalls) {
+      if (tc.name === SUGGEST_TOOL) continue; // rendered as chips below the bubble
+      tools.append(toolNode(tc.name, tc.args, tc, true));
+      shown++;
+    }
+    tools.hidden = shown === 0;
     el.messages.append(node);
+    for (const tc of toolCalls) {
+      if (tc.name === SUGGEST_TOOL) renderSuggestions(node, (tc.args || {}).options || []);
+    }
     updateScrollHints(bubble); // needs layout, so after it is in the DOM
     el.empty.hidden = true;
     return node;
+  }
+
+  // Quick-reply chips the model offers when it asks a clarifying question.
+  // Tapping one sends it as the next message; the row is then greyed out.
+  function renderSuggestions(node, options) {
+    if (!options.length) return;
+    let box = node.querySelector(".suggestions");
+    if (!box) {
+      box = document.createElement("div");
+      box.className = "suggestions";
+      node.append(box);
+    }
+    box.innerHTML = "";
+    for (const text of options) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "chip";
+      btn.textContent = text;
+      btn.addEventListener("click", () => {
+        if (state.busy) return;
+        box.classList.add("used");
+        send(text);
+      });
+      box.append(btn);
+    }
   }
 
   const TOOL_ICON =
@@ -393,6 +428,9 @@
             break;
           case "thinking":
             appendThought(tools, data.delta);
+            break;
+          case "suggestions":
+            renderSuggestions(node, data.options || []);
             break;
           case "token":
             hideThinking(tools);

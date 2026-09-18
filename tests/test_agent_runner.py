@@ -68,6 +68,32 @@ class AgentRunnerStreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(out[1].data["ok"])
         self.assertEqual(out[-1].data["tool_calls"][0]["name"], "get_next_buses")
 
+    async def test_suggest_replies_becomes_suggestions_not_a_tool_card(self):
+        events = [
+            item(
+                "tool_called",
+                raw_item=SimpleNamespace(
+                    call_id="s1",
+                    name="suggest_replies",
+                    arguments='{"options": [" 北校門 ", "綜二館", "北校門", "", "台積館", "南門", "多的"]}',
+                ),
+            ),
+            item("tool_output", raw_item={"call_id": "s1"}, output="ok"),
+            raw("response.output_text.delta", delta="你在哪一站？"),
+        ]
+        out = await self.collect(self.runner(), events, "你在哪一站？")
+        self.assertEqual([e.type for e in out], ["suggestions", "token", "done"])
+        self.assertEqual(out[0].data["options"], ["北校門", "綜二館", "台積館", "南門"])
+        self.assertEqual(
+            out[-1].data["tool_calls"],
+            [{"name": "suggest_replies", "args": {"options": ["北校門", "綜二館", "台積館", "南門"]},
+              "result_preview": None, "duration_ms": None, "ok": True}],
+        )
+
+    def test_suggest_replies_tool_is_registered(self):
+        names = [tool.name for tool in self.runner()._agent.tools]
+        self.assertIn("suggest_replies", names)
+
     def test_reasoning_summary_only_requested_for_responses_api(self):
         on = self.runner(openai_use_responses_api=True, reasoning_summary=True)
         self.assertEqual(on._agent.model_settings.reasoning.summary, "auto")
