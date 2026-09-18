@@ -19,8 +19,9 @@ LIFF 網頁 (/liff/) ──Bearer id_token──▶ /api/* ──▶ AgentRunner
 - 身分：LIFF `id_token` → 後端向 `https://api.line.me/oauth2/v2.1/verify` 驗證 → `sub` 即 userId。Messaging API 與 LINE Login channel 必須在同一 Provider 下，userId 才相同。
 - LLM 可接任何 OpenAI 相容端點（`OPENAI_BASE_URL`），預設 `gpt-4.1-mini`；MCP 工具由後端呼叫，白名單 `MCP_ALLOWED_TOOLS`。
 - 群組內只使用 `@` 指令；其他文字會回不帶問題的 LIFF 按鈕，不讀取私人對話。
+- 輸入「說明」、「help」或 `@說明` 會回使用說明泡泡（指令清單依 `bot_config.yaml` 自動產生）。
 - 回呼等待處理完成才回應，沒有會在 Cloud Run 回應後被暫停的背景工作。
-- 啟動時不建立 Rich Menu；更新選單請另外執行 `python -m scripts.rich_menu`。
+- 啟動時不建立 Rich Menu；更新選單請另外執行 `python -m scripts.rich_menu`（需要 `.env` 的 `LINE_CHANNEL_ACCESS_TOKEN` 與 `LIFF_ID`，第二頁最下方的區塊會直接開啟 LIFF 對話）。
 
 Rich Menu 更新會取代現有選單，執行前請確認 `data/richmenu/menu-main.png`、`data/richmenu/menu-more.png` 均存在且正確。
 
