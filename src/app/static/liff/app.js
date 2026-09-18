@@ -175,6 +175,12 @@
       throw err;
     }
     for (const m of msgs) appendMessage(m.role, m.content, m.tool_calls || []);
+    // Only the chips on the latest reply are still answerable; older ones were already passed.
+    const boxes = [...el.messages.querySelectorAll(".suggestions")];
+    const last = msgs[msgs.length - 1];
+    boxes.forEach((box, i) => {
+      if (i < boxes.length - 1 || !last || last.role !== "assistant") box.classList.add("used");
+    });
     el.empty.hidden = msgs.length > 0;
     scrollToBottom();
   }
@@ -256,7 +262,6 @@
       btn.textContent = text;
       btn.addEventListener("click", () => {
         if (state.busy) return;
-        box.classList.add("used");
         send(text);
       });
       box.append(btn);
@@ -393,11 +398,17 @@
     }
   }
 
+  // Any new message (typed or tapped) retires the quick-reply chips still on screen.
+  function retireSuggestions() {
+    for (const box of el.messages.querySelectorAll(".suggestions:not(.used)")) box.classList.add("used");
+  }
+
   async function send(text, isRetry) {
     text = (text || "").trim();
     if (!text || state.busy) return;
     if (!state.current) await createSession();
     setBusy(true);
+    retireSuggestions();
     el.input.value = "";
     autosize();
 

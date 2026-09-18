@@ -45,6 +45,8 @@ TOOL_ERROR_PREFIX = "[TOOL_ERROR]"
 SUGGEST_TOOL = "suggest_replies"
 MAX_SUGGESTIONS = 4
 MAX_SUGGESTION_CHARS = 30
+# 佔位型選項（「請輸入…」「其他」）不是可以直接送出的答案，一律過濾
+PLACEHOLDER_MARKERS = ("請輸入", "輸入", "其他", "自行", "自訂", "告訴我", "…", "...", "?", "？")
 TRUNCATION_NOTE = "\n\n[結果過長已截斷；如需更多請縮小查詢範圍（例如減少 limit 或加 keyword）]"
 MCP_UNAVAILABLE_MESSAGE = "校園資料服務暫時無法連線，本汪晚點再幫你查，請稍後再試。"
 
@@ -129,14 +131,22 @@ def suggest_replies(options: list[str]) -> str:
 
 
 def clean_suggestions(raw: Any) -> list[str]:
-    """整理模型給的選項：去空白、去重、截長、最多 MAX_SUGGESTIONS 個。"""
+    """
+    整理模型給的選項：去空白、去重、截長、最多 MAX_SUGGESTIONS 個。
+
+    只保留可以直接當作回覆送出的具體選項；「請輸入…」「其他」這類佔位選項會被移除，
+    模型應改在文字訊息裡請使用者自行輸入。
+    """
     if not isinstance(raw, list):
         return []
     options: list[str] = []
     for item in raw:
         text = " ".join(str(item).split())[:MAX_SUGGESTION_CHARS]
-        if text and text not in options:
-            options.append(text)
+        if not text or text in options:
+            continue
+        if any(marker in text for marker in PLACEHOLDER_MARKERS):
+            continue
+        options.append(text)
         if len(options) == MAX_SUGGESTIONS:
             break
     return options

@@ -88,7 +88,7 @@ class AgentRunnerStreamTests(unittest.IsolatedAsyncioTestCase):
                 raw_item=SimpleNamespace(
                     call_id="s1",
                     name="suggest_replies",
-                    arguments='{"options": [" 北校門 ", "綜二館", "北校門", "", "台積館", "南門", "多的"]}',
+                    arguments='{"options": [" 北校門 ", "綜二館", "北校門", "", "其他地點", "請輸入站名", "台積館", "南門", "多的"]}',
                 ),
             ),
             item("tool_output", raw_item={"call_id": "s1"}, output="ok"),
