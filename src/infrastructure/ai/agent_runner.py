@@ -4,6 +4,7 @@
 `AgentRunner.stream()` 把 SDK 的事件流轉成一組與傳輸無關的事件，
 由 chat route 轉成 SSE 送到 LIFF 頁面：
 
+  thinking        {delta}      模型的思考摘要（需 REASONING_SUMMARY=true 與 reasoning 模型）
   tool_call_start {call_id, name, args}
   tool_call_end   {call_id, name, ok, duration_ms, result_preview}
   token           {delta}
@@ -23,6 +24,7 @@ from agents import (
     Agent,
     AgentsException,
     MaxTurnsExceeded,
+    ModelSettings,
     OpenAIChatCompletionsModel,
     OpenAIResponsesModel,
     Runner,
@@ -31,6 +33,7 @@ from agents import (
 from agents.mcp import MCPServerStreamableHttp, create_static_tool_filter
 from loguru import logger
 from openai import APIStatusError, AsyncOpenAI
+from openai.types.shared import Reasoning
 
 from src.application.models.chat import Message, ToolCall
 from src.core.config import Settings
@@ -153,10 +156,16 @@ class AgentRunner:
             failure_error_function=_tool_error_message,
             max_retry_attempts=1,
         )
+        # 思考摘要只有 reasoning 模型走 Responses API 才支援；其他情況不帶參數以免被端點拒絕。
+        model_settings = ModelSettings()
+        if settings.reasoning_summary and settings.openai_use_responses_api:
+            model_settings = ModelSettings(reasoning=Reasoning(summary="auto"))
+
         self._agent = Agent(
             name="狗狗情報員",
             instructions=_instructions,
             model=model,
+            model_settings=model_settings,
             mcp_servers=[self._mcp],
         )
 
@@ -213,6 +222,7 @@ class AgentRunner:
         tool_calls: list[ToolCall] = []
         text_parts: list[str] = []
         preview_chars = self._settings.tool_result_preview_chars
+        summary_parts = 0
 
         try:
             result = Runner.run_streamed(
@@ -221,12 +231,17 @@ class AgentRunner:
             async for event in result.stream_events():
                 if event.type == "raw_response_event":
                     data = event.data
-                    if (
-                        getattr(data, "type", "") == "response.output_text.delta"
-                        and data.delta
-                    ):
+                    data_type = getattr(data, "type", "")
+                    if data_type == "response.output_text.delta" and data.delta:
                         text_parts.append(data.delta)
                         yield AgentEvent("token", {"delta": data.delta})
+                    elif data_type == "response.reasoning_summary_text.delta" and data.delta:
+                        yield AgentEvent("thinking", {"delta": data.delta})
+                    elif data_type == "response.reasoning_summary_part.added":
+                        # 多段摘要之間留空行，前端直接串接即可
+                        if summary_parts:
+                            yield AgentEvent("thinking", {"delta": "\n\n"})
+                        summary_parts += 1
                     continue
 
                 if event.type != "run_item_stream_event":

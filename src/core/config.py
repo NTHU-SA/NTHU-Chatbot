@@ -70,6 +70,8 @@ class Settings:
     openai_base_url: str | None = None
     openai_model: str = "gpt-4.1-mini"
     openai_use_responses_api: bool = False
+    # 串流模型的思考摘要給前端（僅 reasoning 模型 + Responses API 有效）
+    reasoning_summary: bool = False
     # MCP
     mcp_server_url: str = "https://api.nthusa.tw/mcp"
     mcp_allowed_tools: tuple[str, ...] = DEFAULT_MCP_TOOLS
@@ -125,6 +127,7 @@ class Settings:
             openai_base_url=os.getenv("OPENAI_BASE_URL") or None,
             openai_model=os.getenv("OPENAI_MODEL") or "gpt-4.1-mini",
             openai_use_responses_api=_bool(os.getenv("OPENAI_USE_RESPONSES_API"), False),
+            reasoning_summary=_bool(os.getenv("REASONING_SUMMARY"), False),
             mcp_server_url=os.getenv("MCP_SERVER_URL") or "https://api.nthusa.tw/mcp",
             mcp_allowed_tools=_csv(os.getenv("MCP_ALLOWED_TOOLS"), DEFAULT_MCP_TOOLS),
             mcp_timeout_seconds=_float("MCP_TIMEOUT_SECONDS", 30.0),

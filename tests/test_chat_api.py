@@ -158,9 +158,17 @@ class ChatApiTests(unittest.TestCase):
         events = parse_sse(response.text)
         self.assertEqual(
             [name for name, _ in events],
-            ["user_message", "tool_call_start", "tool_call_end", "token", "token", "done"],
+            [
+                "user_message",
+                "thinking",
+                "tool_call_start",
+                "tool_call_end",
+                "token",
+                "token",
+                "done",
+            ],
         )
-        self.assertEqual(events[1][1]["name"], "get_next_buses")
+        self.assertEqual(events[2][1]["name"], "get_next_buses")
         self.assertEqual(events[-1][1]["content"], "下一班 17:00")
 
         messages = self.client.get(
