@@ -173,13 +173,8 @@ def tzaiwu_fix(event):
         ),
     ],
 )
-def tzaiwu_announce_menu(event):  # rename function to indicate it is for menu
-    return None
-
-
-@command_handler.add_command("書院公告")
-def tzaiwu_announce(event):
-    url = "https://rcollege.site.nthu.edu.tw/p/403-1103-6160-1.php?Lang=zh-tw"
-    alttext = "仁齋公告"
-    announce = announcecrawler.get(url, alttext)
+async def tzaiwu_announce(event):
+    announce = await announcecrawler.get(
+        "清華學院住宿書院", "最新公告 - 清華書院", alttext="載物書院公告"
+    )
     return [announce]
