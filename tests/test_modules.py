@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import unittest
 from types import SimpleNamespace
@@ -172,6 +173,19 @@ class DiningTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AnnouncementTests(unittest.IsolatedAsyncioTestCase):
+    async def test_board_title_matching_ignores_extra_whitespace(self):
+        boards = [
+            {
+                "title": "最新公告  - 清華書院",
+                "language": "zh-tw",
+                "link": "https://example.test/board",
+                "articles": [{"title": "公告一", "date": "2026-09-18", "link": "https://example.test/1"}],
+            }
+        ]
+        with patch.object(announcecrawler.nthuapi, "get", new=AsyncMock(return_value=boards)):
+            message = await announcecrawler.get("清華學院住宿書院", "最新公告 - 清華書院")
+        self.assertEqual(message.template.columns[0].title, "公告一")
+
     async def test_repeated_calls_handle_nullable_articles_without_mutation(self):
         boards = [
             {
@@ -260,3 +274,22 @@ class MapTests(unittest.IsolatedAsyncioTestCase):
             )
         get.assert_not_awaited()
         self.assertEqual(messages[0].type, "text")
+
+
+class RegistrationTests(unittest.TestCase):
+    def test_tzaiwu_announcement_is_registered_once_with_menu(self):
+        from src.app.handlers.command_handler import command_handler
+        from src.modules import tzaiwu  # noqa: F401 - registers commands
+
+        command = command_handler.modules["tzaiwu"].commands["書院公告"]
+        self.assertIsNotNone(command.menu_info)
+        self.assertTrue(asyncio.iscoroutinefunction(command.function))
+
+    def test_menu_module_points_at_real_modules(self):
+        from src.app.handlers.command_handler import command_handler
+        from src.modules import menu  # noqa: F401 - registers commands
+
+        for command in command_handler.modules["menu"].commands.values():
+            data = command.menu_info.actions[0].data
+            prefix = data[1:].split("/")[0]
+            self.assertIn(prefix, command_handler.prefix_to_module_name, data)
