@@ -22,6 +22,9 @@ from templates.messages import open_web_chat
 
 router = APIRouter()
 
+# 不用加 @ 也能叫出使用說明的關鍵字
+HELP_KEYWORDS = {"說明", "使用說明", "幫助", "help", "?", "？"}
+
 
 @router.post("/callback")
 async def handle_callback(request: Request):
@@ -95,6 +98,9 @@ async def handle_message(event: MessageEvent, state):
 
     if user_id:
         await state.store.touch_user(user_id)
+
+    if message_text.strip().lower() in HELP_KEYWORDS:
+        message_text = f"{command_handler.command_prefix}說明"
 
     if message_text.startswith(command_handler.command_prefix):
         if event.source.type == "user" and user_id:
@@ -182,8 +188,8 @@ async def handle_follow(event: FollowEvent, state):
 🚩詢問校務相關問題💬
 🚩或讓本汪帶你在清大趴趴走！
 
-偷偷告訴你，你可以用左下角的鍵盤和我說悄悄話哦！
-身為一個好的情報員，有任何消息我都會盡快回報的！！
+偷偷告訴你，你可以用左下角的鍵盤直接問我問題，我會給你一顆按鈕，點開就能和我聊天！
+隨時輸入「說明」可以查看使用方式。
 
 或是你感到無聊，想找找小遊戲，可以到下方選單點擊〝神奇海螺〞看看額外的功能唷！
 

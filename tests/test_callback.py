@@ -103,6 +103,28 @@ class CallbackTests(unittest.TestCase):
         (message,) = self.replied_messages()
         self.assertEqual(message.text, "Command answer")
 
+    def test_help_keyword_routes_to_help_command(self):
+        for text in ("說明", "help", "？"):
+            self.app.state.messaging_api.reply_message.reset_mock()
+            with patch(
+                "src.app.routes.callback.command_handler.process_message",
+                new=AsyncMock(return_value="help"),
+            ) as process:
+                self.post([self.event(text=text)])
+            process.assert_awaited_once_with("@說明", "user-1")
+
+    def test_help_command_renders_usage_bubble(self):
+        with patch.dict(os.environ, {"LIFF_ID": TEST_LIFF_ID}):
+            self.post([self.event(text="@說明")])
+        (message,) = self.replied_messages()
+        self.assertEqual(message.type, "flex")
+        self.assertEqual(message.alt_text, "狗狗情報員使用說明")
+        self.assertEqual(message.contents.footer.contents[0].action.uri, LIFF_BASE)
+        body_text = str(message.contents.body.contents)
+        self.assertIn("@公車", body_text)
+        self.assertNotIn("@開發者", body_text)
+        self.assertNotIn("@說明", body_text)
+
     def test_follow_sends_welcome_and_liff_button(self):
         self.assertEqual(self.post([self.event(kind="follow")]).status_code, 200)
         self.app.state.store.touch_user.assert_awaited_once_with(
@@ -214,6 +236,7 @@ class AppLifecycleTests(unittest.TestCase):
             TemporaryDirectory() as directory,
             patch.object(rich_menu, "ApiClient") as api_client,
             patch.object(rich_menu.configuration, "access_token", "test-token"),
+            patch.object(rich_menu, "LIFF_ID", TEST_LIFF_ID),
             patch.object(
                 rich_menu,
                 "rich_menu_list",
