@@ -42,3 +42,7 @@ for logger_name in loggers:
     logging_logger = logging.getLogger(logger_name)
     logging_logger.handlers = []
     logging_logger.propagate = True
+
+# 這些套件在 INFO 會記錄請求網址與內容；壓到 WARNING 避免洩漏 token 或對話內容。
+for logger_name in ("httpx", "httpx2", "httpcore", "openai"):
+    logging.getLogger(logger_name).setLevel(logging.WARNING)
