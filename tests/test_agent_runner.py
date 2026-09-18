@@ -68,18 +68,39 @@ class AgentRunnerStreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(out[1].data["ok"])
         self.assertEqual(out[-1].data["tool_calls"][0]["name"], "get_next_buses")
 
-    async def test_text_before_tool_call_is_kept_in_final_content(self):
+    async def test_text_before_tool_call_becomes_interim_not_answer(self):
         events = [
             raw("response.output_text.delta", delta="本汪查一下！"),
             item("tool_called", raw_item=SimpleNamespace(call_id="c1", name="get_next_buses", arguments="{}")),
             item("tool_output", raw_item={"call_id": "c1"}, output="{}"),
             raw("response.output_text.delta", delta="下一班 17:00"),
         ]
-        # SDK 的 final_output 只有最後一則訊息
         out = await self.collect(self.runner(), events, "下一班 17:00")
-        tokens = "".join(e.data["delta"] for e in out if e.type == "token")
-        self.assertEqual(tokens, "本汪查一下！\n\n下一班 17:00")
-        self.assertEqual(out[-1].data["content"], tokens)
+        self.assertEqual(
+            [e.type for e in out],
+            ["token", "interim", "tool_call_start", "tool_call_end", "token", "done"],
+        )
+        self.assertEqual(out[1].data, {"text": "本汪查一下！"})
+        self.assertEqual(out[-1].data["content"], "下一班 17:00")
+
+    async def test_question_before_suggest_replies_stays_the_answer(self):
+        events = [
+            raw("response.output_text.delta", delta="你在哪一站？"),
+            item("tool_called", raw_item=SimpleNamespace(call_id="s1", name="suggest_replies", arguments='{"options": ["北校門口", "綜二館"]}')),
+            item("tool_output", raw_item={"call_id": "s1"}, output="ok"),
+        ]
+        out = await self.collect(self.runner(), events, "你在哪一站？")
+        self.assertEqual([e.type for e in out], ["token", "suggestions", "done"])
+        self.assertEqual(out[-1].data["content"], "你在哪一站？")
+
+    async def test_tool_call_without_final_text_falls_back_to_last_remark(self):
+        events = [
+            raw("response.output_text.delta", delta="本汪查一下！"),
+            item("tool_called", raw_item=SimpleNamespace(call_id="c1", name="get_next_buses", arguments="{}")),
+            item("tool_output", raw_item={"call_id": "c1"}, output="{}"),
+        ]
+        out = await self.collect(self.runner(), events, "")
+        self.assertEqual(out[-1].data["content"], "本汪查一下！")
 
     async def test_suggest_replies_becomes_suggestions_not_a_tool_card(self):
         events = [

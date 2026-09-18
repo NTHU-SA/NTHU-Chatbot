@@ -6,6 +6,7 @@
 
   thinking        {delta}      模型的思考摘要（需 REASONING_SUMMARY=true 與 reasoning 模型）
   suggestions     {options}    模型反問時提供的快速回覆選項
+  interim         {text}       呼叫工具前講的過場句；前端把它從回答移到「過程」卡片
   tool_call_start {call_id, name, args}
   tool_call_end   {call_id, name, ok, duration_ms, result_preview}
   token           {delta}
@@ -258,6 +259,7 @@ class AgentRunner:
         suggestion_calls: set[str] = set()
         tool_calls: list[ToolCall] = []
         text_parts: list[str] = []
+        interims: list[str] = []
         preview_chars = self._settings.tool_result_preview_chars
         summary_parts = 0
 
@@ -300,11 +302,13 @@ class AgentRunner:
                             )
                             yield AgentEvent("suggestions", {"options": options})
                         continue
-                    # 模型在呼叫工具前可能先講了一句話；用空行把它和之後的回答分開，
-                    # 分隔符也當 token 送出，讓畫面與存檔內容一致。
-                    if text_parts and not text_parts[-1].endswith("\n\n"):
-                        text_parts.append("\n\n")
-                        yield AgentEvent("token", {"delta": "\n\n"})
+                    # 模型在呼叫工具前講的話只是過場（「本汪查一下！」），不算最終回答：
+                    # 通知前端把已串流的文字移到過程卡片，並從頭累積正式回答。
+                    interim = "".join(text_parts).strip()
+                    if interim:
+                        interims.append(interim)
+                        text_parts.clear()
+                        yield AgentEvent("interim", {"text": interim})
                     pending[call_id] = (name, args, time.monotonic())
                     yield AgentEvent(
                         "tool_call_start",
@@ -344,11 +348,13 @@ class AgentRunner:
                         },
                     )
 
-            # 以實際串流出去的文字為準（含工具呼叫前的過場句），而不是 SDK 只回最後一則的
-            # final_output，否則前端在 done 時會把前面已顯示的內容蓋掉。
+            # 以最後一次工具呼叫之後串流出去的文字為準；模型若以工具呼叫收尾而沒再說話，
+            # 退而用最後一句過場句或 SDK 的 final_output。
             streamed = "".join(text_parts).strip()
             final = result.final_output
-            content = streamed or (final if isinstance(final, str) else "")
+            content = streamed or (interims[-1] if interims else "") or (
+                final if isinstance(final, str) else ""
+            )
             yield AgentEvent(
                 "done",
                 {

@@ -351,6 +351,29 @@
     tools.append(row);
     tools.hidden = false;
   }
+  // Text the model said before calling a tool is a remark ("本汪查一下！"), not the
+  // answer: move it out of the bubble into a collapsed 過程 card and start over.
+  function demoteToProgress(tools, bubble, text) {
+    if (!text) return;
+    const row = document.createElement("details");
+    row.className = "tool ok static";
+    const summary = document.createElement("summary");
+    const icon = document.createElement("span");
+    icon.className = "tool-icon";
+    icon.innerHTML = TOOL_ICON;
+    const label = document.createElement("span");
+    label.className = "label";
+    label.textContent = "過程";
+    summary.append(icon, label);
+    const body = document.createElement("div");
+    body.className = "thought";
+    body.textContent = text;
+    row.append(summary, body);
+    tools.append(row);
+    tools.hidden = false;
+    bubble.innerHTML = "";
+  }
+
   function appendThought(tools, delta) {
     showThinking(tools);
     const row = tools.querySelector(".thinking");
@@ -442,6 +465,10 @@
             break;
           case "suggestions":
             renderSuggestions(node, data.options || []);
+            break;
+          case "interim":
+            demoteToProgress(tools, bubble, data.text);
+            acc = "";
             break;
           case "token":
             hideThinking(tools);
