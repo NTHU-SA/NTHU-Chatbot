@@ -68,6 +68,19 @@ class AgentRunnerStreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(out[1].data["ok"])
         self.assertEqual(out[-1].data["tool_calls"][0]["name"], "get_next_buses")
 
+    async def test_text_before_tool_call_is_kept_in_final_content(self):
+        events = [
+            raw("response.output_text.delta", delta="本汪查一下！"),
+            item("tool_called", raw_item=SimpleNamespace(call_id="c1", name="get_next_buses", arguments="{}")),
+            item("tool_output", raw_item={"call_id": "c1"}, output="{}"),
+            raw("response.output_text.delta", delta="下一班 17:00"),
+        ]
+        # SDK 的 final_output 只有最後一則訊息
+        out = await self.collect(self.runner(), events, "下一班 17:00")
+        tokens = "".join(e.data["delta"] for e in out if e.type == "token")
+        self.assertEqual(tokens, "本汪查一下！\n\n下一班 17:00")
+        self.assertEqual(out[-1].data["content"], tokens)
+
     async def test_suggest_replies_becomes_suggestions_not_a_tool_card(self):
         events = [
             item(

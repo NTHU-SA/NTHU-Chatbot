@@ -290,6 +290,11 @@ class AgentRunner:
                             )
                             yield AgentEvent("suggestions", {"options": options})
                         continue
+                    # 模型在呼叫工具前可能先講了一句話；用空行把它和之後的回答分開，
+                    # 分隔符也當 token 送出，讓畫面與存檔內容一致。
+                    if text_parts and not text_parts[-1].endswith("\n\n"):
+                        text_parts.append("\n\n")
+                        yield AgentEvent("token", {"delta": "\n\n"})
                     pending[call_id] = (name, args, time.monotonic())
                     yield AgentEvent(
                         "tool_call_start",
@@ -329,8 +334,11 @@ class AgentRunner:
                         },
                     )
 
+            # 以實際串流出去的文字為準（含工具呼叫前的過場句），而不是 SDK 只回最後一則的
+            # final_output，否則前端在 done 時會把前面已顯示的內容蓋掉。
+            streamed = "".join(text_parts).strip()
             final = result.final_output
-            content = final if isinstance(final, str) and final else "".join(text_parts)
+            content = streamed or (final if isinstance(final, str) else "")
             yield AgentEvent(
                 "done",
                 {
