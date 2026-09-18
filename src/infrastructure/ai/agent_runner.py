@@ -6,7 +6,8 @@
 
   thinking        {delta}      模型的思考摘要（需 REASONING_SUMMARY=true 與 reasoning 模型）
   suggestions     {options}    模型反問時提供的快速回覆選項
-  interim         {text}       呼叫工具前講的過場句；前端把它從回答移到「過程」卡片
+  interim         {text, discard}  呼叫工具前講的過場句；前端把它從回答移到「過程」卡片，
+                                   discard=true 時只清掉（模型在 suggest_replies 後重講了問題）
   tool_call_start {call_id, name, args}
   tool_call_end   {call_id, name, ok, duration_ms, result_preview}
   token           {delta}
@@ -260,6 +261,8 @@ class AgentRunner:
         tool_calls: list[ToolCall] = []
         text_parts: list[str] = []
         interims: list[str] = []
+        # suggest_replies 之前寫的問題：模型之後若不再說話它就是回答，若重講一次則丟棄
+        pending_question: str | None = None
         preview_chars = self._settings.tool_result_preview_chars
         summary_parts = 0
 
@@ -272,6 +275,11 @@ class AgentRunner:
                     data = event.data
                     data_type = getattr(data, "type", "")
                     if data_type == "response.output_text.delta" and data.delta:
+                        if pending_question is not None:
+                            yield AgentEvent(
+                                "interim", {"text": pending_question, "discard": True}
+                            )
+                            pending_question = None
                         text_parts.append(data.delta)
                         yield AgentEvent("token", {"delta": data.delta})
                     elif data_type == "response.reasoning_summary_text.delta" and data.delta:
@@ -295,6 +303,9 @@ class AgentRunner:
                     if name == SUGGEST_TOOL:
                         # 不是真的查資料：轉成快速回覆選項，並記進 tool_calls 供重新載入時重繪
                         suggestion_calls.add(call_id)
+                        if text_parts:
+                            pending_question = "".join(text_parts).strip() or None
+                            text_parts.clear()
                         options = clean_suggestions(args.get("options"))
                         if options:
                             tool_calls.append(
@@ -305,10 +316,13 @@ class AgentRunner:
                     # 模型在呼叫工具前講的話只是過場（「本汪查一下！」），不算最終回答：
                     # 通知前端把已串流的文字移到過程卡片，並從頭累積正式回答。
                     interim = "".join(text_parts).strip()
+                    if pending_question is not None:
+                        interim = (pending_question + "\n\n" + interim).strip()
+                        pending_question = None
                     if interim:
                         interims.append(interim)
                         text_parts.clear()
-                        yield AgentEvent("interim", {"text": interim})
+                        yield AgentEvent("interim", {"text": interim, "discard": False})
                     pending[call_id] = (name, args, time.monotonic())
                     yield AgentEvent(
                         "tool_call_start",
@@ -352,8 +366,11 @@ class AgentRunner:
             # 退而用最後一句過場句或 SDK 的 final_output。
             streamed = "".join(text_parts).strip()
             final = result.final_output
-            content = streamed or (interims[-1] if interims else "") or (
-                final if isinstance(final, str) else ""
+            content = (
+                streamed
+                or pending_question
+                or (interims[-1] if interims else "")
+                or (final if isinstance(final, str) else "")
             )
             yield AgentEvent(
                 "done",

@@ -80,7 +80,7 @@ class AgentRunnerStreamTests(unittest.IsolatedAsyncioTestCase):
             [e.type for e in out],
             ["token", "interim", "tool_call_start", "tool_call_end", "token", "done"],
         )
-        self.assertEqual(out[1].data, {"text": "本汪查一下！"})
+        self.assertEqual(out[1].data, {"text": "本汪查一下！", "discard": False})
         self.assertEqual(out[-1].data["content"], "下一班 17:00")
 
     async def test_question_before_suggest_replies_stays_the_answer(self):
@@ -92,6 +92,18 @@ class AgentRunnerStreamTests(unittest.IsolatedAsyncioTestCase):
         out = await self.collect(self.runner(), events, "你在哪一站？")
         self.assertEqual([e.type for e in out], ["token", "suggestions", "done"])
         self.assertEqual(out[-1].data["content"], "你在哪一站？")
+
+    async def test_question_repeated_after_suggest_replies_is_not_duplicated(self):
+        events = [
+            raw("response.output_text.delta", delta="你在哪一站？"),
+            item("tool_called", raw_item=SimpleNamespace(call_id="s1", name="suggest_replies", arguments='{"options": ["北校門口", "綜二館"]}')),
+            item("tool_output", raw_item={"call_id": "s1"}, output="ok"),
+            raw("response.output_text.delta", delta="你目前在哪一站呢？"),
+        ]
+        out = await self.collect(self.runner(), events, "你目前在哪一站呢？")
+        self.assertEqual([e.type for e in out], ["token", "suggestions", "interim", "token", "done"])
+        self.assertEqual(out[2].data, {"text": "你在哪一站？", "discard": True})
+        self.assertEqual(out[-1].data["content"], "你目前在哪一站呢？")
 
     async def test_tool_call_without_final_text_falls_back_to_last_remark(self):
         events = [

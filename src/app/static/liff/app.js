@@ -467,7 +467,8 @@
             renderSuggestions(node, data.options || []);
             break;
           case "interim":
-            demoteToProgress(tools, bubble, data.text);
+            if (data.discard) bubble.innerHTML = ""; // repeated question, nothing worth keeping
+            else demoteToProgress(tools, bubble, data.text);
             acc = "";
             break;
           case "token":
