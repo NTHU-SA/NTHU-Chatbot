@@ -175,6 +175,12 @@
       throw err;
     }
     for (const m of msgs) appendMessage(m.role, m.content, m.tool_calls || []);
+    // Only the chips on the latest reply are still answerable; older ones were already passed.
+    const boxes = [...el.messages.querySelectorAll(".suggestions")];
+    const last = msgs[msgs.length - 1];
+    boxes.forEach((box, i) => {
+      if (i < boxes.length - 1 || !last || last.role !== "assistant") box.classList.add("used");
+    });
     el.empty.hidden = msgs.length > 0;
     scrollToBottom();
   }
@@ -214,18 +220,52 @@
     for (const n of [...el.messages.children]) if (n !== el.empty) n.remove();
   }
 
+  const SUGGEST_TOOL = "suggest_replies";
+
   function appendMessage(role, content, toolCalls) {
     const node = el.tplMessage.content.firstElementChild.cloneNode(true);
     node.classList.add(role);
     const bubble = node.querySelector(".bubble");
     bubble.innerHTML = role === "assistant" ? renderMarkdown(content) : escapeHtml(content);
     const tools = node.querySelector(".tools");
-    for (const tc of toolCalls) tools.append(toolNode(tc.name, tc.args, tc, true));
-    tools.hidden = toolCalls.length === 0;
+    let shown = 0;
+    for (const tc of toolCalls) {
+      if (tc.name === SUGGEST_TOOL) continue; // rendered as chips below the bubble
+      tools.append(toolNode(tc.name, tc.args, tc, true));
+      shown++;
+    }
+    tools.hidden = shown === 0;
     el.messages.append(node);
+    for (const tc of toolCalls) {
+      if (tc.name === SUGGEST_TOOL) renderSuggestions(node, (tc.args || {}).options || []);
+    }
     updateScrollHints(bubble); // needs layout, so after it is in the DOM
     el.empty.hidden = true;
     return node;
+  }
+
+  // Quick-reply chips the model offers when it asks a clarifying question.
+  // Tapping one sends it as the next message; the row is then greyed out.
+  function renderSuggestions(node, options) {
+    if (!options.length) return;
+    let box = node.querySelector(".suggestions");
+    if (!box) {
+      box = document.createElement("div");
+      box.className = "suggestions";
+      node.append(box);
+    }
+    box.innerHTML = "";
+    for (const text of options) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "chip";
+      btn.textContent = text;
+      btn.addEventListener("click", () => {
+        if (state.busy) return;
+        send(text);
+      });
+      box.append(btn);
+    }
   }
 
   const TOOL_ICON =
@@ -284,10 +324,13 @@
 
   // "思考中 · 12s" row shown whenever the model is working but nothing is
   // streaming yet (before the first token, and again after each tool result).
+  // When the model streams a reasoning summary it is shown inside the row and
+  // the row is kept afterwards as a collapsed "已思考" card.
   function showThinking(tools) {
     if (tools.querySelector(".thinking")) return;
-    const row = document.createElement("div");
+    const row = document.createElement("details");
     row.className = "tool running thinking";
+    const summary = document.createElement("summary");
     const icon = document.createElement("span");
     icon.className = "tool-icon";
     icon.innerHTML = TOOL_ICON;
@@ -296,7 +339,11 @@
     label.textContent = "思考中";
     const dur = document.createElement("span");
     dur.className = "dur";
-    row.append(icon, label, dur);
+    summary.append(icon, label, dur);
+    const thought = document.createElement("div");
+    thought.className = "thought";
+    thought.hidden = true;
+    row.append(summary, thought);
     const started = performance.now();
     const tick = () => { dur.textContent = `${Math.round((performance.now() - started) / 1000)}s`; };
     tick();
@@ -304,11 +351,50 @@
     tools.append(row);
     tools.hidden = false;
   }
+  // Text the model said before calling a tool is a remark ("本汪查一下！"), not the
+  // answer: move it out of the bubble into a collapsed 過程 card and start over.
+  function demoteToProgress(tools, bubble, text) {
+    if (!text) return;
+    const row = document.createElement("details");
+    row.className = "tool ok static";
+    const summary = document.createElement("summary");
+    const icon = document.createElement("span");
+    icon.className = "tool-icon";
+    icon.innerHTML = TOOL_ICON;
+    const label = document.createElement("span");
+    label.className = "label";
+    label.textContent = "過程";
+    summary.append(icon, label);
+    const body = document.createElement("div");
+    body.className = "thought";
+    body.textContent = text;
+    row.append(summary, body);
+    tools.append(row);
+    tools.hidden = false;
+    bubble.innerHTML = "";
+  }
+
+  function appendThought(tools, delta) {
+    showThinking(tools);
+    const row = tools.querySelector(".thinking");
+    const thought = row.querySelector(".thought");
+    thought.hidden = false;
+    row.open = true;
+    thought.textContent += delta;
+  }
   function hideThinking(tools) {
     const row = tools.querySelector(".thinking");
     if (!row) return;
     clearInterval(row._timer);
-    row.remove();
+    const thought = row.querySelector(".thought");
+    if (thought && thought.textContent.trim()) {
+      row.classList.remove("running", "thinking");
+      row.classList.add("ok", "static");
+      row.querySelector(".label").textContent = "已思考";
+      row.open = false;
+    } else {
+      row.remove();
+    }
     if (!tools.children.length) tools.hidden = true;
   }
 
@@ -335,11 +421,17 @@
     }
   }
 
+  // Any new message (typed or tapped) retires the quick-reply chips still on screen.
+  function retireSuggestions() {
+    for (const box of el.messages.querySelectorAll(".suggestions:not(.used)")) box.classList.add("used");
+  }
+
   async function send(text, isRetry) {
     text = (text || "").trim();
     if (!text || state.busy) return;
     if (!state.current) await createSession();
     setBusy(true);
+    retireSuggestions();
     el.input.value = "";
     autosize();
 
@@ -367,6 +459,17 @@
           case "tool_call_end":
             finishTool(node, data.call_id, data);
             showThinking(tools); // model reads the result and thinks again
+            break;
+          case "thinking":
+            appendThought(tools, data.delta);
+            break;
+          case "suggestions":
+            renderSuggestions(node, data.options || []);
+            break;
+          case "interim":
+            if (data.discard) bubble.innerHTML = ""; // repeated question, nothing worth keeping
+            else demoteToProgress(tools, bubble, data.text);
+            acc = "";
             break;
           case "token":
             hideThinking(tools);

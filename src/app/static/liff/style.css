@@ -116,6 +116,9 @@ body {
 }
 
 .msg { display: flex; flex-direction: column; max-width: 88%; }
+.msg .suggestions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.msg .suggestions .chip { font-size: 13px; padding: 6px 12px; border-color: var(--brand); color: var(--brand); }
+.msg .suggestions.used .chip { opacity: .5; pointer-events: none; border-color: var(--line); color: var(--muted); }
 .msg.user { align-self: flex-end; align-items: flex-end; }
 .msg.assistant { align-self: flex-start; align-items: flex-start; }
 .bubble {
@@ -176,8 +179,11 @@ body {
 .tool {
   font-size: 12.5px; background: var(--tool-bg); border-radius: 10px; padding: 6px 10px; color: var(--muted);
 }
-.tool summary, .tool.thinking { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 7px; }
-.tool.thinking { cursor: default; }
+.tool summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 7px; }
+.tool .thought {
+  margin: 6px 0 0; white-space: pre-wrap; font-size: 12px; line-height: 1.5; color: var(--muted);
+  max-height: 200px; overflow: auto;
+}
 .tool summary::-webkit-details-marker { display: none; }
 .tool .label { white-space: nowrap; }
 .tool .name { font-family: ui-monospace, monospace; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

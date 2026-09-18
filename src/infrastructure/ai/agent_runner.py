@@ -4,6 +4,10 @@
 `AgentRunner.stream()` 把 SDK 的事件流轉成一組與傳輸無關的事件，
 由 chat route 轉成 SSE 送到 LIFF 頁面：
 
+  thinking        {delta}      模型的思考摘要（需 REASONING_SUMMARY=true 與 reasoning 模型）
+  suggestions     {options}    模型反問時提供的快速回覆選項
+  interim         {text, discard}  呼叫工具前講的過場句；前端把它從回答移到「過程」卡片，
+                                   discard=true 時只清掉（模型在 suggest_replies 後重講了問題）
   tool_call_start {call_id, name, args}
   tool_call_end   {call_id, name, ok, duration_ms, result_preview}
   token           {delta}
@@ -23,20 +27,28 @@ from agents import (
     Agent,
     AgentsException,
     MaxTurnsExceeded,
+    ModelSettings,
     OpenAIChatCompletionsModel,
     OpenAIResponsesModel,
     Runner,
+    function_tool,
     set_tracing_disabled,
 )
 from agents.mcp import MCPServerStreamableHttp, create_static_tool_filter
 from loguru import logger
 from openai import APIStatusError, AsyncOpenAI
+from openai.types.shared import Reasoning
 
 from src.application.models.chat import Message, ToolCall
 from src.core.config import Settings
 from src.infrastructure.ai.prompts import build_instructions
 
 TOOL_ERROR_PREFIX = "[TOOL_ERROR]"
+SUGGEST_TOOL = "suggest_replies"
+MAX_SUGGESTIONS = 4
+MAX_SUGGESTION_CHARS = 30
+# 佔位型選項（「請輸入…」「其他」）不是可以直接送出的答案，一律過濾
+PLACEHOLDER_MARKERS = ("請輸入", "輸入", "其他", "自行", "自訂", "告訴我", "…", "...", "?", "？")
 TRUNCATION_NOTE = "\n\n[結果過長已截斷；如需更多請縮小查詢範圍（例如減少 limit 或加 keyword）]"
 MCP_UNAVAILABLE_MESSAGE = "校園資料服務暫時無法連線，本汪晚點再幫你查，請稍後再試。"
 
@@ -114,6 +126,34 @@ def _instructions(_ctx, _agent) -> str:
     return build_instructions()
 
 
+@function_tool(name_override=SUGGEST_TOOL)
+def suggest_replies(options: list[str]) -> str:
+    """向使用者反問時呼叫，提供 2 到 4 個可以一鍵回覆的簡短選項（每個一句話）。"""
+    return "ok"
+
+
+def clean_suggestions(raw: Any) -> list[str]:
+    """
+    整理模型給的選項：去空白、去重、截長、最多 MAX_SUGGESTIONS 個。
+
+    只保留可以直接當作回覆送出的具體選項；「請輸入…」「其他」這類佔位選項會被移除，
+    模型應改在文字訊息裡請使用者自行輸入。
+    """
+    if not isinstance(raw, list):
+        return []
+    options: list[str] = []
+    for item in raw:
+        text = " ".join(str(item).split())[:MAX_SUGGESTION_CHARS]
+        if not text or text in options:
+            continue
+        if any(marker in text for marker in PLACEHOLDER_MARKERS):
+            continue
+        options.append(text)
+        if len(options) == MAX_SUGGESTIONS:
+            break
+    return options
+
+
 class AgentRunner:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -153,10 +193,17 @@ class AgentRunner:
             failure_error_function=_tool_error_message,
             max_retry_attempts=1,
         )
+        # 思考摘要只有 reasoning 模型走 Responses API 才支援；其他情況不帶參數以免被端點拒絕。
+        model_settings = ModelSettings()
+        if settings.reasoning_summary and settings.openai_use_responses_api:
+            model_settings = ModelSettings(reasoning=Reasoning(summary="auto"))
+
         self._agent = Agent(
             name="狗狗情報員",
             instructions=_instructions,
             model=model,
+            model_settings=model_settings,
+            tools=[suggest_replies],
             mcp_servers=[self._mcp],
         )
 
@@ -210,9 +257,14 @@ class AgentRunner:
         items.append({"role": "user", "content": user_text})
 
         pending: dict[str, tuple[str, dict[str, Any], float]] = {}
+        suggestion_calls: set[str] = set()
         tool_calls: list[ToolCall] = []
         text_parts: list[str] = []
+        interims: list[str] = []
+        # suggest_replies 之前寫的問題：模型之後若不再說話它就是回答，若重講一次則丟棄
+        pending_question: str | None = None
         preview_chars = self._settings.tool_result_preview_chars
+        summary_parts = 0
 
         try:
             result = Runner.run_streamed(
@@ -221,12 +273,22 @@ class AgentRunner:
             async for event in result.stream_events():
                 if event.type == "raw_response_event":
                     data = event.data
-                    if (
-                        getattr(data, "type", "") == "response.output_text.delta"
-                        and data.delta
-                    ):
+                    data_type = getattr(data, "type", "")
+                    if data_type == "response.output_text.delta" and data.delta:
+                        if pending_question is not None:
+                            yield AgentEvent(
+                                "interim", {"text": pending_question, "discard": True}
+                            )
+                            pending_question = None
                         text_parts.append(data.delta)
                         yield AgentEvent("token", {"delta": data.delta})
+                    elif data_type == "response.reasoning_summary_text.delta" and data.delta:
+                        yield AgentEvent("thinking", {"delta": data.delta})
+                    elif data_type == "response.reasoning_summary_part.added":
+                        # 多段摘要之間留空行，前端直接串接即可
+                        if summary_parts:
+                            yield AgentEvent("thinking", {"delta": "\n\n"})
+                        summary_parts += 1
                     continue
 
                 if event.type != "run_item_stream_event":
@@ -238,6 +300,29 @@ class AgentRunner:
                     call_id = getattr(raw, "call_id", None) or f"call_{len(pending)}"
                     name = getattr(raw, "name", "unknown")
                     args = _parse_args(getattr(raw, "arguments", None))
+                    if name == SUGGEST_TOOL:
+                        # 不是真的查資料：轉成快速回覆選項，並記進 tool_calls 供重新載入時重繪
+                        suggestion_calls.add(call_id)
+                        if text_parts:
+                            pending_question = "".join(text_parts).strip() or None
+                            text_parts.clear()
+                        options = clean_suggestions(args.get("options"))
+                        if options:
+                            tool_calls.append(
+                                ToolCall(name=SUGGEST_TOOL, args={"options": options})
+                            )
+                            yield AgentEvent("suggestions", {"options": options})
+                        continue
+                    # 模型在呼叫工具前講的話只是過場（「本汪查一下！」），不算最終回答：
+                    # 通知前端把已串流的文字移到過程卡片，並從頭累積正式回答。
+                    interim = "".join(text_parts).strip()
+                    if pending_question is not None:
+                        interim = (pending_question + "\n\n" + interim).strip()
+                        pending_question = None
+                    if interim:
+                        interims.append(interim)
+                        text_parts.clear()
+                        yield AgentEvent("interim", {"text": interim, "discard": False})
                     pending[call_id] = (name, args, time.monotonic())
                     yield AgentEvent(
                         "tool_call_start",
@@ -251,6 +336,8 @@ class AgentRunner:
                         if isinstance(raw, dict)
                         else getattr(raw, "call_id", None)
                     )
+                    if call_id in suggestion_calls:
+                        continue
                     name, args, started = pending.pop(
                         call_id, ("unknown", {}, time.monotonic())
                     )
@@ -275,8 +362,16 @@ class AgentRunner:
                         },
                     )
 
+            # 以最後一次工具呼叫之後串流出去的文字為準；模型若以工具呼叫收尾而沒再說話，
+            # 退而用最後一句過場句或 SDK 的 final_output。
+            streamed = "".join(text_parts).strip()
             final = result.final_output
-            content = final if isinstance(final, str) and final else "".join(text_parts)
+            content = (
+                streamed
+                or pending_question
+                or (interims[-1] if interims else "")
+                or (final if isinstance(final, str) else "")
+            )
             yield AgentEvent(
                 "done",
                 {

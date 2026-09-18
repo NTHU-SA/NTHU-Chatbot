@@ -51,6 +51,7 @@ class FakeRunner:
         if self.fail:
             yield AgentEvent("error", {"message": "boom"})
             return
+        yield AgentEvent("thinking", {"delta": "先查南大方向的下一班車"})
         yield AgentEvent(
             "tool_call_start",
             {"call_id": "c1", "name": "get_next_buses", "args": {"route": "nanda"}},
