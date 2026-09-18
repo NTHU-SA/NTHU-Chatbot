@@ -1,0 +1,22 @@
+# config.yaml
+modules:
+  affair:
+    prefix: 校務專區
+  bus:
+    prefix: 公車
+  dev:
+    prefix: 開發者
+  dining:
+    prefix: 學生餐廳
+  info:
+    prefix: 公佈欄
+  library:
+    prefix: 圖書館
+  magic:
+    prefix: 神奇海螺
+  map:
+    prefix: 地圖
+  menu:
+    prefix: 選單
+  tzaiwu:
+    prefix: 載物書院

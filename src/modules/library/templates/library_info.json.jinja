@@ -1,0 +1,136 @@
+{
+    "type": "bubble",
+    "header": {
+        "type": "box",
+        "layout": "vertical",
+        "contents": [
+            {
+                "type": "text",
+                "text": "圖書館資訊",
+                "size": "lg",
+                "align": "center",
+                "action": {
+                    "type": "uri",
+                    "label": "圖書館首頁",
+                    "uri": "https://www.lib.nthu.edu.tw/#"
+                },
+                "color": "#FFFFFF"
+            }
+        ],
+        "backgroundColor": "#73438d"
+    },
+    "body": {
+        "type": "box",
+        "layout": "vertical",
+        "contents": [
+            {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": "今日日期",
+                        "size": "lg"
+                    },
+                    {
+                        "type": "text",
+                        "text": "{{ data['今日日期'] }}",
+                        "style": "italic"
+                    }
+                ],
+                "margin": "none",
+                "spacing": "md"
+            },
+            {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": "本日開館",
+                        "size": "lg"
+                    },
+                    {
+                        "type": "box",
+                        "layout": "horizontal",
+                        "contents": [
+                            {
+                                "type": "text",
+                                "text": "總館：",
+                                "align": "start",
+                                "color": "#aaaaaa",
+                                "flex": 1
+                            },
+                            {
+                                "type": "text",
+                                "text": "{{ data['總館開館'] }}",
+                                "align": "end",
+                                "wrap": true
+                            }
+                        ]
+                    },
+                    {
+                        "type": "box",
+                        "layout": "horizontal",
+                        "contents": [
+                            {
+                                "type": "text",
+                                "text": "人社：",
+                                "align": "start",
+                                "color": "#aaaaaa",
+                                "flex": 1
+                            },
+                            {
+                                "type": "text",
+                                "text": "{{ data['人社開館'] }}",
+                                "align": "end",
+                                "wrap": true
+                            }
+                        ]
+                    },
+                    {
+                        "type": "box",
+                        "layout": "horizontal",
+                        "contents": [
+                            {
+                                "type": "text",
+                                "text": "南大：",
+                                "align": "start",
+                                "color": "#aaaaaa",
+                                "flex": 1
+                            },
+                            {
+                                "type": "text",
+                                "text": "{{ data['南大開館'] | default('N/A', true)}}",
+                                "align": "end",
+                                "wrap": true
+                            }
+                        ]
+                    }
+                ],
+                "margin": "lg",
+                "spacing": "md"
+            }
+        ]
+    },
+    "footer": {
+        "type": "box",
+        "layout": "vertical",
+        "contents": [
+            {
+                "type": "button",
+                "action": {
+                    "type": "postback",
+                    "label": "回到首頁",
+                    "data": "@圖書館"
+                },
+                "height": "sm"
+            }
+        ]
+    },
+    "styles": {
+        "footer": {
+            "separator": true
+        }
+    }
+}

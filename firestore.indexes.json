@@ -1,0 +1,8 @@
+{
+  "indexes": [],
+  "fieldOverrides": [
+    {"collectionGroup": "conversations", "fieldPath": "expires_at", "ttl": true, "indexes": []},
+    {"collectionGroup": "conversations", "fieldPath": "history", "indexes": []},
+    {"collectionGroup": "conversations", "fieldPath": "last_answer", "indexes": []}
+  ]
+}

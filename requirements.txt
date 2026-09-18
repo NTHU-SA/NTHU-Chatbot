@@ -1,0 +1,19 @@
+# Line Bot
+line-bot-sdk>=3.17,<4
+# Logging
+loguru
+# Server
+fastapi>=0.115,<1
+uvicorn
+# Environment
+python-dotenv
+cachetools
+pyyaml
+# Campus API
+httpx
+# Flex Message
+jinja2
+# AI
+openai>=2,<4
+# Firebase Firestore
+google-cloud-firestore>=2.21,<3
