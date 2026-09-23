@@ -1,10 +1,14 @@
+import asyncio
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 
 from src.app import create_app
 from src.app.security import RateLimiter
 from src.application.services.chat_store import MAX_SESSIONS_PER_USER, MemoryChatStore
+from src.infrastructure.ai.agent_runner import AgentEvent
 from tests.fakes import (
     AUTH,
     TEST_LIFF_ID,
@@ -130,6 +134,37 @@ class ChatApiTests(unittest.TestCase):
         self.assertEqual(theirs.status_code, 201)
         self.assertNotEqual(theirs.json()["id"], mine["id"])
 
+    def test_concurrent_bubble_requests_create_only_once(self):
+        store = self.app.state.store
+        find = store.find_session_by_origin
+
+        async def delayed_find(*args):
+            session = await find(*args)
+            await asyncio.sleep(0)
+            return session
+
+        async def requests():
+            async with AsyncClient(
+                transport=ASGITransport(app=self.app), base_url="http://test"
+            ) as client:
+                with patch.object(store, "find_session_by_origin", delayed_find):
+                    return await asyncio.gather(
+                        *(
+                            client.post(
+                                "/api/sessions",
+                                headers=AUTH,
+                                json={"origin": "concurrent-event"},
+                            )
+                            for _ in range(20)
+                        )
+                    )
+
+        responses = asyncio.run(requests())
+        self.assertEqual([r.status_code for r in responses].count(201), 1)
+        self.assertEqual([r.status_code for r in responses].count(200), 19)
+        self.assertEqual(len({r.json()["id"] for r in responses}), 1)
+        self.assertEqual(len(store._sessions["U0123456789abcdef"]), 1)
+
     def test_session_limit_evicts_oldest(self):
         first = self.new_session()
         for _ in range(MAX_SESSIONS_PER_USER - 1):
@@ -198,6 +233,27 @@ class ChatApiTests(unittest.TestCase):
         ).json()
         self.assertEqual([m["role"] for m in messages], ["user"])
 
+    def test_oversized_agent_output_is_bounded_before_persistence(self):
+        self.app.state.settings = make_settings(max_output_chars=12)
+        output = "超長回覆" * 20
+
+        class OversizedRunner(FakeRunner):
+            async def stream(self, history, user_text):
+                yield AgentEvent("done", {"content": output, "tool_calls": []})
+
+        self.app.state.agent_runner = OversizedRunner()
+        session_id = self.new_session()
+        response = self.send(session_id, "hi")
+        self.assertEqual(response.status_code, 200)
+        events = parse_sse(response.text)
+        self.assertEqual(events[-1][0], "done")
+        self.assertEqual(events[-1][1]["content"], output[:12])
+        messages = self.client.get(
+            f"/api/sessions/{session_id}/messages", headers=AUTH
+        ).json()
+        self.assertEqual(messages[-1]["role"], "assistant")
+        self.assertEqual(messages[-1]["content"], output[:12])
+
     def test_daily_quota_enforced(self):
         session_id = self.new_session()
         for _ in range(3):
@@ -208,6 +264,23 @@ class ChatApiTests(unittest.TestCase):
         session_id = self.new_session()
         response = self.send(session_id, "a" * (self.settings.max_message_chars + 1))
         self.assertEqual(response.status_code, 413)
+
+    def test_configured_message_limit_can_be_above_or_below_4000(self):
+        for limit in (6000, 8):
+            with self.subTest(limit=limit):
+                self.app.state.settings = make_settings(max_message_chars=limit)
+                session_id = self.new_session()
+                response = self.send(session_id, "a" * limit)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(self.runner.streams[-1][1], "a" * limit)
+                response = self.send(session_id, "a" * (limit + 1))
+                self.assertEqual(response.status_code, 413)
+                self.assertIn(str(limit), response.json()["detail"])
+                messages = self.client.get(
+                    f"/api/sessions/{session_id}/messages", headers=AUTH
+                ).json()
+                self.assertEqual(len(messages), 2)
+                self.assertEqual(messages[0]["content"], "a" * limit)
 
     def test_users_are_isolated(self):
         session_id = self.new_session()
@@ -220,3 +293,41 @@ class ChatApiTests(unittest.TestCase):
             404,
         )
         self.assertEqual(self.client.get("/api/sessions", headers=other).json(), [])
+
+
+class MemoryChatStoreConcurrencyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_same_origin_is_atomic_and_scoped_per_user(self):
+        store = MemoryChatStore()
+        results = await asyncio.gather(
+            *(store.get_or_create_session("user", "first", "origin") for _ in range(20))
+        )
+        self.assertEqual(sum(created for _, created in results), 1)
+        self.assertEqual(len({session.id for session, _ in results}), 1)
+        first = results[0][0]
+        await store.add_message("user", first.id, "user", "preserved")
+        existing, created = await store.get_or_create_session("user", "changed", "origin")
+        self.assertFalse(created)
+        self.assertEqual(existing.title, "first")
+        self.assertEqual(existing.message_count, 1)
+        other, created = await store.get_or_create_session("other", "first", "origin")
+        self.assertTrue(created)
+        self.assertNotEqual(first.id, other.id)
+        await store.delete_session("user", first.id)
+        rebuilt, created = await store.get_or_create_session("user", "first", "origin")
+        self.assertTrue(created)
+        self.assertNotEqual(first.id, rebuilt.id)
+
+    async def test_concurrent_creates_enforce_raw_limit_and_clean_messages(self):
+        store = MemoryChatStore()
+        oldest = await store.create_session("user", "oldest")
+        await store.add_message("user", oldest.id, "user", "remove me")
+        results = await asyncio.gather(
+            *(
+                store.get_or_create_session("user", "session", f"origin-{index}")
+                for index in range(MAX_SESSIONS_PER_USER + 10)
+            )
+        )
+        self.assertTrue(all(created for _, created in results))
+        self.assertEqual(len(store._sessions["user"]), MAX_SESSIONS_PER_USER)
+        self.assertNotIn(oldest.id, store._sessions["user"])
+        self.assertNotIn(("user", oldest.id), store._messages)

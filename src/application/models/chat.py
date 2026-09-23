@@ -44,7 +44,7 @@ class RenameSessionRequest(BaseModel):
 
 
 class SendMessageRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=4000)
+    text: str = Field(min_length=1)
 
 
 class MeResponse(BaseModel):

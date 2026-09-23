@@ -91,12 +91,10 @@ async def create_session(
     """
     store = _store(request)
     title = (body.title or "").strip() or DEFAULT_TITLE
-    if body.origin:
-        existing = await store.find_session_by_origin(user.user_id, body.origin)
-        if existing is not None:
-            response.status_code = status.HTTP_200_OK
-            return existing
-    return await store.create_session(user.user_id, title, body.origin)
+    session, created = await store.get_or_create_session(user.user_id, title, body.origin)
+    if not created:
+        response.status_code = status.HTTP_200_OK
+    return session
 
 
 @router.patch("/sessions/{session_id}", response_model=Session)
@@ -176,7 +174,7 @@ async def send_message(
                             user.user_id,
                             session_id,
                             "assistant",
-                            event.data["content"],
+                            event.data["content"][: settings.max_output_chars],
                             [ToolCall(**tc) for tc in event.data["tool_calls"]],
                         )
                         yield _sse("done", {"id": saved.id, "content": saved.content})

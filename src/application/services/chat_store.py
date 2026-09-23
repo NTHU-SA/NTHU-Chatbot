@@ -42,6 +42,12 @@ class ChatStore(Protocol):
         self, user_id: str, title: str, origin: str | None = None
     ) -> Session: ...
 
+    async def get_or_create_session(
+        self, user_id: str, title: str, origin: str | None = None
+    ) -> tuple[Session, bool]:
+        """Atomically reuse an origin or create a session; bool indicates creation."""
+        ...
+
     async def get_session(self, user_id: str, session_id: str) -> Session | None: ...
 
     async def find_session_by_origin(self, user_id: str, origin: str) -> Session | None: ...
@@ -84,16 +90,30 @@ class MemoryChatStore:
         )
 
     async def create_session(self, user_id, title, origin=None) -> Session:
-        sessions = self._sessions[user_id]
-        while len(sessions) >= MAX_SESSIONS_PER_USER:
-            oldest = min(sessions.values(), key=lambda s: s.updated_at)
-            await self.delete_session(user_id, oldest.id)
-        now = now_utc()
-        session = Session(
-            id=new_id(), title=title, created_at=now, updated_at=now, origin=origin
-        )
-        self._sessions[user_id][session.id] = session
+        session, _ = await self.get_or_create_session(user_id, title, origin)
         return session
+
+    async def get_or_create_session(
+        self, user_id: str, title: str, origin: str | None = None
+    ) -> tuple[Session, bool]:
+        async with self._lock:
+            sessions = self._sessions[user_id]
+            if origin is not None:
+                existing = next(
+                    (s for s in sessions.values() if s.origin == origin), None
+                )
+                if existing is not None:
+                    return existing, False
+            while len(sessions) >= MAX_SESSIONS_PER_USER:
+                oldest = min(sessions.values(), key=lambda s: s.updated_at)
+                sessions.pop(oldest.id)
+                self._messages.pop((user_id, oldest.id), None)
+            now = now_utc()
+            session = Session(
+                id=new_id(), title=title, created_at=now, updated_at=now, origin=origin
+            )
+            sessions[session.id] = session
+            return session, True
 
     async def get_session(self, user_id: str, session_id: str) -> Session | None:
         return self._sessions[user_id].get(session_id)

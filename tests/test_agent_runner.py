@@ -145,3 +145,42 @@ class AgentRunnerStreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(on._agent.model_settings.reasoning.summary, "auto")
         for overrides in ({"reasoning_summary": True}, {"openai_use_responses_api": True}):
             self.assertIsNone(self.runner(**overrides)._agent.model_settings.reasoning)
+
+    def test_output_token_limit_applies_to_both_apis_with_reasoning(self):
+        for responses in (False, True):
+            for reasoning in (False, True):
+                with self.subTest(responses=responses, reasoning=reasoning):
+                    runner = self.runner(
+                        openai_use_responses_api=responses,
+                        reasoning_summary=reasoning,
+                        max_output_tokens=1234,
+                    )
+                    self.assertEqual(runner._agent.model_settings.max_tokens, 1234)
+
+    async def test_final_content_bound_includes_all_fallbacks(self):
+        text = "這是很長的回答"
+        tool = item(
+            "tool_called",
+            raw_item=SimpleNamespace(call_id="c1", name="get_next_buses", arguments="{}"),
+        )
+        suggestion = item(
+            "tool_called",
+            raw_item=SimpleNamespace(
+                call_id="s1", name="suggest_replies",
+                arguments='{"options": ["北校門", "南門"]}',
+            ),
+        )
+        for events in (
+            [],
+            [raw("response.output_text.delta", delta=text)],
+            [raw("response.output_text.delta", delta=text), tool],
+            [raw("response.output_text.delta", delta=text), suggestion],
+        ):
+            with self.subTest(events=events):
+                out = await self.collect(self.runner(max_output_chars=5), events, text)
+                self.assertEqual(out[-1].type, "done")
+                self.assertEqual(out[-1].data["content"], text[:5])
+
+    async def test_short_content_is_unchanged(self):
+        out = await self.collect(self.runner(max_output_chars=5), [], "短回答")
+        self.assertEqual(out[-1].data["content"], "短回答")

@@ -1,13 +1,80 @@
+import asyncio
 import os
 import unittest
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
+from google.api_core.exceptions import Aborted
+from google.auth.credentials import AnonymousCredentials
 from google.cloud import firestore
 
 from src.application.models.chat import ToolCall
 from src.application.services.chat_store import MAX_SESSIONS_PER_USER
 from src.infrastructure.firebase.chat_store import FirestoreChatStore
+
+
+class FirestoreTransactionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_retry_reads_before_writes_and_cleans_only_committed_victims(self):
+        client = firestore.AsyncClient(
+            project="demo-nthu-chatbot", credentials=AnonymousCredentials()
+        )
+        self.addCleanup(client.close)
+        store = FirestoreChatStore(client)
+        user = client.collection("users").document("user")
+        sessions = user.collection("sessions")
+        transaction = client.transaction()
+        now = datetime.now(UTC)
+        victims = [
+            Mock(
+                id=name,
+                reference=sessions.document(name),
+                to_dict=Mock(return_value={"title": name, "updated_at": now}),
+            )
+            for name in ("aborted-victim", "committed-victim")
+        ]
+        attempt = 0
+
+        async def begin(retry_id=None):
+            nonlocal attempt
+            attempt += 1
+            transaction._id = f"attempt-{attempt}".encode()
+
+        async def read_user(**kwargs):
+            self.assertIs(kwargs["transaction"], transaction)
+            self.assertEqual(transaction._write_pbs, [])
+
+        async def stream(**kwargs):
+            self.assertIs(kwargs["transaction"], transaction)
+            self.assertEqual(transaction._write_pbs, [])
+            yield victims[attempt - 1]
+
+        with (
+            patch("src.infrastructure.firebase.chat_store.MAX_SESSIONS_PER_USER", 1),
+            patch.object(store, "_user", return_value=user),
+            patch.object(store, "_sessions", return_value=sessions),
+            patch.object(user, "get", side_effect=read_user) as get_user,
+            patch.object(sessions, "stream", side_effect=stream),
+            patch.object(client, "transaction", return_value=transaction),
+            patch.object(transaction, "_begin", side_effect=begin),
+            patch.object(
+                transaction, "_commit", side_effect=[Aborted("retry"), None]
+            ) as commit,
+            patch.object(client, "recursive_delete", new_callable=AsyncMock) as cleanup,
+        ):
+            session, created = await store.get_or_create_session("user", "new", "origin")
+        self.assertTrue(created)
+        self.assertEqual(session.origin, "origin")
+        self.assertEqual(get_user.await_count, 2)
+        self.assertEqual(commit.await_count, 2)
+        cleanup.assert_awaited_once_with(victims[1].reference.collection("messages"))
+        writes = transaction._write_pbs
+        self.assertEqual(len(writes), 3)
+        self.assertEqual(writes[0].update.name, user._document_path)
+        self.assertEqual(writes[1].delete, victims[1].reference._document_path)
+        self.assertEqual(
+            writes[2].update.name, sessions.document(session.id)._document_path
+        )
 
 
 @unittest.skipUnless(
@@ -30,6 +97,32 @@ class FirestoreChatStoreTests(unittest.IsolatedAsyncioTestCase):
     async def user_doc(self, user_id=None) -> dict:
         snapshot = await self.client.collection("users").document(user_id or self.user_id).get()
         return snapshot.to_dict() or {}
+
+    async def raw_session_ids(self):
+        return {
+            doc.id
+            async for doc in self.client.collection("users")
+            .document(self.user_id)
+            .collection("sessions")
+            .stream()
+        }
+
+    async def concurrent_creates(self, origins):
+        clients = [
+            firestore.AsyncClient(project="demo-nthu-chatbot") for _ in origins
+        ]
+        try:
+            return await asyncio.gather(
+                *(
+                    FirestoreChatStore(client).get_or_create_session(
+                        self.user_id, "concurrent", origin
+                    )
+                    for client, origin in zip(clients, origins, strict=True)
+                )
+            )
+        finally:
+            for client in clients:
+                client.close()
 
     async def test_touch_user_merges_without_clobbering(self):
         await self.store.touch_user(self.user_id, followed=True)
@@ -106,6 +199,121 @@ class FirestoreChatStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(first.id, ids)
         self.assertNotIn(oldest.id, ids)
         self.assertIsNone(await self.store.get_session(self.user_id, oldest.id))
+        self.assertEqual(len(await self.raw_session_ids()), MAX_SESSIONS_PER_USER)
+
+    async def test_concurrent_origin_creation_across_clients(self):
+        results = await self.concurrent_creates(["same-origin"] * 4)
+        self.assertEqual(sum(created for _, created in results), 1)
+        self.assertEqual(len({session.id for session, _ in results}), 1)
+        self.assertEqual(len(await self.raw_session_ids()), 1)
+
+    async def test_existing_legacy_origin_does_not_evict_at_capacity(self):
+        reference = self.client.collection("users").document(self.user_id)
+        batch = self.client.batch()
+        now = datetime.now(UTC)
+        for index in range(MAX_SESSIONS_PER_USER):
+            batch.set(
+                reference.collection("sessions").document(f"legacy-{index}"),
+                {
+                    "title": "legacy",
+                    "origin": f"legacy-origin-{index}",
+                    "created_at": now,
+                    "updated_at": now,
+                    "message_count": 0,
+                },
+            )
+        await batch.commit()
+        # Legacy session documents need not have an existing parent user document.
+        self.assertFalse((await reference.get()).exists)
+        results = await self.concurrent_creates(["legacy-origin-0"] * 4)
+        self.assertTrue(all(not created for _, created in results))
+        self.assertEqual({session.id for session, _ in results}, {"legacy-0"})
+        self.assertEqual(len(await self.raw_session_ids()), MAX_SESSIONS_PER_USER)
+
+    async def test_concurrent_creates_atomically_evict_and_insert(self):
+        reference = self.client.collection("users").document(self.user_id)
+        batch = self.client.batch()
+        now = datetime.now(UTC) - timedelta(days=1)
+        for index in range(MAX_SESSIONS_PER_USER):
+            session = reference.collection("sessions").document(f"legacy-{index}")
+            batch.set(
+                session,
+                {
+                    "title": "legacy",
+                    "created_at": now,
+                    "updated_at": now + timedelta(seconds=index),
+                    "message_count": 1,
+                },
+            )
+            batch.set(
+                session.collection("messages").document("message"),
+                {"role": "user", "content": "old", "created_at": now},
+            )
+        await batch.commit()
+        results = await self.concurrent_creates([None, "event-1", "event-2", None])
+        self.assertTrue(all(created for _, created in results))
+        ids = await self.raw_session_ids()
+        self.assertEqual(len(ids), MAX_SESSIONS_PER_USER)
+        self.assertTrue({session.id for session, _ in results}.issubset(ids))
+        for index in range(4):
+            self.assertNotIn(f"legacy-{index}", ids)
+            self.assertEqual(
+                await self.store.list_messages(self.user_id, f"legacy-{index}", 10), []
+            )
+        self.assertEqual(
+            len(await self.store.list_messages(self.user_id, "legacy-4", 10)), 1
+        )
+
+    async def test_eviction_cleanup_cannot_delete_recreated_origin(self):
+        with patch("src.infrastructure.firebase.chat_store.MAX_SESSIONS_PER_USER", 1):
+            first = await self.store.create_session(self.user_id, "first", "origin")
+            await self.store.add_message(self.user_id, first.id, "user", "old")
+            cleanup_started = asyncio.Event()
+            resume_cleanup = asyncio.Event()
+            recursive_delete = self.client.recursive_delete
+
+            async def delayed_cleanup(reference):
+                cleanup_started.set()
+                await resume_cleanup.wait()
+                return await recursive_delete(reference)
+
+            other_client = firestore.AsyncClient(project="demo-nthu-chatbot")
+            try:
+                with patch.object(
+                    self.client, "recursive_delete", side_effect=delayed_cleanup
+                ):
+                    pending = asyncio.create_task(
+                        self.store.create_session(self.user_id, "replacement")
+                    )
+                    try:
+                        await asyncio.wait_for(cleanup_started.wait(), timeout=30)
+                        other_store = FirestoreChatStore(other_client)
+                        recreated, created = await other_store.get_or_create_session(
+                            self.user_id, "recreated", "origin"
+                        )
+                        self.assertTrue(created)
+                        self.assertNotEqual(first.id, recreated.id)
+                        await other_store.add_message(
+                            self.user_id, recreated.id, "user", "keep"
+                        )
+                    finally:
+                        resume_cleanup.set()
+                        await pending
+                self.assertEqual(await self.raw_session_ids(), {recreated.id})
+                self.assertEqual(
+                    [
+                        message.content
+                        for message in await self.store.list_messages(
+                            self.user_id, recreated.id, 10
+                        )
+                    ],
+                    ["keep"],
+                )
+                self.assertEqual(
+                    await self.store.list_messages(self.user_id, first.id, 10), []
+                )
+            finally:
+                other_client.close()
 
     async def test_daily_quota_boundary(self):
         results = [await self.store.consume_daily_quota(self.user_id, 2) for _ in range(3)]

@@ -77,37 +77,50 @@ class FirestoreChatStore:
         )
         return [self._session_from(doc) async for doc in query.stream()]
 
-    async def _evict_oldest_sessions(self, user_id: str) -> None:
-        """超過上限時刪除最久未更新的對話，讓新對話一定建得起來。"""
-        aggregate = await self._sessions(user_id).count().get()
-        count = aggregate[0][0].value if aggregate else 0
-        excess = count - MAX_SESSIONS_PER_USER + 1
-        if excess <= 0:
-            return
-        query = (
-            self._sessions(user_id)
-            .order_by("updated_at", direction=firestore.Query.ASCENDING)
-            .limit(excess)
-        )
-        async for doc in query.stream():
-            await self._db.recursive_delete(doc.reference)
-
     async def create_session(self, user_id, title, origin=None) -> Session:
-        await self._evict_oldest_sessions(user_id)
-        now = now_utc()
+        session, _ = await self.get_or_create_session(user_id, title, origin)
+        return session
+
+    async def get_or_create_session(
+        self, user_id: str, title: str, origin: str | None = None
+    ) -> tuple[Session, bool]:
+        user = self._user(user_id)
         reference = self._sessions(user_id).document(new_id())
-        payload = {
-            "title": title,
-            "created_at": now,
-            "updated_at": now,
-            "message_count": 0,
-        }
-        if origin:
-            payload["origin"] = origin
-        await reference.set(payload)
-        return Session(
-            id=reference.id, title=title, created_at=now, updated_at=now, origin=origin
-        )
+
+        @firestore.async_transactional
+        async def create(transaction):
+            # All reads precede writes. The user document serializes creators across
+            # instances, including when the sessions collection is initially empty.
+            await user.get(transaction=transaction)
+            documents = [
+                doc async for doc in self._sessions(user_id).stream(transaction=transaction)
+            ]
+            sessions = [(doc, self._session_from(doc)) for doc in documents]
+            if origin is not None:
+                for _, session in sessions:
+                    if session.origin == origin:
+                        return session, False, []
+
+            excess = max(0, len(sessions) - MAX_SESSIONS_PER_USER + 1)
+            oldest = sorted(sessions, key=lambda item: item[1].updated_at)[:excess]
+            now = now_utc()
+            session = Session(
+                id=reference.id, title=title, created_at=now, updated_at=now, origin=origin
+            )
+            transaction.set(
+                user, {"sessions_updated_at": firestore.SERVER_TIMESTAMP}, merge=True
+            )
+            for doc, _ in oldest:
+                transaction.delete(doc.reference)
+            transaction.create(reference, session.model_dump(exclude={"id"}))
+            return session, True, [doc.reference for doc, _ in oldest]
+
+        session, created, evicted = await create(self._db.transaction())
+        # Only the successful attempt's victims are cleaned up. Session IDs are never
+        # reused; a new session for the same origin cannot lose its messages here.
+        for victim in evicted:
+            await self._db.recursive_delete(victim.collection("messages"))
+        return session, created
 
     async def get_session(self, user_id: str, session_id: str) -> Session | None:
         doc = await self._sessions(user_id).document(session_id).get()

@@ -7,6 +7,7 @@ Cloud Run 由 Secret Manager 注入。這裡不提供任何機密的預設值，
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass, field
 
@@ -31,14 +32,17 @@ def _bool(value: str | None, default: bool) -> bool:
     return value.strip().lower() in ("1", "true", "yes", "on")
 
 
-def _int(name: str, default: int) -> int:
+def _int(name: str, default: int, *, minimum: int = 1) -> int:
     value = os.getenv(name)
     if value is None or value.strip() == "":
         return default
     try:
-        return int(value)
+        parsed = int(value)
     except ValueError:
         raise RuntimeError(f"Invalid integer for {name}") from None
+    if parsed < minimum:
+        raise RuntimeError(f"Invalid {name}, expected an integer >= {minimum}")
+    return parsed
 
 
 def _float(name: str, default: float) -> float:
@@ -46,9 +50,12 @@ def _float(name: str, default: float) -> float:
     if value is None or value.strip() == "":
         return default
     try:
-        return float(value)
+        parsed = float(value)
     except ValueError:
         raise RuntimeError(f"Invalid number for {name}") from None
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise RuntimeError(f"Invalid {name}, expected a finite number > 0")
+    return parsed
 
 
 def _csv(value: str | None, default: tuple[str, ...]) -> tuple[str, ...]:
@@ -84,6 +91,8 @@ class Settings:
     history_message_chars: int = 1500
     max_tool_output_chars: int = 6000
     max_message_chars: int = 2000
+    max_output_tokens: int = 2000
+    max_output_chars: int = 8000
     daily_message_limit: int = 100
     max_agent_turns: int = 8
     tool_result_preview_chars: int = 500
@@ -137,7 +146,9 @@ class Settings:
             history_message_chars=_int("HISTORY_MESSAGE_CHARS", 1500),
             max_tool_output_chars=_int("MAX_TOOL_OUTPUT_CHARS", 6000),
             max_message_chars=_int("MAX_MESSAGE_CHARS", 2000),
-            daily_message_limit=_int("DAILY_MESSAGE_LIMIT", 100),
+            max_output_tokens=_int("MAX_OUTPUT_TOKENS", 2000),
+            max_output_chars=_int("MAX_OUTPUT_CHARS", 8000),
+            daily_message_limit=_int("DAILY_MESSAGE_LIMIT", 100, minimum=0),
             max_agent_turns=_int("MAX_AGENT_TURNS", 8),
-            tool_result_preview_chars=_int("TOOL_RESULT_PREVIEW_CHARS", 500),
+            tool_result_preview_chars=_int("TOOL_RESULT_PREVIEW_CHARS", 500, minimum=0),
         )
