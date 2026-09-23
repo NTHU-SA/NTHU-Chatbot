@@ -130,6 +130,7 @@ body {
 }
 .msg.user .bubble { background: var(--user-bubble); color: var(--user-ink); border-color: transparent; border-bottom-right-radius: 4px; }
 .msg.assistant .bubble { border-bottom-left-radius: 4px; white-space: normal; }
+.msg.assistant .bubble.streaming { white-space: pre-wrap; }
 .bubble code { font-family: ui-monospace, monospace; font-size: .92em; background: rgb(127 127 127 / .15); padding: 1px 4px; border-radius: 4px; }
 .bubble a { color: inherit; }
 

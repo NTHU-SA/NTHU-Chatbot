@@ -17,8 +17,8 @@ LIFF 網頁 (/liff/) ──Bearer id_token──▶ /api/* ──▶ AgentRunner
 
 - **聊天室只做「reply token 一定來得及」的事**；AI 對話在 LIFF 網頁進行（多 session、串流、即時顯示正在使用哪個工具）。
 - 身分：LIFF `id_token` → 後端向 `https://api.line.me/oauth2/v2.1/verify` 驗證 → `sub` 即 userId。Messaging API 與 LINE Login channel 必須在同一 Provider 下，userId 才相同。
-- LLM 可接任何 OpenAI 相容端點（`OPENAI_BASE_URL`），預設 `gpt-4.1-mini`；MCP 工具由後端呼叫，白名單 `MCP_ALLOWED_TOOLS`。
-- 群組內只使用 `@` 指令；其他文字會回不帶問題的 LIFF 按鈕，不讀取私人對話。
+- LLM 可接任何 OpenAI 相容端點（`OPENAI_BASE_URL`），預設 `gpt-5.6-luna`；MCP 工具由後端呼叫，白名單 `MCP_ALLOWED_TOOLS`。
+- 群組內只使用 `@` 指令；其他文字會回帶問題的 LIFF 按鈕，不讀取私人對話。
 - 輸入「說明」、「help」或 `@說明` 會回使用說明泡泡（指令清單依 `bot_config.yaml` 自動產生）。
 - LIFF 對話：`REASONING_SUMMARY=true` 時會把模型的思考摘要串流顯示；模型缺少必要資訊時會反問並提供快速回覆按鈕（`suggest_replies` 工具）。
 - 回呼等待處理完成才回應，沒有會在 Cloud Run 回應後被暫停的背景工作。
@@ -150,7 +150,7 @@ gcloud run deploy nthu-chatbot --source . --project $ProjectId --region asia-eas
   --service-account $RuntimeAccount --allow-unauthenticated `
   --timeout=180 --concurrency=40 --min-instances=0 --max-instances=3 `
   --set-secrets "OPENAI_API_KEY=openai-api-key:latest,LINE_CHANNEL_SECRET=line-channel-secret:latest,LINE_CHANNEL_ACCESS_TOKEN=line-channel-access-token:latest" `
-  --set-env-vars "LINE_LOGIN_CHANNEL_ID=YOUR_LOGIN_CHANNEL_ID,LIFF_ID=YOUR_LIFF_ID,OPENAI_MODEL=gpt-4.1-mini,MCP_SERVER_URL=https://api.nthusa.tw/mcp,CHAT_STORE=firestore,GOOGLE_CLOUD_PROJECT=$ProjectId"
+  --set-env-vars "LINE_LOGIN_CHANNEL_ID=YOUR_LOGIN_CHANNEL_ID,LIFF_ID=YOUR_LIFF_ID,OPENAI_MODEL=gpt-5.6-luna,MCP_SERVER_URL=https://api.nthusa.tw/mcp,CHAT_STORE=firestore,GOOGLE_CLOUD_PROJECT=$ProjectId"
 ```
 
 `--timeout=180` 需大於 LIFF 對話的 120 秒 agent 上限（SSE 長連線）；使用非官方端點時再加 `OPENAI_BASE_URL`。

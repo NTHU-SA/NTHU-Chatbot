@@ -194,9 +194,9 @@ class AgentRunner:
             max_retry_attempts=1,
         )
         # 思考摘要只有 reasoning 模型走 Responses API 才支援；其他情況不帶參數以免被端點拒絕。
-        model_settings = ModelSettings()
+        model_settings = ModelSettings(max_tokens=settings.max_output_tokens)
         if settings.reasoning_summary and settings.openai_use_responses_api:
-            model_settings = ModelSettings(reasoning=Reasoning(summary="auto"))
+            model_settings.reasoning = Reasoning(summary="auto")
 
         self._agent = Agent(
             name="狗狗情報員",
@@ -375,7 +375,7 @@ class AgentRunner:
             yield AgentEvent(
                 "done",
                 {
-                    "content": content,
+                    "content": content[: self._settings.max_output_chars],
                     "tool_calls": [tc.model_dump() for tc in tool_calls],
                 },
             )
