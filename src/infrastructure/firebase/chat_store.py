@@ -7,12 +7,14 @@ Firestore 對話儲存。
   users/{uid}                                  last_seen_at / followed / display_name / created_at / usage
   users/{uid}/sessions/{sid}                   title / created_at / updated_at / message_count / origin
   users/{uid}/sessions/{sid}/messages/{mid}    role / content / created_at / tool_calls
+  users/{uid}/session_cleanup/{sid}           created_at (pending evicted-message cleanup)
 """
 
 from __future__ import annotations
 
 from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
+from loguru import logger
 
 from src.application.models.chat import Message, Session, ToolCall
 from src.application.services.chat_store import MAX_SESSIONS_PER_USER, new_id, now_utc
@@ -31,6 +33,9 @@ class FirestoreChatStore:
 
     def _messages(self, user_id: str, session_id: str):
         return self._sessions(user_id).document(session_id).collection("messages")
+
+    def _session_cleanup(self, user_id: str):
+        return self._user(user_id).collection("session_cleanup")
 
     # -- users --
     async def touch_user(
@@ -99,7 +104,7 @@ class FirestoreChatStore:
             if origin is not None:
                 for _, session in sessions:
                     if session.origin == origin:
-                        return session, False, []
+                        return session, False
 
             excess = max(0, len(sessions) - MAX_SESSIONS_PER_USER + 1)
             oldest = sorted(sessions, key=lambda item: item[1].updated_at)[:excess]
@@ -112,15 +117,39 @@ class FirestoreChatStore:
             )
             for doc, _ in oldest:
                 transaction.delete(doc.reference)
+                transaction.set(
+                    self._session_cleanup(user_id).document(doc.id),
+                    {"created_at": firestore.SERVER_TIMESTAMP},
+                )
             transaction.create(reference, session.model_dump(exclude={"id"}))
-            return session, True, [doc.reference for doc, _ in oldest]
+            return session, True
 
-        session, created, evicted = await create(self._db.transaction())
-        # Only the successful attempt's victims are cleaned up. Session IDs are never
-        # reused; a new session for the same origin cannot lose its messages here.
-        for victim in evicted:
-            await self._db.recursive_delete(victim.collection("messages"))
+        session, created = await create(self._db.transaction())
+        await self._drain_session_cleanup(user_id)
         return session, created
+
+    async def _drain_session_cleanup(self, user_id: str) -> None:
+        # Markers survive process exits and transaction retries. Limit per-request
+        # work; random session IDs are never reused, so concurrent cleaners are safe.
+        query = (
+            self._session_cleanup(user_id)
+            .order_by("created_at")
+            .limit(MAX_SESSIONS_PER_USER)
+        )
+        try:
+            async for marker in query.stream():
+                try:
+                    messages = self._messages(user_id, marker.id)
+                    await self._db.recursive_delete(messages)
+                    # BulkWriter may exhaust individual write retries without raising.
+                    if await messages.limit(1).get():
+                        logger.warning("Session cleanup deferred: messages remain")
+                        continue
+                    await marker.reference.delete()
+                except Exception as error:  # noqa: BLE001 -- committed session must succeed
+                    logger.warning("Session cleanup deferred: {}", type(error).__name__)
+        except Exception as error:  # noqa: BLE001 -- retain markers if listing fails
+            logger.warning("Session cleanup deferred: {}", type(error).__name__)
 
     async def get_session(self, user_id: str, session_id: str) -> Session | None:
         doc = await self._sessions(user_id).document(session_id).get()

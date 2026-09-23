@@ -23,6 +23,10 @@ class FirestoreTransactionTests(unittest.IsolatedAsyncioTestCase):
         store = FirestoreChatStore(client)
         user = client.collection("users").document("user")
         sessions = user.collection("sessions")
+        markers = user.collection("session_cleanup")
+        marker_ref = markers.document("committed-victim")
+        marker = Mock(id=marker_ref.id, reference=marker_ref)
+        messages = sessions.document("committed-victim").collection("messages")
         transaction = client.transaction()
         now = datetime.now(UTC)
         victims = [
@@ -49,12 +53,27 @@ class FirestoreTransactionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(transaction._write_pbs, [])
             yield victims[attempt - 1]
 
+        async def stream_markers():
+            yield marker
+
+        cleanup_query = Mock(stream=Mock(side_effect=stream_markers))
         with (
             patch("src.infrastructure.firebase.chat_store.MAX_SESSIONS_PER_USER", 1),
             patch.object(store, "_user", return_value=user),
             patch.object(store, "_sessions", return_value=sessions),
+            patch.object(store, "_session_cleanup", return_value=markers),
+            patch.object(store, "_messages", return_value=messages),
             patch.object(user, "get", side_effect=read_user) as get_user,
             patch.object(sessions, "stream", side_effect=stream),
+            patch.object(
+                markers,
+                "order_by",
+                return_value=Mock(limit=Mock(return_value=cleanup_query)),
+            ),
+            patch.object(
+                messages, "limit", return_value=Mock(get=AsyncMock(return_value=[]))
+            ),
+            patch.object(marker_ref, "delete", new_callable=AsyncMock) as delete_marker,
             patch.object(client, "transaction", return_value=transaction),
             patch.object(transaction, "_begin", side_effect=begin),
             patch.object(
@@ -68,13 +87,94 @@ class FirestoreTransactionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(get_user.await_count, 2)
         self.assertEqual(commit.await_count, 2)
         cleanup.assert_awaited_once_with(victims[1].reference.collection("messages"))
+        delete_marker.assert_awaited_once()
         writes = transaction._write_pbs
-        self.assertEqual(len(writes), 3)
+        self.assertEqual(len(writes), 4)
         self.assertEqual(writes[0].update.name, user._document_path)
         self.assertEqual(writes[1].delete, victims[1].reference._document_path)
+        self.assertEqual(writes[2].update.name, marker_ref._document_path)
         self.assertEqual(
-            writes[2].update.name, sessions.document(session.id)._document_path
+            writes[3].update.name, sessions.document(session.id)._document_path
         )
+
+    async def test_failed_cleanup_is_retried_when_existing_origin_is_reopened(self):
+        client = Mock()
+        client.recursive_delete = AsyncMock(side_effect=[RuntimeError("private"), None])
+        store = FirestoreChatStore(client)
+        session = Mock(
+            id="existing-session",
+            to_dict=Mock(return_value={"title": "kept", "origin": "origin"}),
+        )
+        marker = Mock(id="evicted-session")
+        marker.reference.delete = AsyncMock()
+        messages = Mock()
+        messages.limit.return_value.get = AsyncMock(return_value=[])
+        transaction = Mock()
+
+        async def stream_sessions(**kwargs):
+            yield session
+
+        async def stream_markers():
+            yield marker
+
+        def transactional(callback):
+            return callback
+
+        client.transaction.return_value = transaction
+        user = Mock(get=AsyncMock())
+        sessions = Mock(stream=Mock(side_effect=stream_sessions))
+        markers = Mock()
+        query = markers.order_by.return_value.limit.return_value
+        query.stream.side_effect = stream_markers
+        with (
+            patch(
+                "src.infrastructure.firebase.chat_store.firestore.async_transactional",
+                side_effect=transactional,
+            ),
+            patch("src.infrastructure.firebase.chat_store.logger") as log,
+            patch.object(store, "_user", return_value=user),
+            patch.object(store, "_sessions", return_value=sessions),
+            patch.object(store, "_session_cleanup", return_value=markers),
+            patch.object(store, "_messages", return_value=messages),
+        ):
+            first, created = await store.get_or_create_session("user", "ignored", "origin")
+            self.assertFalse(created)
+            self.assertEqual(first.id, session.id)
+            marker.reference.delete.assert_not_awaited()
+            log.warning.assert_called_once_with(
+                "Session cleanup deferred: {}", "RuntimeError"
+            )
+            reopened, created = await store.get_or_create_session(
+                "user", "ignored", "origin"
+            )
+        self.assertFalse(created)
+        self.assertEqual(reopened.id, first.id)
+        self.assertEqual(client.recursive_delete.await_count, 2)
+        marker.reference.delete.assert_awaited_once()
+        transaction.set.assert_not_called()
+        transaction.delete.assert_not_called()
+
+    async def test_incomplete_bulk_cleanup_retains_marker(self):
+        client = Mock(recursive_delete=AsyncMock())
+        store = FirestoreChatStore(client)
+        marker = Mock(id="evicted-session")
+        marker.reference.delete = AsyncMock()
+        messages = Mock()
+        messages.limit.return_value.get = AsyncMock(return_value=[Mock()])
+        markers = Mock()
+
+        async def stream_markers():
+            yield marker
+
+        query = markers.order_by.return_value.limit.return_value
+        query.stream.side_effect = stream_markers
+        with (
+            patch.object(store, "_session_cleanup", return_value=markers),
+            patch.object(store, "_messages", return_value=messages),
+        ):
+            await store._drain_session_cleanup("user")
+        marker.reference.delete.assert_not_awaited()
+        client.recursive_delete.assert_awaited_once_with(messages)
 
 
 @unittest.skipUnless(
@@ -314,6 +414,42 @@ class FirestoreChatStoreTests(unittest.IsolatedAsyncioTestCase):
                 )
             finally:
                 other_client.close()
+
+    async def test_cleanup_failure_persists_marker_and_existing_origin_retries(self):
+        with patch("src.infrastructure.firebase.chat_store.MAX_SESSIONS_PER_USER", 1):
+            first = await self.store.create_session(self.user_id, "old", "old-origin")
+            await self.store.add_message(self.user_id, first.id, "user", "remove me")
+            marker = (
+                self.client.collection("users")
+                .document(self.user_id)
+                .collection("session_cleanup")
+                .document(first.id)
+            )
+            with patch.object(
+                self.client, "recursive_delete", side_effect=RuntimeError("unavailable")
+            ):
+                replacement, created = await self.store.get_or_create_session(
+                    self.user_id, "new", "new-origin"
+                )
+            self.assertTrue(created)
+            self.assertIsNone(await self.store.get_session(self.user_id, first.id))
+            self.assertTrue((await marker.get()).exists)
+            self.assertEqual(
+                len(await self.store.list_messages(self.user_id, first.id, 10)), 1
+            )
+            # A fresh store can recover the durable marker without creating a session.
+            reopened, created = (
+                await FirestoreChatStore(self.client).get_or_create_session(
+                    self.user_id, "ignored", "new-origin"
+                )
+            )
+            self.assertFalse(created)
+            self.assertEqual(reopened.id, replacement.id)
+            self.assertEqual(await self.raw_session_ids(), {replacement.id})
+            self.assertFalse((await marker.get()).exists)
+            self.assertEqual(
+                await self.store.list_messages(self.user_id, first.id, 10), []
+            )
 
     async def test_daily_quota_boundary(self):
         results = [await self.store.consume_daily_quota(self.user_id, 2) for _ in range(3)]
