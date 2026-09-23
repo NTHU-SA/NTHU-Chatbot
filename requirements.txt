@@ -14,7 +14,7 @@ httpx
 # Flex Message
 jinja2
 # AI (OpenAI Agents SDK + MCP client; openai is a dependency of openai-agents)
-openai>=2,<4
+openai>=3.16.2,<4
 openai-agents>=0.22,<1
 # Firebase Firestore
 google-cloud-firestore>=2.21,<3
