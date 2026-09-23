@@ -10,6 +10,11 @@ from linebot.v3.messaging import (
 from src.utils import nthuapi
 
 
+def _normalize(title) -> str:
+    """API 的佈告欄名稱有時含多餘空白（如「最新公告  - 清華書院」），比對前先壓平。"""
+    return " ".join(str(title or "").split())
+
+
 async def get(
     department_name,
     announcement_title,
@@ -30,11 +35,12 @@ async def get(
         "language": language,
     }
     data = await nthuapi.get("/announcements/", params=params)
+    wanted = _normalize(announcement_title)
     columns = []
     for board in data or []:
         if board.get("language") != language:
             continue
-        if announcement_title and board.get("title") != announcement_title:
+        if wanted and _normalize(board.get("title")) != wanted:
             continue
         for article in board.get("articles", []):
             link = article.get("link") or board.get("link")

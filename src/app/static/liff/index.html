@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="color-scheme" content="light dark">
+  <title>狗狗情報員</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div id="app" class="app">
+    <header class="topbar">
+      <button id="menuBtn" class="icon-btn" type="button" aria-label="開啟對話列表" aria-controls="sidebar" aria-expanded="false">☰</button>
+      <h1 id="sessionTitle" class="title">狗狗情報員</h1>
+      <button id="newBtn" class="icon-btn" type="button" aria-label="新對話">＋</button>
+    </header>
+
+    <aside id="sidebar" class="sidebar" aria-label="對話列表" aria-hidden="true" inert>
+      <div class="sidebar-head">
+        <span>我的對話</span>
+        <button id="closeSidebar" class="icon-btn" type="button" aria-label="關閉">×</button>
+      </div>
+      <ul id="sessionList" class="session-list"></ul>
+      <p class="sidebar-note">最多保留 50 則對話；新增對話時，最久未更新的對話會被自動刪除。</p>
+      <div id="userBox" class="user-box"></div>
+    </aside>
+    <div id="backdrop" class="backdrop" hidden></div>
+
+    <main id="messages" class="messages" aria-live="polite">
+      <div id="empty" class="empty">
+        <p class="empty-title">汪！想查什麼？ฅ'ω'ฅ</p>
+        <div class="chips">
+          <button class="chip" type="button" data-q="下一班往南大的公車幾點？">🚌 往南大的公車</button>
+          <button class="chip" type="button" data-q="現在有哪些餐廳開著？">🍱 現在開的餐廳</button>
+          <button class="chip" type="button" data-q="總圖現在還有討論室嗎？">📚 總圖討論室</button>
+          <button class="chip" type="button" data-q="幫我找資工系的機器學習課程">🎓 找課程</button>
+        </div>
+      </div>
+    </main>
+
+    <form id="composer" class="composer">
+      <textarea id="input" rows="1" placeholder="輸入問題…" maxlength="2000" autocomplete="off" enterkeyhint="send"></textarea>
+      <button id="sendBtn" class="send-btn" type="submit" aria-label="送出" disabled>➤</button>
+    </form>
+  </div>
+
+  <div id="overlay" class="overlay">
+    <div class="overlay-card">
+      <div class="spinner" aria-hidden="true"></div>
+      <p id="overlayText">連線中…</p>
+      <button id="overlayRetry" class="btn" type="button" hidden>重試</button>
+    </div>
+  </div>
+
+  <dialog id="confirmDlg" class="dialog">
+    <form method="dialog">
+      <p id="confirmText">確定要刪除這個對話嗎？</p>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn ghost" type="submit">取消</button>
+        <button value="ok" class="btn danger" type="submit">刪除</button>
+      </div>
+    </form>
+  </dialog>
+
+  <template id="tplMessage">
+    <article class="msg">
+      <div class="tools" hidden></div>
+      <div class="bubble"></div>
+    </article>
+  </template>
+
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script src="./vendor/marked.min.js"></script>
+  <script src="./vendor/purify.min.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

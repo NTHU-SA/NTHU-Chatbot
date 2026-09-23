@@ -10,7 +10,7 @@ from src.app.handlers.command_handler import command_handler
     actions=[
         PostbackAction(
             label="公車",
-            data="@選單/公車時間表",  # 請根據實際 command handler 設定調整 data
+            data="@公車",
             displayText="公車時刻表",
             inputOption=None,
             fillInText=None,
@@ -28,7 +28,7 @@ def bus_schedule_menu(event):
     actions=[
         PostbackAction(
             label="清華校內工讀",
-            data="@選單/清華校內工讀",  # 請根據實際 command handler 設定調整 data
+            data="@公佈欄/清華校內工讀",
             displayText="清華校內工讀",
             inputOption=None,
             fillInText=None,
@@ -46,7 +46,7 @@ def campus_job_menu(event):
     actions=[
         PostbackAction(
             label="校務專區",
-            data="@選單/校務專區",  # 請根據實際 command handler 設定調整 data
+            data="@校務專區",
             displayText="校務專區",
             inputOption=None,
             fillInText=None,
@@ -64,7 +64,7 @@ def academic_affairs_menu(event):
     actions=[
         PostbackAction(
             label="校園地圖查詢",
-            data="@選單/校園地圖查詢",  # 請根據實際 command handler 設定調整 data
+            data="@地圖",
             displayText="校園地圖查詢",
             inputOption=None,
             fillInText=None,
@@ -82,7 +82,7 @@ def campus_map_menu(event):
     actions=[
         PostbackAction(
             label="神奇海螺",
-            data="@選單/神奇海螺",  # 請根據實際 command handler 設定調整 data
+            data="@神奇海螺",
             displayText="神奇海螺",
             inputOption=None,
             fillInText=None,

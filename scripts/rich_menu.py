@@ -14,11 +14,15 @@ from linebot.v3.messaging import (
     RichMenuRequest,
     RichMenuSize,
     RichMenuSwitchAction,
+    URIAction,
 )
 
 from log import logger
+from templates.messages import liff_url
 
 load_dotenv()
+
+LIFF_ID = os.getenv("LIFF_ID", "")
 
 rich_menu_list = [
     {
@@ -100,7 +104,7 @@ rich_menu_list = [
                 ),
                 RichMenuArea(
                     bounds=RichMenuBounds(x=100, y=630, width=2300, height=300),
-                    action=MessageAction(label="開發中", text="@開發中，敬請期待"),
+                    action=URIAction(label="和本汪聊天", uri=liff_url(LIFF_ID)),
                 ),
             ],
         ),
@@ -113,6 +117,8 @@ configuration = Configuration(access_token=os.getenv("LINE_CHANNEL_ACCESS_TOKEN"
 def set_rich_menu():
     if not configuration.access_token:
         raise ValueError("LINE_CHANNEL_ACCESS_TOKEN is required")
+    if not LIFF_ID:
+        raise ValueError("LIFF_ID is required for the LIFF chat entry")
     for menu in rich_menu_list:
         if not menu["richmenu_image"].is_file():
             raise FileNotFoundError(menu["richmenu_image"])

@@ -15,13 +15,15 @@ from linebot.v3.webhooks import (
     TextMessageContent,
     UnfollowEvent,
 )
-from openai import OpenAIError
 
 from log import logger
 from src.app.handlers.command_handler import command_handler
-from src.infrastructure.firebase.user_repository import ConversationBusyError
+from templates.messages import open_web_chat
 
 router = APIRouter()
+
+# 不用加 @ 也能叫出使用說明的關鍵字
+HELP_KEYWORDS = {"說明", "使用說明", "幫助", "help", "?", "？"}
 
 
 @router.post("/callback")
@@ -55,29 +57,24 @@ async def handle_callback(request: Request):
             elif isinstance(event, FollowEvent):
                 await handle_follow(event, state)
             elif isinstance(event, UnfollowEvent) and event.source.user_id:
-                await state.users.touch(event.source.user_id, followed=False)
+                await state.store.touch_user(event.source.user_id, followed=False)
         except (
             GoogleAPICallError,
-            OpenAIError,
             ApiException,
             ClientError,
             TimeoutError,
             ValueError,
             RuntimeError,
-            ConversationBusyError,
         ) as error:
             logger.error("Webhook event failed: {}", type(error).__name__)
             if getattr(event, "reply_token", None):
-                message = (
-                    "上一則訊息仍在處理中，請稍後再試。"
-                    if isinstance(error, ConversationBusyError)
-                    else "處理訊息時發生錯誤，請稍後再試。"
-                )
                 try:
                     await state.messaging_api.reply_message(
                         ReplyMessageRequest(
                             reply_token=event.reply_token,
-                            messages=[TextMessage(text=message)],
+                            messages=[
+                                TextMessage(text="處理訊息時發生錯誤，請稍後再試。")
+                            ],
                         )
                     )
                 except (ApiException, ClientError, TimeoutError) as reply_error:
@@ -90,31 +87,40 @@ async def handle_message(event: MessageEvent, state):
     """
     處理文字訊息事件。
 
-    根據使用者發送的文字內容，決定使用命令處理或是由 AI 產生回覆。
+    `@` 開頭走聊天室內的指令模組；其餘文字回一則按鈕，讓使用者到 LIFF 網頁與 AI 對話。
+    泡泡以 webhook event id 綁定對話：同一顆按鈕永遠開同一個對話，被刪除才重新建立。
+    群組內不把訊息內容帶進 LIFF 網址。
     """
     user_id = event.source.user_id
     message_text = event.message.text
     reply_token = event.reply_token
+    liff_id = state.settings.liff_id
 
     if user_id:
-        await state.users.touch(user_id)
-    if event.source.type == "user" and user_id:
-        try:
-            await state.messaging_api.show_loading_animation(
-                ShowLoadingAnimationRequest(chatId=user_id)
-            )
-        except (ApiException, ClientError, TimeoutError):
-            logger.warning("Loading animation unavailable")
+        await state.store.touch_user(user_id)
+
+    if message_text.strip().lower() in HELP_KEYWORDS:
+        message_text = f"{command_handler.command_prefix}說明"
 
     if message_text.startswith(command_handler.command_prefix):
+        if event.source.type == "user" and user_id:
+            try:
+                await state.messaging_api.show_loading_animation(
+                    ShowLoadingAnimationRequest(chatId=user_id)
+                )
+            except (ApiException, ClientError, TimeoutError):
+                logger.warning("Loading animation unavailable")
         messages = await command_handler.process_message(message_text, user_id)
-    elif event.source.type == "user" and user_id:
-        response = await state.chat.respond(
-            user_id, message_text, event.webhook_event_id
-        )
-        messages = [TextMessage(text=response)]
+    elif event.source.type == "user":
+        messages = [
+            open_web_chat(
+                liff_id,
+                question=message_text.strip() or None,
+                session_key=event.webhook_event_id,
+            )
+        ]
     else:
-        messages = [TextMessage(text="請在一對一聊天中使用 AI 問答。")]
+        messages = [open_web_chat(liff_id)]
 
     if isinstance(messages, str):
         messages = [TextMessage(text=messages)]
@@ -141,7 +147,7 @@ async def handle_postback(event: PostbackEvent, state):
     """
     user_id = event.source.user_id
     if user_id:
-        await state.users.touch(user_id)
+        await state.store.touch_user(user_id)
     postback_data = event.postback.data
     reply_token = event.reply_token
 
@@ -173,7 +179,7 @@ async def handle_follow(event: FollowEvent, state):
     當使用者加入好友時，發送歡迎訊息。
     """
     if event.source.user_id:
-        await state.users.touch(event.source.user_id, followed=True)
+        await state.store.touch_user(event.source.user_id, followed=True)
 
     reply_token = event.reply_token
     welcome_text = """初次見面！我是清華校園情報員，你可以叫我狗狗情報員！清華生活中的大小事，只要是你遇到的問題，我都會努力幫你解決唷！
@@ -182,13 +188,16 @@ async def handle_follow(event: FollowEvent, state):
 🚩詢問校務相關問題💬
 🚩或讓本汪帶你在清大趴趴走！
 
-偷偷告訴你，你可以用左下角的鍵盤和我說悄悄話哦！
-身為一個好的情報員，有任何消息我都會盡快回報的！！
+偷偷告訴你，你可以用左下角的鍵盤直接問我問題，我會給你一顆按鈕，點開就能和我聊天！
+隨時輸入「說明」可以查看使用方式。
 
 或是你感到無聊，想找找小遊戲，可以到下方選單點擊〝神奇海螺〞看看額外的功能唷！
 
 作為一隻狗狗，有時候會太熱情，如果覺得我有點吵的話，請將「提醒」功能關閉就好📵，千萬不要封鎖本汪好嗎，我一定會乖乖的喔！"""
-    messages = [TextMessage(text=welcome_text)]
+    messages = [
+        TextMessage(text=welcome_text),
+        open_web_chat(state.settings.liff_id, greeting=True),
+    ]
 
     reply_message = ReplyMessageRequest(
         reply_token=reply_token,

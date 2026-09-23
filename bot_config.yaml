@@ -8,6 +8,8 @@ modules:
     prefix: 開發者
   dining:
     prefix: 學生餐廳
+  help:
+    prefix: 說明
   info:
     prefix: 公佈欄
   library:
