@@ -250,7 +250,7 @@ def test_firestore_store_startup_wires_and_closes_client(lifecycle_mocks):
     with patch.dict(os.environ, environment, clear=True):
         app = create_app()
         with TestClient(app):
-            database.assert_called_once_with(project="demo-nthu-chatbot")
+            database.assert_called_once_with(project="demo-nthu-chatbot", database="(default)")
             assert app.state.store._db is database.return_value
     database.return_value.close.assert_called_once()
 

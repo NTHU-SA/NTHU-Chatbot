@@ -48,7 +48,9 @@ async def lifespan(app: FastAPI):
         store, user_store = MemoryChatStore(), MemoryUserStore()
         module_registry = StaticModuleRegistry()
     else:
-        database = firestore.AsyncClient(project=settings.google_cloud_project)
+        database = firestore.AsyncClient(
+            project=settings.google_cloud_project, database=settings.firestore_database
+        )
         store, user_store = FirestoreChatStore(database), FirestoreUserStore(database)
         module_registry = FirestoreModuleRegistry(database)
 

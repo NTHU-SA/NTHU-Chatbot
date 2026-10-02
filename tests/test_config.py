@@ -38,6 +38,7 @@ def test_memory_store_defaults():
     settings = load(MEMORY)
     assert settings.chat_store == "memory"
     assert settings.google_cloud_project is None
+    assert settings.firestore_database == "(default)"
     assert settings.openai_model == "gpt-4.1-mini"
     assert not settings.openai_use_responses_api
     assert settings.mcp_allowed_tools == DEFAULT_MCP_TOOLS
@@ -70,6 +71,17 @@ def test_parsing_of_optional_values():
     assert settings.mcp_timeout_seconds == 12.5
     assert settings.max_output_tokens == 3000
     assert settings.max_output_chars == 9000
+
+
+@pytest.mark.parametrize("value", ["prod", "(default)", "stage-01"])
+def test_firestore_database_is_configurable(value):
+    assert load({**MEMORY, "FIRESTORE_DATABASE": value}).firestore_database == value
+
+
+@pytest.mark.parametrize("value", ["Prod", "a", "has space", "../x", "-bad", "(other)"])
+def test_invalid_firestore_database_fails_fast(value):
+    with pytest.raises(RuntimeError, match="FIRESTORE_DATABASE"):
+        load({**MEMORY, "FIRESTORE_DATABASE": value})
 
 
 POSITIVE_LIMITS = (

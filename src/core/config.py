@@ -35,6 +35,15 @@ _ORIGIN = re.compile(
 
 
 _DOMAIN = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)+$")
+# Firestore 資料庫 ID：(default) 或 4–63 字元的小寫英數與連字號
+_DATABASE = re.compile(r"^(\(default\)|[a-z][a-z0-9-]{2,61}[a-z0-9])$")
+
+
+def _database(value: str | None) -> str:
+    database = (value or "").strip() or "(default)"
+    if not _DATABASE.match(database):
+        raise RuntimeError("Invalid FIRESTORE_DATABASE")
+    return database
 
 
 def _domains(value: str | None) -> tuple[str, ...]:
@@ -123,6 +132,8 @@ class Settings:
     # 儲存
     chat_store: str = "firestore"
     google_cloud_project: str | None = None
+    # 同一個 GCP 專案裡 staging 與 prod 各用一個 Firestore 資料庫
+    firestore_database: str = "(default)"
     # 限制
     history_window: int = 10
     history_message_chars: int = 1500
@@ -185,6 +196,7 @@ class Settings:
             cors_allowed_origins=parse_cors_origins(os.getenv("CORS_ALLOWED_ORIGINS")),
             chat_store=chat_store,
             google_cloud_project=os.getenv("GOOGLE_CLOUD_PROJECT") or None,
+            firestore_database=_database(os.getenv("FIRESTORE_DATABASE")),
             history_window=_int("HISTORY_WINDOW", 10),
             history_message_chars=_int("HISTORY_MESSAGE_CHARS", 1500),
             max_tool_output_chars=_int("MAX_TOOL_OUTPUT_CHARS", 6000),
