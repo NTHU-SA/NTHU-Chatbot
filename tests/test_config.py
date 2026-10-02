@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.core.config import DEFAULT_MCP_TOOLS, Settings
+from src.core.config import DEFAULT_MCP_TOOLS, Settings, parse_cors_origins
 
 BASE = {
     "LINE_CHANNEL_SECRET": "test-secret",
@@ -120,3 +120,25 @@ def test_secrets_are_not_in_repr():
     assert "test-secret" not in text
     assert "test-token" not in text
     assert "test-key" not in text
+
+
+def test_cors_origins_are_parsed_and_normalised():
+    settings = load({
+        **MEMORY,
+        "CORS_ALLOWED_ORIGINS": " https://NTHUSA-chatbot.web.app ,https://nthusa-chatbot.firebaseapp.com,",
+    })
+    assert settings.cors_allowed_origins == (
+        "https://nthusa-chatbot.web.app",
+        "https://nthusa-chatbot.firebaseapp.com",
+    )
+    assert load(MEMORY).cors_allowed_origins == ()
+    assert parse_cors_origins("http://localhost:5500") == ("http://localhost:5500",)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["*", "https://a.web.app/", "https://a.web.app/path", "http://evil.example", "null", "https://localhost"],
+)
+def test_unsafe_cors_origins_fail_fast(value):
+    with pytest.raises(RuntimeError, match="CORS_ALLOWED_ORIGINS"):
+        load({**MEMORY, "CORS_ALLOWED_ORIGINS": value})

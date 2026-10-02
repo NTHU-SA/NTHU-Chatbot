@@ -52,10 +52,10 @@ def session_ids(client) -> list[str]:
 
 
 # -- auth / headers --
-def test_config_is_public_and_only_exposes_liff_id(client):
-    response = client.get("/api/config")
-    assert response.status_code == 200
-    assert response.json() == {"liff_id": TEST_LIFF_ID}
+@pytest.mark.parametrize("path", ["/api/config", "/liff/", "/liff/index.html"])
+def test_frontend_is_not_served_by_the_api(client, path):
+    """LIFF 頁面與設定改由 Firebase Hosting 提供。"""
+    assert client.get(path).status_code == 404
 
 
 def test_api_requires_valid_bearer(client):
@@ -135,18 +135,56 @@ def test_me_post_rejects_unexpected_client_info(client, info):
     assert client.post("/api/me", headers=AUTH, json=info).status_code == 422
 
 
-def test_security_headers_and_liff_csp(client):
-    response = client.get("/api/config")
+def test_security_headers_on_api_responses(client):
+    response = client.get("/api/sessions", headers=AUTH)
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["x-frame-options"] == "DENY"
-    assert "content-security-policy" not in response.headers
-    response = client.get("/liff/")
-    assert response.status_code == 200
-    assert "狗狗情報員" in response.text
-    assert (
-        "script-src 'self' https://static.line-scdn.net"
-        in response.headers["content-security-policy"]
+    assert response.headers["content-security-policy"] == "default-src 'none'; frame-ancestors 'none'"
+
+
+FRONTEND = "https://nthusa-chatbot.web.app"
+
+
+@pytest.fixture
+def cors_client(chat_app, monkeypatch):
+    """以設定了 CORS_ALLOWED_ORIGINS 的環境重新建立 app，沿用 chat_app 的 state。"""
+    from fastapi.testclient import TestClient
+
+    from src.app import create_app
+
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", FRONTEND)
+    app = create_app()
+    app.state._state.update(chat_app.state._state)
+    return TestClient(app)
+
+
+def preflight(client, origin):
+    return client.options(
+        "/api/sessions",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type,x-auth-provider",
+        },
     )
+
+
+def test_cors_allows_only_the_configured_frontend(cors_client):
+    allowed = preflight(cors_client, FRONTEND)
+    assert allowed.status_code == 200
+    assert allowed.headers["access-control-allow-origin"] == FRONTEND
+    assert "access-control-allow-credentials" not in allowed.headers
+    assert "x-auth-provider" in allowed.headers["access-control-allow-headers"].lower()
+
+    denied = preflight(cors_client, "https://evil.example")
+    assert "access-control-allow-origin" not in denied.headers
+    response = cors_client.get("/api/sessions", headers={**AUTH, "Origin": "https://evil.example"})
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_no_cors_headers_without_configured_origins(client):
+    response = preflight(client, FRONTEND)
+    assert "access-control-allow-origin" not in response.headers
 
 
 @pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])

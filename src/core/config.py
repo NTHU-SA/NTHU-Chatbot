@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from dataclasses import dataclass, field
 
 DEFAULT_MCP_TOOLS = (
@@ -24,6 +25,24 @@ DEFAULT_MCP_TOOLS = (
 )
 
 CHAT_STORES = ("firestore", "memory")
+
+# 只接受 https 網域（本機開發可用 http://localhost / 127.0.0.1），不接受萬用字元、路徑或結尾斜線
+_ORIGIN = re.compile(
+    r"^(https://[a-z0-9-]+(\.[a-z0-9-]+)+|http://(localhost|127\.0\.0\.1))(:\d{1,5})?$"
+)
+
+
+def parse_cors_origins(value: str | None) -> tuple[str, ...]:
+    """
+    解析 `CORS_ALLOWED_ORIGINS`（逗號分隔）。
+
+    格式不符時啟動失敗：寧可擋下也不要意外放行其他網站呼叫 API。
+    """
+    origins = tuple(item.strip().lower() for item in (value or "").split(",") if item.strip())
+    invalid = [origin for origin in origins if not _ORIGIN.match(origin)]
+    if invalid:
+        raise RuntimeError("Invalid CORS_ALLOWED_ORIGINS entry: " + ", ".join(invalid))
+    return origins
 
 
 def _bool(value: str | None, default: bool) -> bool:
@@ -83,6 +102,8 @@ class Settings:
     mcp_server_url: str = "https://api.nthusa.tw/mcp"
     mcp_allowed_tools: tuple[str, ...] = DEFAULT_MCP_TOOLS
     mcp_timeout_seconds: float = 30.0
+    # LIFF 前端（Firebase Hosting）的網域；API 只允許這些網域跨站呼叫
+    cors_allowed_origins: tuple[str, ...] = ()
     # 儲存
     chat_store: str = "firestore"
     google_cloud_project: str | None = None
@@ -140,6 +161,7 @@ class Settings:
             mcp_server_url=os.getenv("MCP_SERVER_URL") or "https://api.nthusa.tw/mcp",
             mcp_allowed_tools=_csv(os.getenv("MCP_ALLOWED_TOOLS"), DEFAULT_MCP_TOOLS),
             mcp_timeout_seconds=_float("MCP_TIMEOUT_SECONDS", 30.0),
+            cors_allowed_origins=parse_cors_origins(os.getenv("CORS_ALLOWED_ORIGINS")),
             chat_store=chat_store,
             google_cloud_project=os.getenv("GOOGLE_CLOUD_PROJECT") or None,
             history_window=_int("HISTORY_WINDOW", 10),

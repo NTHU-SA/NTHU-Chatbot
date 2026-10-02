@@ -16,6 +16,7 @@ source "$ENV_FILE"
 
 : "${PROJECT_ID:?}" "${REGION:?}" "${SERVICE:?}" "${GITHUB_OWNER:?}" "${GITHUB_REPO:?}" "${BRANCH_REGEX:?}"
 : "${LINE_LOGIN_CHANNEL_ID:?}" "${LIFF_ID:?}" "${OPENAI_MODEL:?}" "${MAX_INSTANCES:?}"
+: "${HOSTING_SITE:?}" "${DEPLOY_REF:?}"
 if grep -q "REPLACE_ME" "$ENV_FILE"; then
   echo "${ENV_FILE} 還有 REPLACE_ME 沒填" >&2
   exit 1
@@ -24,6 +25,11 @@ DELETE_PROTECTION="${DELETE_PROTECTION:-true}"
 AR_REPOSITORY="${AR_REPOSITORY:-cloud-run-source-deploy}"
 RUNTIME_SA_NAME="${RUNTIME_SA_NAME:-nthu-chatbot}"
 DEPLOYER_SA_NAME="${DEPLOYER_SA_NAME:-nthu-chatbot-deployer}"
+HOSTING_SA_NAME="${HOSTING_SA_NAME:-nthu-chatbot-hosting}"
+WIF_POOL="${WIF_POOL:-github-actions}"
+WIF_PROVIDER="${WIF_PROVIDER:-github}"
+# API 只允許 LIFF 前端（Firebase Hosting）的兩個預設網域跨站呼叫
+FRONTEND_ORIGINS="https://${HOSTING_SITE}.web.app,https://${HOSTING_SITE}.firebaseapp.com"
 MCP_SERVER_URL="${MCP_SERVER_URL:-https://api.nthusa.tw/mcp}"
 OPENAI_USE_RESPONSES_API="${OPENAI_USE_RESPONSES_API:-true}"
 REASONING_SUMMARY="${REASONING_SUMMARY:-true}"
@@ -32,6 +38,7 @@ SECRETS=(openai-api-key line-channel-secret line-channel-access-token)
 
 RUNTIME_SA="${RUNTIME_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 DEPLOYER_SA="${DEPLOYER_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+HOSTING_SA="${HOSTING_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 G=(gcloud --project="$PROJECT_ID" --quiet)
 
 step() { printf '\n==> %s\n' "$*"; }
@@ -40,7 +47,30 @@ step "啟用 API"
 "${G[@]}" services enable \
   run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com \
   firestore.googleapis.com firebaserules.googleapis.com secretmanager.googleapis.com \
-  iam.googleapis.com monitoring.googleapis.com logging.googleapis.com
+  iam.googleapis.com monitoring.googleapis.com logging.googleapis.com \
+  firebase.googleapis.com firebasehosting.googleapis.com iamcredentials.googleapis.com sts.googleapis.com
+
+step "Firebase 專案與 Hosting 網站：${HOSTING_SITE}"
+token="$(gcloud auth print-access-token)"
+fb=(-H "Authorization: Bearer ${token}" -H "x-goog-user-project: ${PROJECT_ID}" -H "Content-Type: application/json")
+if curl -fsS "${fb[@]}" "https://firebase.googleapis.com/v1beta1/projects/${PROJECT_ID}" >/dev/null 2>&1; then
+  echo "已是 Firebase 專案"
+else
+  # 把這個 GCP 專案加入 Firebase（不可逆，只能刪除整個專案），Hosting 需要
+  curl -fsS -X POST "${fb[@]}" -d '{}' "https://firebase.googleapis.com/v1beta1/projects/${PROJECT_ID}:addFirebase" >/dev/null
+  echo "已加入 Firebase（背景作業，約一分鐘完成）"
+  for _ in $(seq 1 30); do
+    curl -fsS "${fb[@]}" "https://firebase.googleapis.com/v1beta1/projects/${PROJECT_ID}" >/dev/null 2>&1 && break
+    sleep 5
+  done
+fi
+if curl -fsS "${fb[@]}" "https://firebasehosting.googleapis.com/v1beta1/projects/${PROJECT_ID}/sites/${HOSTING_SITE}" >/dev/null 2>&1; then
+  echo "Hosting 網站已存在"
+else
+  curl -fsS -X POST "${fb[@]}" -d '{}' \
+    "https://firebasehosting.googleapis.com/v1beta1/projects/${PROJECT_ID}/sites?siteId=${HOSTING_SITE}" >/dev/null
+  echo "已建立 Hosting 網站"
+fi
 
 step "Firestore (default)，Native mode，${REGION}"
 if "${G[@]}" firestore databases describe --database='(default)' >/dev/null 2>&1; then
@@ -121,7 +151,7 @@ JSON
 rm -f "$policy_file"
 
 step "Service accounts"
-for name in "$RUNTIME_SA_NAME" "$DEPLOYER_SA_NAME"; do
+for name in "$RUNTIME_SA_NAME" "$DEPLOYER_SA_NAME" "$HOSTING_SA_NAME"; do
   if ! "${G[@]}" iam service-accounts describe "${name}@${PROJECT_ID}.iam.gserviceaccount.com" >/dev/null 2>&1; then
     "${G[@]}" iam service-accounts create "$name" --display-name="$name"
   fi
@@ -140,6 +170,35 @@ done
   --member="serviceAccount:${DEPLOYER_SA}" --role=roles/artifactregistry.writer >/dev/null
 "${G[@]}" iam service-accounts add-iam-policy-binding "$RUNTIME_SA" \
   --member="serviceAccount:${DEPLOYER_SA}" --role=roles/iam.serviceAccountUser >/dev/null
+
+step "GitHub Actions 部署前端：Workload Identity Federation（不使用任何金鑰）"
+# 只有 ${GITHUB_OWNER}/${GITHUB_REPO} 在 ${DEPLOY_REF} 上執行的 workflow 能換到憑證
+project_number="$("${G[@]}" projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+if ! "${G[@]}" iam workload-identity-pools describe "$WIF_POOL" --location=global >/dev/null 2>&1; then
+  "${G[@]}" iam workload-identity-pools create "$WIF_POOL" --location=global --display-name="GitHub Actions"
+fi
+condition="assertion.repository == '${GITHUB_OWNER}/${GITHUB_REPO}' && assertion.ref == '${DEPLOY_REF}'"
+provider_flags=(
+  --location=global --workload-identity-pool="$WIF_POOL"
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref"
+  --attribute-condition="$condition"
+)
+if "${G[@]}" iam workload-identity-pools providers describe "$WIF_PROVIDER" \
+     --location=global --workload-identity-pool="$WIF_POOL" >/dev/null 2>&1; then
+  "${G[@]}" iam workload-identity-pools providers update-oidc "$WIF_PROVIDER" "${provider_flags[@]}" >/dev/null
+else
+  "${G[@]}" iam workload-identity-pools providers create-oidc "$WIF_PROVIDER" "${provider_flags[@]}" \
+    --issuer-uri="https://token.actions.githubusercontent.com"
+fi
+# Hosting 部署 SA：只能部署 Hosting
+for role in roles/firebasehosting.admin roles/serviceusage.serviceUsageConsumer; do
+  "${G[@]}" projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:${HOSTING_SA}" --role="$role" --condition=None >/dev/null
+done
+principal="principalSet://iam.googleapis.com/projects/${project_number}/locations/global/workloadIdentityPools/${WIF_POOL}/attribute.repository/${GITHUB_OWNER}/${GITHUB_REPO}"
+"${G[@]}" iam service-accounts add-iam-policy-binding "$HOSTING_SA" \
+  --member="$principal" --role=roles/iam.workloadIdentityUser >/dev/null
+WIF_PROVIDER_NAME="projects/${project_number}/locations/global/workloadIdentityPools/${WIF_POOL}/providers/${WIF_PROVIDER}"
 
 step "Secret Manager"
 missing_values=()
@@ -161,9 +220,11 @@ if ((${#missing_values[@]})); then
 fi
 
 step "Cloud Run：${SERVICE}"
-env_vars="CHAT_STORE=firestore,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},LINE_LOGIN_CHANNEL_ID=${LINE_LOGIN_CHANNEL_ID}"
-env_vars+=",LIFF_ID=${LIFF_ID},OPENAI_MODEL=${OPENAI_MODEL},OPENAI_USE_RESPONSES_API=${OPENAI_USE_RESPONSES_API}"
-env_vars+=",REASONING_SUMMARY=${REASONING_SUMMARY},MCP_SERVER_URL=${MCP_SERVER_URL}"
+# 以 ^;^ 指定分隔符號：CORS_ALLOWED_ORIGINS 的值本身含逗號
+env_vars="^;^CHAT_STORE=firestore;GOOGLE_CLOUD_PROJECT=${PROJECT_ID};LINE_LOGIN_CHANNEL_ID=${LINE_LOGIN_CHANNEL_ID}"
+env_vars+=";LIFF_ID=${LIFF_ID};OPENAI_MODEL=${OPENAI_MODEL};OPENAI_USE_RESPONSES_API=${OPENAI_USE_RESPONSES_API}"
+env_vars+=";REASONING_SUMMARY=${REASONING_SUMMARY};MCP_SERVER_URL=${MCP_SERVER_URL}"
+env_vars+=";CORS_ALLOWED_ORIGINS=${FRONTEND_ORIGINS}"
 secret_vars="OPENAI_API_KEY=openai-api-key:latest,LINE_CHANNEL_SECRET=line-channel-secret:latest"
 secret_vars+=",LINE_CHANNEL_ACCESS_TOKEN=line-channel-access-token:latest"
 service_flags=(
@@ -202,5 +263,9 @@ fi
 url="$("${G[@]}" run services describe "$SERVICE" --region="$REGION" --format='value(status.url)')"
 step "完成"
 echo "服務網址：${url}"
-echo "LINE Developers：Webhook URL = ${url}/callback；LIFF Endpoint URL 之後改成 Firebase Hosting 網址"
+echo "LINE Developers：Webhook URL = ${url}/callback；LIFF Endpoint URL = https://${HOSTING_SITE}.web.app/"
+echo "conf 的 API_ORIGIN 應為：${url}（staging 可用 https://${SERVICE}-${project_number}.${REGION}.run.app）"
+echo "GitHub repo variables（Settings → Secrets and variables → Actions → Variables，不是機密）："
+echo "  GCP_WIF_PROVIDER_<ENV>=${WIF_PROVIDER_NAME}"
+echo "  GCP_HOSTING_SA_<ENV>=${HOSTING_SA}"
 echo "監測與告警：ALERT_EMAIL=you@example.com bash infra/monitoring.sh ${ENV_FILE}"

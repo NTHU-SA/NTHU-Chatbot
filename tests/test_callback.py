@@ -236,7 +236,6 @@ def test_memory_store_startup_skips_firestore_and_manages_runner(lifecycle_mocks
         app = create_app()
         with TestClient(app) as client:
             assert client.get("/ping").json() == {"message": "pong"}
-            assert client.get("/api/config").json() == {"liff_id": TEST_LIFF_ID}
             assert isinstance(app.state.store, MemoryChatStore)
             assert isinstance(app.state.user_store, MemoryUserStore)
             assert set(app.state.authenticators) == {"line"}
