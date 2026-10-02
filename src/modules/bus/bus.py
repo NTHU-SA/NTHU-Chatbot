@@ -94,7 +94,7 @@ async def query_stop_bus(event):
 
     try:
         limits = min(12, max(1, int(params.get("limits", 5))))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return [TextMessage(text="班次數量必須是整數，請重新查詢")]
 
     query_params = {
@@ -115,12 +115,10 @@ async def query_stop_bus(event):
     day_zh = day_mapping.get(query_params["day"], "")
     direction_zh = "上山" if query_params["direction"] == "up" else "下山"
     now_time = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
-    info_message = (
-        f"🚌 【{stop_name}】{day_zh}{direction_zh}公車資訊\n更新時間：{now_time}"
-    )
+    info_message = f"🚌 【{stop_name}】{day_zh}{direction_zh}公車資訊\n更新時間：{now_time}"
 
     # 製作新的 data for postbackaction
-    new_params = str()
+    new_params = ""
     for param in params:
         new_params += f" {param}={params[param]}"
 

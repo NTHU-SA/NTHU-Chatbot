@@ -1,0 +1,50 @@
+# Cloud Build：建置映像 → 推到 Artifact Registry → 只更新 Cloud Run 服務的映像。
+#
+# staging（dev 分支）與 prod（main 分支）共用這份設定，差異只在各自 trigger 的 substitutions。
+# 環境變數、Secret 掛載、資源與縮放設定都在 Cloud Run 服務上（由 infra/bootstrap.sh 建立），
+# 這裡刻意不碰，避免部署時把服務設定覆蓋掉。
+
+substitutions:
+  _AR_HOSTNAME: asia-northeast1-docker.pkg.dev
+  _AR_REPOSITORY: cloud-run-source-deploy
+  _DEPLOY_REGION: asia-northeast1
+  _SERVICE_NAME: nthu-chatbot-staging
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  dynamicSubstitutions: true
+
+images:
+  - ${_AR_HOSTNAME}/${PROJECT_ID}/${_AR_REPOSITORY}/nthu-chatbot/${_SERVICE_NAME}:${COMMIT_SHA}
+
+steps:
+  - id: Build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --no-cache
+      - -t
+      - ${_AR_HOSTNAME}/${PROJECT_ID}/${_AR_REPOSITORY}/nthu-chatbot/${_SERVICE_NAME}:${COMMIT_SHA}
+      - -f
+      - Dockerfile
+      - .
+
+  - id: Push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_AR_HOSTNAME}/${PROJECT_ID}/${_AR_REPOSITORY}/nthu-chatbot/${_SERVICE_NAME}:${COMMIT_SHA}
+
+  - id: Deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - run
+      - services
+      - update
+      - ${_SERVICE_NAME}
+      - --platform=managed
+      - --region=${_DEPLOY_REGION}
+      - --image=${_AR_HOSTNAME}/${PROJECT_ID}/${_AR_REPOSITORY}/nthu-chatbot/${_SERVICE_NAME}:${COMMIT_SHA}
+      - --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=${COMMIT_SHA},gcb-build-id=${BUILD_ID}
+      - --quiet

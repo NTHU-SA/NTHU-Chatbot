@@ -172,3 +172,7 @@ firebase-adminsdk.json
 .ruff_cache/
 .terraform/
 *.tfstate*
+# Firebase Hosting build output and per-developer frontend config
+build/
+frontend/config.json
+.firebase/

@@ -1,0 +1,135 @@
+# Format/lint checks, tests (including the Firestore emulator) and a container smoke test
+# for every PR and every push to main / dev.
+# Third-party actions are pinned to commit SHAs; the comment shows the release tag.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Python comes from .python-version (matches requires-python in pyproject.toml)
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.22"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies from uv.lock (hash-verified)
+        run: uv sync --locked
+
+      # Same hooks as local pre-commit: isort, Black, Ruff and the uv.lock check
+      - name: Format and lint checks
+        run: uv run --no-sync pre-commit run --all-files --show-diff-on-failure
+
+      # Firestore emulator: firebase-tools needs Node, the emulator itself needs Java 21+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Test with Firestore emulator (coverage floor in pyproject.toml)
+        run: >
+          npx --yes firebase-tools@15.32.1 emulators:exec --only firestore --project demo-nthu-chatbot
+          "uv run --no-sync pytest -q --cov --cov-report=term"
+
+  # Build the production image and check the app starts and answers /ping.
+  # Placeholder settings only; no secrets are available or needed here.
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build image
+        run: docker build -t nthu-chatbot:ci .
+
+      - name: Start container and wait for /ping
+        run: |
+          docker run -d --name app -p 8080:8080             -e CHAT_STORE=memory             -e LINE_CHANNEL_SECRET=ci -e LINE_CHANNEL_ACCESS_TOKEN=ci             -e LINE_LOGIN_CHANNEL_ID=ci -e LIFF_ID=ci -e OPENAI_API_KEY=ci             nthu-chatbot:ci
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/ping | grep -q pong; then
+              echo "started"; exit 0
+            fi
+            sleep 1
+          done
+          docker logs app
+          exit 1
+
+  # Deploy the LIFF frontend to Firebase Hosting after tests pass on a push to dev (staging)
+  # or main (prod). Credentials come from Workload Identity Federation — no keys are stored;
+  # GCP only trusts this repository on the branch configured in infra/environments/*.conf.
+  # Skipped until the repo variables printed by infra/bootstrap.sh are set.
+  deploy-frontend:
+    # 前端與 API 一起變動：測試與容器 smoke test 都通過才部署
+    needs: [test, smoke]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TARGET: ${{ github.ref == 'refs/heads/main' && 'prod' || 'staging' }}
+      WIF_PROVIDER: ${{ github.ref == 'refs/heads/main' && vars.GCP_WIF_PROVIDER_PROD || vars.GCP_WIF_PROVIDER_STAGING }}
+      HOSTING_SA: ${{ github.ref == 'refs/heads/main' && vars.GCP_HOSTING_SA_PROD || vars.GCP_HOSTING_SA_STAGING }}
+    steps:
+      - name: Check deployment is configured
+        id: configured
+        run: |
+          if [ -n "$WIF_PROVIDER" ] && [ -n "$HOSTING_SA" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Frontend deploy for $TARGET is not configured yet (repo variables missing)."
+          fi
+
+      - if: steps.configured.outputs.ok == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - if: steps.configured.outputs.ok == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - if: steps.configured.outputs.ok == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - if: steps.configured.outputs.ok == 'true'
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.HOSTING_SA }}
+
+      - if: steps.configured.outputs.ok == 'true'
+        name: Build and deploy to Firebase Hosting
+        run: |
+          conf="infra/environments/${TARGET}.conf"
+          project="$(grep -E '^PROJECT_ID=' "$conf" | cut -d= -f2)"
+          python infra/build_frontend.py "$conf"
+          npx --yes firebase-tools@15.32.1 deploy --only hosting --non-interactive \
+            --project "$project" --config "build/frontend-${TARGET}/firebase.json"

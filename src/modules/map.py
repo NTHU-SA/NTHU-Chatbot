@@ -49,9 +49,7 @@ async def handle_location_command(event):
     exact_matches = [location for location in map_data if location["name"] == query]
     messages = []
     for location in (exact_matches or map_data)[:5]:
-        map_url = (
-            f"https://maps.google.com/?q={location['latitude']},{location['longitude']}"
-        )
+        map_url = f"https://maps.google.com/?q={location['latitude']},{location['longitude']}"
         messages.append(
             LocationMessage(
                 title=location["name"][:100],
@@ -59,9 +57,7 @@ async def handle_location_command(event):
                 latitude=float(location["latitude"]),
                 longitude=float(location["longitude"]),
                 quickReply=QuickReply(
-                    items=[
-                        QuickReplyItem(action=URIAction(label="地圖導航", uri=map_url))
-                    ]
+                    items=[QuickReplyItem(action=URIAction(label="地圖導航", uri=map_url))]
                 ),
             )
         )

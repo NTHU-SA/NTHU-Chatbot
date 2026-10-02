@@ -1,8 +1,9 @@
 import os
-import unittest
 from unittest.mock import patch
 
-from src.core.config import DEFAULT_MCP_TOOLS, Settings
+import pytest
+
+from src.core.config import DEFAULT_MCP_TOOLS, Settings, parse_cors_origins
 
 BASE = {
     "LINE_CHANNEL_SECRET": "test-secret",
@@ -11,42 +12,44 @@ BASE = {
     "LIFF_ID": "1234567890-abcdefgh",
     "OPENAI_API_KEY": "test-key",
 }
+MEMORY = {**BASE, "CHAT_STORE": "memory"}
 
 
-class SettingsTests(unittest.TestCase):
-    def test_missing_variables_are_listed_by_name_only(self):
-        with (
-            patch.dict(os.environ, {"CHAT_STORE": "memory"}, clear=True),
-            self.assertRaises(RuntimeError) as context,
-        ):
-            Settings.from_env()
-        message = str(context.exception)
-        self.assertIn("LINE_CHANNEL_SECRET", message)
-        self.assertIn("OPENAI_API_KEY", message)
-        self.assertNotIn("GOOGLE_CLOUD_PROJECT", message)
+def load(environment: dict[str, str]) -> Settings:
+    with patch.dict(os.environ, environment, clear=True):
+        return Settings.from_env()
 
-    def test_firestore_store_requires_project(self):
-        with (
-            patch.dict(os.environ, BASE, clear=True),
-            self.assertRaisesRegex(RuntimeError, "GOOGLE_CLOUD_PROJECT"),
-        ):
-            Settings.from_env()
 
-    def test_memory_store_defaults(self):
-        with patch.dict(os.environ, {**BASE, "CHAT_STORE": "memory"}, clear=True):
-            settings = Settings.from_env()
-        self.assertEqual(settings.chat_store, "memory")
-        self.assertIsNone(settings.google_cloud_project)
-        self.assertEqual(settings.openai_model, "gpt-4.1-mini")
-        self.assertFalse(settings.openai_use_responses_api)
-        self.assertEqual(settings.mcp_allowed_tools, DEFAULT_MCP_TOOLS)
-        self.assertEqual(settings.daily_message_limit, 100)
-        self.assertEqual(settings.max_output_tokens, 2000)
-        self.assertEqual(settings.max_output_chars, 8000)
-        self.assertEqual(settings.liff_url, "https://liff.line.me/1234567890-abcdefgh")
+def test_missing_variables_are_listed_by_name_only():
+    with pytest.raises(RuntimeError) as error:
+        load({"CHAT_STORE": "memory"})
+    message = str(error.value)
+    assert "LINE_CHANNEL_SECRET" in message
+    assert "OPENAI_API_KEY" in message
+    assert "GOOGLE_CLOUD_PROJECT" not in message
 
-    def test_parsing_of_optional_values(self):
-        environment = {
+
+def test_firestore_store_requires_project():
+    with pytest.raises(RuntimeError, match="GOOGLE_CLOUD_PROJECT"):
+        load(BASE)
+
+
+def test_memory_store_defaults():
+    settings = load(MEMORY)
+    assert settings.chat_store == "memory"
+    assert settings.google_cloud_project is None
+    assert settings.openai_model == "gpt-4.1-mini"
+    assert not settings.openai_use_responses_api
+    assert settings.mcp_allowed_tools == DEFAULT_MCP_TOOLS
+    assert settings.daily_message_limit == 100
+    assert settings.max_output_tokens == 2000
+    assert settings.max_output_chars == 8000
+    assert settings.liff_url == "https://liff.line.me/1234567890-abcdefgh"
+
+
+def test_parsing_of_optional_values():
+    settings = load(
+        {
             **BASE,
             "CHAT_STORE": "Firestore",
             "GOOGLE_CLOUD_PROJECT": "demo",
@@ -58,80 +61,93 @@ class SettingsTests(unittest.TestCase):
             "MAX_OUTPUT_TOKENS": "3000",
             "MAX_OUTPUT_CHARS": "9000",
         }
-        with patch.dict(os.environ, environment, clear=True):
-            settings = Settings.from_env()
-        self.assertEqual(settings.chat_store, "firestore")
-        self.assertTrue(settings.openai_use_responses_api)
-        self.assertEqual(settings.openai_base_url, "https://example.test/v1")
-        self.assertEqual(settings.mcp_allowed_tools, ("get_next_buses", "search_campus"))
-        self.assertEqual(settings.daily_message_limit, 5)
-        self.assertEqual(settings.mcp_timeout_seconds, 12.5)
-        self.assertEqual(settings.max_output_tokens, 3000)
-        self.assertEqual(settings.max_output_chars, 9000)
+    )
+    assert settings.chat_store == "firestore"
+    assert settings.openai_use_responses_api
+    assert settings.openai_base_url == "https://example.test/v1"
+    assert settings.mcp_allowed_tools == ("get_next_buses", "search_campus")
+    assert settings.daily_message_limit == 5
+    assert settings.mcp_timeout_seconds == 12.5
+    assert settings.max_output_tokens == 3000
+    assert settings.max_output_chars == 9000
 
-    def test_positive_integer_limits(self):
-        names = (
-            "HISTORY_WINDOW", "HISTORY_MESSAGE_CHARS", "MAX_TOOL_OUTPUT_CHARS",
-            "MAX_MESSAGE_CHARS", "MAX_AGENT_TURNS", "MAX_OUTPUT_TOKENS",
-            "MAX_OUTPUT_CHARS",
-        )
-        for name in names:
-            for value in ("0", "-1", "1.5"):
-                with (
-                    self.subTest(name=name, value=value),
-                    patch.dict(os.environ, {**BASE, "CHAT_STORE": "memory", name: value}, clear=True),
-                    self.assertRaisesRegex(RuntimeError, name),
-                ):
-                    Settings.from_env()
-            with patch.dict(os.environ, {**BASE, "CHAT_STORE": "memory", name: "1"}, clear=True):
-                self.assertEqual(getattr(Settings.from_env(), name.lower()), 1)
 
-    def test_non_negative_limits_allow_zero(self):
-        for name in ("DAILY_MESSAGE_LIMIT", "TOOL_RESULT_PREVIEW_CHARS"):
-            with (
-                self.subTest(name=name),
-                patch.dict(os.environ, {**BASE, "CHAT_STORE": "memory", name: "0"}, clear=True),
-            ):
-                self.assertEqual(getattr(Settings.from_env(), name.lower()), 0)
-            with (
-                patch.dict(os.environ, {**BASE, "CHAT_STORE": "memory", name: "-1"}, clear=True),
-                self.assertRaisesRegex(RuntimeError, name),
-            ):
-                Settings.from_env()
+POSITIVE_LIMITS = (
+    "HISTORY_WINDOW",
+    "HISTORY_MESSAGE_CHARS",
+    "MAX_TOOL_OUTPUT_CHARS",
+    "MAX_MESSAGE_CHARS",
+    "MAX_AGENT_TURNS",
+    "MAX_OUTPUT_TOKENS",
+    "MAX_OUTPUT_CHARS",
+)
 
-    def test_timeout_must_be_finite_and_positive(self):
-        for value in ("0", "-1", "nan", "inf", "-inf", "1e999", "invalid"):
-            with (
-                self.subTest(value=value),
-                patch.dict(
-                    os.environ,
-                    {**BASE, "CHAT_STORE": "memory", "MCP_TIMEOUT_SECONDS": value},
-                    clear=True,
-                ),
-                self.assertRaisesRegex(RuntimeError, "MCP_TIMEOUT_SECONDS"),
-            ):
-                Settings.from_env()
 
-    def test_invalid_values_fail_fast(self):
-        with (
-            patch.dict(os.environ, {**BASE, "CHAT_STORE": "redis"}, clear=True),
-            self.assertRaisesRegex(RuntimeError, "CHAT_STORE"),
-        ):
-            Settings.from_env()
-        with (
-            patch.dict(
-                os.environ,
-                {**BASE, "CHAT_STORE": "memory", "HISTORY_WINDOW": "ten"},
-                clear=True,
-            ),
-            self.assertRaisesRegex(RuntimeError, "HISTORY_WINDOW"),
-        ):
-            Settings.from_env()
+@pytest.mark.parametrize("name", POSITIVE_LIMITS)
+@pytest.mark.parametrize("value", ["0", "-1", "1.5"])
+def test_positive_integer_limits_reject_invalid(name, value):
+    with pytest.raises(RuntimeError, match=name):
+        load({**MEMORY, name: value})
 
-    def test_secrets_are_not_in_repr(self):
-        with patch.dict(os.environ, {**BASE, "CHAT_STORE": "memory"}, clear=True):
-            settings = Settings.from_env()
-        text = repr(settings)
-        self.assertNotIn("test-secret", text)
-        self.assertNotIn("test-token", text)
-        self.assertNotIn("test-key", text)
+
+@pytest.mark.parametrize("name", POSITIVE_LIMITS)
+def test_positive_integer_limits_accept_one(name):
+    assert getattr(load({**MEMORY, name: "1"}), name.lower()) == 1
+
+
+@pytest.mark.parametrize("name", ["DAILY_MESSAGE_LIMIT", "TOOL_RESULT_PREVIEW_CHARS"])
+def test_non_negative_limits_allow_zero(name):
+    assert getattr(load({**MEMORY, name: "0"}), name.lower()) == 0
+    with pytest.raises(RuntimeError, match=name):
+        load({**MEMORY, name: "-1"})
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "-inf", "1e999", "invalid"])
+def test_timeout_must_be_finite_and_positive(value):
+    with pytest.raises(RuntimeError, match="MCP_TIMEOUT_SECONDS"):
+        load({**MEMORY, "MCP_TIMEOUT_SECONDS": value})
+
+
+def test_invalid_values_fail_fast():
+    with pytest.raises(RuntimeError, match="CHAT_STORE"):
+        load({**BASE, "CHAT_STORE": "redis"})
+    with pytest.raises(RuntimeError, match="HISTORY_WINDOW"):
+        load({**MEMORY, "HISTORY_WINDOW": "ten"})
+
+
+def test_secrets_are_not_in_repr():
+    text = repr(load(MEMORY))
+    assert "test-secret" not in text
+    assert "test-token" not in text
+    assert "test-key" not in text
+
+
+def test_cors_origins_are_parsed_and_normalised():
+    settings = load(
+        {
+            **MEMORY,
+            "CORS_ALLOWED_ORIGINS": " https://NTHUSA-chatbot.web.app ,https://nthusa-chatbot.firebaseapp.com,",
+        }
+    )
+    assert settings.cors_allowed_origins == (
+        "https://nthusa-chatbot.web.app",
+        "https://nthusa-chatbot.firebaseapp.com",
+    )
+    assert load(MEMORY).cors_allowed_origins == ()
+    assert parse_cors_origins("http://localhost:5500") == ("http://localhost:5500",)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "*",
+        "https://a.web.app/",
+        "https://a.web.app/path",
+        "http://evil.example",
+        "null",
+        "https://localhost",
+    ],
+)
+def test_unsafe_cors_origins_fail_fast(value):
+    with pytest.raises(RuntimeError, match="CORS_ALLOWED_ORIGINS"):
+        load({**MEMORY, "CORS_ALLOWED_ORIGINS": value})

@@ -1,9 +1,9 @@
-import asyncio
 import importlib
+import inspect
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable, Optional, Tuple
 
 import yaml
 from linebot.v3.messaging import (
@@ -24,7 +24,7 @@ class MenuInfo:
     title: str
     description: str
     actions: list[Action]
-    image_url: Optional[str] = None
+    image_url: str | None = None
 
 
 @dataclass
@@ -34,7 +34,7 @@ class Command:
     module: str
     names: list[str]
     function: Callable
-    menu_info: Optional[MenuInfo] = None
+    menu_info: MenuInfo | None = None
 
 
 @dataclass
@@ -42,8 +42,8 @@ class ModuleConfig:
     """模組配置。"""
 
     commands: dict[str, Command] = field(default_factory=dict)
-    default_menu: Optional[Callable] = None
-    default_reply: Optional[Callable] = None
+    default_menu: Callable | None = None
+    default_reply: Callable | None = None
 
 
 class CommandEvent:
@@ -97,14 +97,10 @@ class CommandHandler:
         """初始化模組名稱與前綴的映射關係。"""
         modules_config = self.config.get("modules", {})
         self.module_name_to_prefix = {
-            module: info["prefix"]
-            for module, info in modules_config.items()
-            if "prefix" in info
+            module: info["prefix"] for module, info in modules_config.items() if "prefix" in info
         }
         self.prefix_to_module_name = {
-            info["prefix"]: module
-            for module, info in modules_config.items()
-            if "prefix" in info
+            info["prefix"]: module for module, info in modules_config.items() if "prefix" in info
         }
 
     @staticmethod
@@ -152,7 +148,7 @@ class CommandHandler:
         title: str,
         description: str,
         actions: list[Action],
-        image_url: Optional[str] = None,
+        image_url: str | None = None,
     ) -> Callable:
         """添加帶選單資訊的命令裝飾器。
 
@@ -249,9 +245,7 @@ class CommandHandler:
             title=(command.menu_info.title if command.menu_info else command.names[0]),
             text=(command.menu_info.description if command.menu_info else ""),
             actions=actions,
-            thumbnail_image_url=(
-                command.menu_info.image_url if command.menu_info else None
-            ),
+            thumbnail_image_url=(command.menu_info.image_url if command.menu_info else None),
         )
 
     async def auto_generate_default_menu(self, module: str) -> list[TemplateMessage]:
@@ -292,7 +286,7 @@ class CommandHandler:
         if module in self._menu_cache:
             del self._menu_cache[module]
 
-    def parse_command(self, message: str) -> Tuple[str, str, str, dict]:
+    def parse_command(self, message: str) -> tuple[str, str, str, dict]:
         """解析命令字串。
 
         從使用者輸入的訊息中解析出模組名稱、前綴、命令名稱和參數。
@@ -325,9 +319,8 @@ class CommandHandler:
                     key, value = pair.split("=", 1)
                     params[key.strip()] = value.strip()
                 elif pair:
-                    logger.warning(
-                        f"參數格式錯誤，缺少等號: '{pair}'，將被忽略。完整指令: '{message}'"
-                    )
+                    # 不記錄參數與指令內容（隱私權政策：@ 指令只記錄使用的功能）
+                    logger.warning("參數格式錯誤（缺少等號），已忽略")
         else:
             command_name = command_string.strip()
 
@@ -355,11 +348,12 @@ class CommandHandler:
             raise ModuleNotFoundError(module)
 
         command_event = CommandEvent(user_id=user_id, text=text, params=params or {})
-        logger.info(f"執行命令: {text}({module}/{command_name})，參數: {params}")
+        # 只記錄模組名稱：指令名稱與參數都是使用者輸入的文字，不寫進 log
+        logger.info("執行命令: {}", module)
 
         if not command_name:
             if module_config.default_menu:
-                if asyncio.iscoroutinefunction(module_config.default_menu):
+                if inspect.iscoroutinefunction(module_config.default_menu):
                     return await module_config.default_menu(command_event)
                 else:
                     return module_config.default_menu(command_event)
@@ -369,13 +363,13 @@ class CommandHandler:
 
         command = module_config.commands.get(command_name)
         if command:
-            if asyncio.iscoroutinefunction(command.function):
+            if inspect.iscoroutinefunction(command.function):
                 return await command.function(command_event)
             else:
                 return command.function(command_event)
         else:
             if module_config.default_reply:
-                if asyncio.iscoroutinefunction(module_config.default_reply):
+                if inspect.iscoroutinefunction(module_config.default_reply):
                     return await module_config.default_reply(command_event)
                 else:
                     return module_config.default_reply(command_event)
@@ -392,16 +386,17 @@ class CommandHandler:
                 module, prefix, command_name, user_id, message, params
             )
         except ModuleNotFoundError as e:
-            logger.warning(f"處理訊息失敗: {e}")
+            # 例外訊息含使用者輸入的指令文字：只記錄類型
+            logger.warning("處理訊息失敗: {}", type(e).__name__)
             return "模組未找到，請確認指令是否正確。"
         except CommandNotFoundError as e:
-            logger.warning(f"處理訊息失敗: {e}")
+            logger.warning("處理訊息失敗: {}", type(e).__name__)
             return f"找不到指令【{e.prefix}/{e.command_name}】，請確認指令是否正確。"
         except CommandHandlerError as e:
-            logger.warning(f"處理訊息失敗: {e}")
+            logger.warning("處理訊息失敗: {}", type(e).__name__)
             return "指令處理錯誤，請稍後再試。"
         except Exception as e:
-            logger.exception(f"處理訊息時發生未預期錯誤: {e}")
+            logger.error("處理訊息時發生未預期錯誤: {}", type(e).__name__)
             return "處理訊息時發生錯誤，請稍後再試。"
 
 

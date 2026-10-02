@@ -45,9 +45,7 @@ def _normalize_phone_number(phone) -> str | None:
 
 def _get_today_day_of_week() -> str:
     """取得今天的星期幾，回傳今天是平日還是週六日(weekday, saturday, sunday)。"""
-    weekday = datetime.datetime.now(
-        datetime.timezone(datetime.timedelta(hours=8))
-    ).weekday()
+    weekday = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).weekday()
     if weekday == 5:
         return "saturday"
     elif weekday == 6:
@@ -76,16 +74,12 @@ def _create_restaurant_carousel_column(
     if tel:
         actions.append(URIAction(label="電話聯絡", uri=f"tel:{tel}"))
     else:
-        actions.append(
-            URIAction(label="餐廳資訊", uri="https://ddfm.site.nthu.edu.tw/")
-        )
+        actions.append(URIAction(label="餐廳資訊", uri="https://ddfm.site.nthu.edu.tw/"))
     if not building or building == "其他餐廳":
         building_url = restaurant_info["area"]
     else:
         building_url = building
-    location_uri = (
-        f"https://www.google.com/maps/search/?api=1&query=國立清華大學{building_url}"
-    )
+    location_uri = f"https://www.google.com/maps/search/?api=1&query=國立清華大學{building_url}"
     location_uri = quote(location_uri, safe=":/?&=")
     actions.append(
         URIAction(
@@ -134,9 +128,7 @@ async def handle_random_restaurant(event):
     if not restaurant_data:
         return ERROR_MESSAGE
 
-    restaurant_data = [
-        building for building in restaurant_data if building.get("restaurants")
-    ]
+    restaurant_data = [building for building in restaurant_data if building.get("restaurants")]
     if not restaurant_data:
         return ERROR_MESSAGE
     random_building = random.choice(restaurant_data)
@@ -265,11 +257,7 @@ def handle_weekend_restaurants_menu(event):
             )
         ),
     ]
-    return [
-        TextMessage(
-            text="請選擇要查看星期幾", quick_reply=QuickReply(items=quick_replies)
-        )
-    ]
+    return [TextMessage(text="請選擇要查看星期幾", quick_reply=QuickReply(items=quick_replies))]
 
 
 @command_handler.add_command("週末餐廳")
@@ -299,9 +287,7 @@ async def weekend_restaurants_command(event):
     for offset in range(0, len(open_restaurants_columns), 10):
         carousel = TemplateMessage(
             alt_text="營業餐廳",
-            template=CarouselTemplate(
-                columns=open_restaurants_columns[offset : offset + 10]
-            ),
+            template=CarouselTemplate(columns=open_restaurants_columns[offset : offset + 10]),
         )
         messages.append(carousel)
     messages = messages[:5]

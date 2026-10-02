@@ -1,0 +1,239 @@
+"""
+帳號 API：個人資訊、隱私權政策同意、刪除我的資料。
+
+同意紀錄是每個版本一份文件；政策改版（`PRIVACY_POLICY_VERSION` 遞增）後，
+使用者要重新同意才能再使用 AI 對話。`@` 指令不經過 AI，不需要同意。
+"""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from loguru import logger
+
+from src.app.auth.dependencies import get_principal, get_principal_for_deletion
+from src.app.background import BackgroundWrites
+from src.application.models.chat import ConsentRequest, ConsentState, MeResponse
+from src.application.models.identity import (
+    CONSENT_TYPES,
+    DeletionIncompleteError,
+    LiffClientInfo,
+    Principal,
+)
+from src.application.models.profile import (
+    MAX_DEPARTMENT_CHARS,
+    MAX_NICKNAME_CHARS,
+    Profile,
+    ProfileUpdate,
+    clean_text,
+)
+from src.application.services.chat_store import ChatStore
+from src.application.services.departments import DepartmentDirectory
+from src.application.services.user_store import UserStore
+from src.core.config import Settings
+
+router = APIRouter(prefix="/api", tags=["account"])
+
+PRIVACY_POLICY = "privacy_policy"
+CONSENT_SOURCE = "LIFF"
+DELETION_INCOMPLETE = {
+    "code": "deletion_incomplete",
+    "message": "部分資料還沒刪除完成，請稍後再執行一次刪除。",
+}
+
+
+def _users(request: Request) -> UserStore:
+    return request.app.state.user_store
+
+
+def _settings(request: Request) -> Settings:
+    return request.app.state.settings
+
+
+async def consent_state(request: Request, user: Principal) -> ConsentState:
+    version = _settings(request).privacy_policy_version
+    accepted = await _users(request).has_consent(user.user_id, PRIVACY_POLICY, version)
+    return ConsentState(type=PRIVACY_POLICY, version=version, accepted=accepted)
+
+
+async def require_consent(request: Request, user: Principal) -> None:
+    """
+    未同意目前版本的隱私權政策時回 403 `consent_required`，並附上需要同意的版本，
+    前端據此顯示同意畫面（頁面開著時政策改版也能正確處理）。
+    """
+    state = await consent_state(request, user)
+    if not state.accepted:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            {
+                "code": "consent_required",
+                "message": "請先閱讀並同意隱私權政策。",
+                "version": state.version,
+            },
+        )
+
+
+async def _me(request: Request, user: Principal, client: LiffClientInfo | None) -> MeResponse:
+    settings = _settings(request)
+    metadata = {"liff": client.as_metadata(settings.liff_id)} if client else None
+    writes = BackgroundWrites()
+    writes.spawn(_users(request).record_login(user, metadata), "record_login")
+    response = MeResponse(
+        display_name=user.display_name,
+        picture_url=user.picture_url,
+        liff_id=settings.liff_id,
+        consent=await consent_state(request, user),
+    )
+    await writes.drain()
+    return response
+
+
+@router.get("/me", response_model=MeResponse)
+async def me(request: Request, user: Principal = Depends(get_principal)):
+    return await _me(request, user, None)
+
+
+@router.post("/me", response_model=MeResponse)
+async def me_with_client(
+    request: Request,
+    client: LiffClientInfo = Body(default_factory=LiffClientInfo),
+    user: Principal = Depends(get_principal),
+):
+    """
+    LIFF 頁面開啟時呼叫，順帶回報 LIFF 執行環境。
+
+    這些資訊是前端自報的，只存成 `identities/line.metadata.liff`，不參與任何授權判斷。
+    """
+    return await _me(request, user, client)
+
+
+def _check_type(consent_type: str) -> None:
+    if consent_type not in CONSENT_TYPES:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown consent type")
+
+
+@router.get("/consents", response_model=list[ConsentState])
+async def list_consents(request: Request, user: Principal = Depends(get_principal)):
+    return [await consent_state(request, user)]
+
+
+@router.post("/consents/{consent_type}", response_model=ConsentState)
+async def accept_consent(
+    consent_type: str,
+    body: ConsentRequest,
+    request: Request,
+    user: Principal = Depends(get_principal),
+):
+    """同意目前版本；畫面上的版本已過期時回 409，前端應重新載入政策內容。"""
+    _check_type(consent_type)
+    version = _settings(request).privacy_policy_version
+    if body.version != version:
+        raise HTTPException(status.HTTP_409_CONFLICT, "policy version changed")
+    await _users(request).set_consent(user.user_id, consent_type, version, True, CONSENT_SOURCE)
+    return ConsentState(type=consent_type, version=version, accepted=True)
+
+
+@router.post("/consents/{consent_type}/revoke", response_model=ConsentState)
+async def revoke_consent(
+    consent_type: str, request: Request, user: Principal = Depends(get_principal)
+):
+    """撤回同意：之後無法使用 AI 對話，直到再次同意。既有資料不會因撤回而刪除（另有刪除功能）。"""
+    _check_type(consent_type)
+    version = _settings(request).privacy_policy_version
+    await _users(request).set_consent(user.user_id, consent_type, version, False, CONSENT_SOURCE)
+    return ConsentState(type=consent_type, version=version, accepted=False)
+
+
+# -- personalisation --
+def _departments(request: Request) -> DepartmentDirectory:
+    return request.app.state.departments
+
+
+@router.get("/profile", response_model=Profile)
+async def get_profile(request: Request, user: Principal = Depends(get_principal)):
+    return await _users(request).get_profile(user.user_id)
+
+
+@router.patch("/profile", response_model=Profile)
+async def update_profile(
+    body: ProfileUpdate, request: Request, user: Principal = Depends(get_principal)
+):
+    """
+    設定頁修改稱呼與系所；空字串代表清除。
+
+    系所會比對清大正式名稱：有多個可能時回 422 `department_ambiguous` 與候選，
+    對不到時回 422 `department_not_found`；官方清單暫時無法取得時才接受原文。
+    """
+    users = _users(request)
+    # 先驗證全部欄位，再一次寫入：系所有誤時回 422，稱呼也不會被改
+    values: dict[str, str | None] = {}
+    if body.nickname is not None:
+        values["nickname"] = clean_text(body.nickname, MAX_NICKNAME_CHARS) or None
+    if body.department is not None:
+        text = clean_text(body.department, MAX_DEPARTMENT_CHARS)
+        values["department"] = await _resolve_department(request, text) if text else None
+    if values:
+        await users.set_preferences(user.user_id, values, "user")
+    filled = any(values.values())
+    if filled:
+        await users.set_onboarding(user.user_id, "done")
+    elif body.skip_onboarding:
+        await users.set_onboarding(user.user_id, "skipped")
+    return await users.get_profile(user.user_id)
+
+
+async def _resolve_department(request: Request, text: str) -> str:
+    directory = _departments(request)
+    name, candidates = await directory.resolve(text)
+    if name is None and candidates:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            {
+                "code": "department_ambiguous",
+                "message": "請選擇正確的系所",
+                "candidates": candidates,
+            },
+        )
+    if name is None and await directory.names():
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            {"code": "department_not_found", "message": "找不到這個系所，請從清單選擇"},
+        )
+    return name or text
+
+
+@router.delete("/memories/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_memory(memory_id: str, request: Request, user: Principal = Depends(get_principal)):
+    if not await _users(request).delete_memory(user.user_id, memory_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "memory not found")
+
+
+@router.get("/departments", response_model=list[str])
+async def list_departments(request: Request, user: Principal = Depends(get_principal)):
+    """清大學術單位的正式名稱（公開資料），供設定頁自動完成。"""
+    return list(await _departments(request).names())
+
+
+@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_me(request: Request, user: Principal = Depends(get_principal_for_deletion)):
+    """
+    刪除我的所有資料：對話與訊息、稱呼與系所、記憶、同意紀錄、使用紀錄、外部身分對應與帳號本身。
+
+    1. 先把帳號標成 deleting：其他請求（其他實例在狀態快取過期後）一律被擋，只能再呼叫刪除；
+    2. 刪除對話與 user 資料，每一步都重新查詢確認清空；user 文件最後換成不含個資的墓碑；
+    3. 再刪一次對話：涵蓋墓碑寫入前還在進行的請求建立的對話（之後建立的會自己撤銷）。
+    沒刪乾淨時回 503 `deletion_incomplete`，帳號維持 deleting，使用者可以再呼叫一次。
+    完成後同一個 LINE 帳號再開啟頁面會是全新的使用者（需要重新同意隱私權政策）。
+    """
+    chats: ChatStore = request.app.state.store
+    users = _users(request)
+    await users.begin_deletion(user.user_id)
+    request.app.state.identity_service.forget_user(user.user_id)
+    try:
+        await chats.delete_all_sessions(user.user_id)
+        await users.delete_user(user.user_id)
+        await chats.delete_all_sessions(user.user_id)
+    except DeletionIncompleteError:
+        logger.error("User data deletion incomplete")
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, DELETION_INCOMPLETE) from None
+    request.app.state.identity_service.forget_user(user.user_id)
+    logger.info("User data deleted on request")

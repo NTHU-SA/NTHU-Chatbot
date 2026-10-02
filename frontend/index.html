@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="color-scheme" content="light dark">
+  <title>狗狗情報員</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div id="app" class="app">
+    <header class="topbar">
+      <button id="menuBtn" class="icon-btn" type="button" aria-label="開啟對話列表" aria-controls="sidebar" aria-expanded="false">☰</button>
+      <h1 id="sessionTitle" class="title">狗狗情報員</h1>
+      <button id="newBtn" class="icon-btn" type="button" aria-label="新對話">＋</button>
+    </header>
+
+    <aside id="sidebar" class="sidebar" aria-label="對話列表" aria-hidden="true" inert>
+      <div class="sidebar-head">
+        <span>我的對話</span>
+        <button id="closeSidebar" class="icon-btn" type="button" aria-label="關閉">×</button>
+      </div>
+      <ul id="sessionList" class="session-list"></ul>
+      <p class="sidebar-note">最多保留 50 則對話；新增對話時，最久未更新的對話會被自動刪除。</p>
+      <div class="sidebar-section" aria-label="隱私權與資料">
+        <button id="profileBtn" class="side-link" type="button">我的資料（稱呼、系所、記住的事）</button>
+        <a class="side-link" href="./privacy.html" target="_blank" rel="noopener">隱私權政策</a>
+        <button id="revokeBtn" class="side-link" type="button">撤回同意</button>
+        <button id="deleteDataBtn" class="side-link danger" type="button">刪除我的所有資料</button>
+      </div>
+      <div id="userBox" class="user-box"></div>
+    </aside>
+    <div id="backdrop" class="backdrop" hidden></div>
+
+    <main id="messages" class="messages" aria-live="polite" aria-busy="false">
+      <div id="loadingMsgs" class="loading-msgs" hidden aria-label="載入對話中">
+        <div class="skeleton"></div><div class="skeleton short"></div><div class="skeleton"></div>
+      </div>
+      <div id="empty" class="empty">
+        <p class="empty-title">汪！想查什麼？ฅ'ω'ฅ</p>
+        <div class="chips">
+          <button class="chip" type="button" data-q="下一班往南大的公車幾點？">🚌 往南大的公車</button>
+          <button class="chip" type="button" data-q="現在有哪些餐廳開著？">🍱 現在開的餐廳</button>
+          <button class="chip" type="button" data-q="總圖現在還有討論室嗎？">📚 總圖討論室</button>
+          <button class="chip" type="button" data-q="幫我找資工系的機器學習課程">🎓 找課程</button>
+        </div>
+      </div>
+    </main>
+
+    <button id="scrollBtn" class="scroll-btn" type="button" aria-label="回到最新訊息" hidden>↓ 最新</button>
+    <form id="composer" class="composer">
+      <textarea id="input" rows="1" placeholder="輸入問題…" maxlength="2000" autocomplete="off" enterkeyhint="send"></textarea>
+      <button id="sendBtn" class="send-btn" type="submit" aria-label="送出" disabled>➤</button>
+    </form>
+  </div>
+
+  <div id="overlay" class="overlay">
+    <div class="overlay-card">
+      <div class="spinner" aria-hidden="true"></div>
+      <p id="overlayText">連線中…</p>
+      <button id="overlayRetry" class="btn" type="button" hidden>重試</button>
+    </div>
+  </div>
+
+  <div id="consent" class="overlay consent" hidden>
+    <section class="consent-card" role="dialog" aria-modal="true" aria-labelledby="consentTitle">
+      <h2 id="consentTitle">開始前，請先看看本汪怎麼處理你的資料</h2>
+      <ul class="consent-points">
+        <li>你的提問會送到 <strong>OpenAI（美國）</strong>產生回答，並查詢清大校園資料服務。</li>
+        <li>對話紀錄存在 <strong>Google Cloud（東京）</strong>，其他使用者看不到；只有維運的學生會成員在除錯或處理申訴必要時才會存取，且會留下紀錄。每人最多保留 50 則對話。</li>
+        <li>我們只保存 LINE 顯示名稱、頭像、使用紀錄，以及你選擇提供的稱呼、系所與要本汪記住的事，不會拿來做廣告或分享給其他人。</li>
+        <li>你可以隨時在側欄撤回同意，或刪除你的所有資料。</li>
+      </ul>
+      <p><a href="./privacy.html" target="_blank" rel="noopener">閱讀完整隱私權政策</a></p>
+      <p id="consentStale" class="consent-note" role="alert" hidden>隱私權政策剛更新，請稍後重新開啟頁面再同意。</p>
+      <button id="consentAccept" class="btn" type="button">我已閱讀並同意</button>
+      <p class="consent-note">不同意的話，仍可以在 LINE 聊天室使用 @ 指令（例如 @公車）。</p>
+    </section>
+  </div>
+
+  <dialog id="profileDlg" class="dialog profile-dialog" aria-labelledby="profileTitle">
+    <form id="profileForm" method="dialog" novalidate>
+      <h2 id="profileTitle">我的資料</h2>
+      <p id="profileIntro" class="profile-intro" hidden>想讓本汪怎麼稱呼你？讀哪個系？填了之後本汪查課程、公告會更貼心；不想說也可以直接略過。</p>
+      <label class="field">
+        <span>稱呼</span>
+        <input id="nicknameInput" type="text" maxlength="20" autocomplete="nickname" placeholder="例如：小明">
+      </label>
+      <label class="field">
+        <span>系所</span>
+        <input id="departmentInput" type="text" maxlength="40" list="departmentList" autocomplete="off" placeholder="例如：資訊工程學系">
+        <datalist id="departmentList"></datalist>
+      </label>
+      <div id="departmentChoices" class="suggestions" hidden></div>
+      <p id="profileError" class="field-error" role="alert" hidden></p>
+      <section id="memorySection" class="memory-section">
+        <h3>本汪記住的事</h3>
+        <ul id="memoryList" class="memory-list"></ul>
+        <p id="memoryEmpty" class="memory-empty">還沒有。聊天時說「記得我住清齋」，本汪就會記下來。</p>
+      </section>
+      <div class="dialog-actions">
+        <button id="profileSkip" value="skip" class="btn ghost" type="submit">略過</button>
+        <button id="profileClose" value="close" class="btn ghost" type="submit">關閉</button>
+        <button id="profileSave" value="save" class="btn" type="submit">儲存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirmDlg" class="dialog">
+    <form method="dialog">
+      <p id="confirmText">確定要刪除這個對話嗎？</p>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn ghost" type="submit">取消</button>
+        <button id="confirmOk" value="ok" class="btn danger" type="submit">刪除</button>
+      </div>
+    </form>
+  </dialog>
+
+  <template id="tplMessage">
+    <article class="msg">
+      <div class="tools" hidden></div>
+      <div class="bubble"></div>
+    </article>
+  </template>
+
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script src="./vendor/marked.min.js"></script>
+  <script src="./vendor/purify.min.js"></script>
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>

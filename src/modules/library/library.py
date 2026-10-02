@@ -48,9 +48,7 @@ async def lib_space_flex_message(event):
     template = env.get_template("library_space.json.jinja")
     flex_template_str = template.render(spaces=data)
     flex_template = json.loads(flex_template_str)
-    result = FlexMessage(
-        alt_text="圖書館空間現況", contents=FlexContainer.from_dict(flex_template)
-    )
+    result = FlexMessage(alt_text="圖書館空間現況", contents=FlexContainer.from_dict(flex_template))
     return [result]
 
 
@@ -79,7 +77,7 @@ async def rss(event):
         return [TextMessage(text="未知的圖書館消息分類")]
     try:
         page_num = max(1, int(event.params.get("page", 1)))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return [TextMessage(text="頁碼必須是整數")]
     return await lib_news_message(rss_type, page_num)
 
@@ -135,10 +133,10 @@ async def lib_news_message(rss, page_num):
 def convert_datetime_string(datetime_string):
     try:
         datetime_obj = parsedate_to_datetime(datetime_string)
-    except (TypeError, ValueError, OverflowError):
+    except TypeError, ValueError, OverflowError:
         try:
             datetime_obj = datetime.datetime.fromisoformat(datetime_string)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return "未知"
     return datetime_obj.strftime("%Y 年 %m 月 %d 日")
 
@@ -154,9 +152,7 @@ def libxmltemplate(data, page_num=1):
     columns = []
     for item in data:
         image_url = (item.get("image") or {}).get("url")
-        thumbnail_image_url = (
-            urllib.parse.quote(image_url, safe=":/?&=%") if image_url else None
-        )
+        thumbnail_image_url = urllib.parse.quote(image_url, safe=":/?&=%") if image_url else None
         title = item.get("title") or "圖書館消息"
         if len(title) > 40:
             title = title[:37] + "..."

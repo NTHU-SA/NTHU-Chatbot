@@ -4,8 +4,6 @@ modules:
     prefix: 校務專區
   bus:
     prefix: 公車
-  dev:
-    prefix: 開發者
   dining:
     prefix: 學生餐廳
   help:

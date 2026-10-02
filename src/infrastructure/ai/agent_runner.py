@@ -6,12 +6,13 @@
 
   thinking        {delta}      模型的思考摘要（需 REASONING_SUMMARY=true 與 reasoning 模型）
   suggestions     {options}    模型反問時提供的快速回覆選項
+  memory          {action, items}  個人化工具寫入了稱呼 / 系所 / 記憶（action: saved / forgotten）
   interim         {text, discard}  呼叫工具前講的過場句；前端把它從回答移到「過程」卡片，
                                    discard=true 時只清掉（模型在 suggest_replies 後重講了問題）
   tool_call_start {call_id, name, args}
   tool_call_end   {call_id, name, ok, duration_ms, result_preview}
   token           {delta}
-  done            {content, tool_calls}
+  done            {content, tool_calls, usage}   usage 只給後端存檔，不送前端
   error           {message}
 """
 
@@ -39,9 +40,16 @@ from loguru import logger
 from openai import APIStatusError, AsyncOpenAI
 from openai.types.shared import Reasoning
 
-from src.application.models.chat import Message, ToolCall
+from src.application.models.chat import Message, TokenUsage, ToolCall
 from src.core.config import Settings
+from src.infrastructure.ai.personal_tools import (
+    PERSONAL_TOOL_OBJECTS,
+    PERSONAL_TOOLS,
+    ChatContext,
+)
 from src.infrastructure.ai.prompts import build_instructions
+from src.infrastructure.ai.run_state import RUN, RunState, begin_external_call
+from src.infrastructure.ai.web_search import build_web_search_tool
 
 TOOL_ERROR_PREFIX = "[TOOL_ERROR]"
 SUGGEST_TOOL = "suggest_replies"
@@ -52,15 +60,59 @@ PLACEHOLDER_MARKERS = ("請輸入", "輸入", "其他", "自行", "自訂", "告
 TRUNCATION_NOTE = "\n\n[結果過長已截斷；如需更多請縮小查詢範圍（例如減少 limit 或加 keyword）]"
 MCP_UNAVAILABLE_MESSAGE = "校園資料服務暫時無法連線，本汪晚點再幫你查，請稍後再試。"
 
+# MCP 結果快取秒數（依工具；結果與使用者無關，跨使用者共用）。
+# 公車即時資料不快取；沒有列出的工具也不快取。
+MCP_CACHE_TTL = {
+    "get_announcements": 300,
+    "get_newsletters": 600,
+    "get_library_info": 300,
+    "find_dining": 300,
+    "get_energy_usage": 300,
+    "search_campus": 3600,
+    "get_bus_stops": 3600,
+    "search_courses": 3600,
+}
+MCP_CACHE_MAX_ENTRIES = 256
+
 
 class BoundedMCPServer(MCPServerStreamableHttp):
-    """工具結果在送進模型前先截斷，避免撐爆小模型的 token 預算。"""
+    """
+    校園資料 MCP server 的包裝。
+
+    - 每次呼叫都計入本則訊息的工具上限，並標記本輪已讀取外部資料（個人化寫入工具因此停用）；
+    - 唯讀、與使用者無關的工具結果短暫快取，同樣的查詢不重打 MCP；
+    - 結果在送進模型前先截斷，避免撐爆 token 預算。
+    """
 
     def __init__(self, *args: Any, max_output_chars: int, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._max_output_chars = max_output_chars
+        self._cache: dict[str, tuple[float, Any]] = {}
+
+    def _cache_key(self, tool_name: str, arguments: Any) -> str | None:
+        if tool_name not in MCP_CACHE_TTL:
+            return None
+        return tool_name + ":" + json.dumps(arguments or {}, sort_keys=True, ensure_ascii=False)
 
     async def call_tool(self, tool_name, arguments, meta=None):
+        # 外部資料即將進入對話（快取命中也算）：計次、標記本輪已污染
+        begin_external_call()
+        key = self._cache_key(tool_name, arguments)
+        now = time.monotonic()
+        if key is not None:
+            cached = self._cache.get(key)
+            if cached and cached[0] > now:
+                return cached[1].model_copy(deep=True)
+        result = await self._call_and_truncate(tool_name, arguments, meta)
+        failed = getattr(result, "is_error", False) or getattr(result, "isError", False)
+        if key is not None and not failed:
+            if len(self._cache) >= MCP_CACHE_MAX_ENTRIES:
+                self._cache = {k: v for k, v in self._cache.items() if v[0] > now}
+            if len(self._cache) < MCP_CACHE_MAX_ENTRIES:
+                self._cache[key] = (now + MCP_CACHE_TTL[tool_name], result.model_copy(deep=True))
+        return result
+
+    async def _call_and_truncate(self, tool_name, arguments, meta):
         result = await super().call_tool(tool_name, arguments, meta)
         budget = self._max_output_chars
         for block in result.content:
@@ -87,11 +139,7 @@ def _tool_error_message(_ctx, err: Exception) -> str:
 
 
 def _preview(value: Any, limit: int) -> str:
-    text = (
-        value
-        if isinstance(value, str)
-        else json.dumps(value, ensure_ascii=False, default=str)
-    )
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
     return text if len(text) <= limit else text[:limit] + "…"
 
 
@@ -102,11 +150,7 @@ def _output_text(output: Any) -> str:
     if isinstance(output, dict) and output.get("type") == "text":
         return output.get("text") or ""
     if isinstance(output, list):
-        texts = [
-            b.get("text")
-            for b in output
-            if isinstance(b, dict) and b.get("type") == "text"
-        ]
+        texts = [b.get("text") for b in output if isinstance(b, dict) and b.get("type") == "text"]
         if texts:
             return "\n".join(t for t in texts if t)
     return _preview(output, 10_000)
@@ -122,8 +166,44 @@ def _parse_args(raw: str | None) -> dict[str, Any]:
         return {"raw": raw[:500]}
 
 
-def _instructions(_ctx, _agent) -> str:
-    return build_instructions()
+def _usage(result: Any) -> dict[str, int] | None:
+    """SDK 累計的 token 用量（含 reasoning tokens）；取不到時回傳 None。"""
+    usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
+    if usage is None:
+        return None
+    details = getattr(usage, "output_tokens_details", None)
+    return TokenUsage(
+        input_tokens=getattr(usage, "input_tokens", 0) or 0,
+        output_tokens=getattr(usage, "output_tokens", 0) or 0,
+        reasoning_tokens=getattr(details, "reasoning_tokens", 0) or 0,
+        requests=getattr(usage, "requests", 0) or 0,
+    ).model_dump()
+
+
+def _instructions(ctx, agent) -> str:
+    context = ctx.context if isinstance(getattr(ctx, "context", None), ChatContext) else None
+    web_search = any(getattr(tool, "name", "") == "web_search" for tool in agent.tools)
+    if context is None:
+        return build_instructions(web_search=web_search)
+    return build_instructions(
+        profile=context.profile, onboarding=context.onboarding, web_search=web_search
+    )
+
+
+def _personal_event(output: str) -> AgentEvent | None:
+    """個人化工具的結果 → 前端的 memory 事件；沒有寫入任何東西時回傳 None。"""
+    try:
+        data = json.loads(output)
+    except TypeError, json.JSONDecodeError:
+        return None
+    if data.get("status") == "saved" and data.get("saved"):
+        return AgentEvent("memory", {"action": "saved", "items": data["saved"]})
+    if data.get("status") == "forgotten":
+        return AgentEvent(
+            "memory",
+            {"action": "forgotten", "items": [{"kind": "memory", "value": data["forgotten"]}]},
+        )
+    return None
 
 
 @function_tool(name_override=SUGGEST_TOOL)
@@ -194,16 +274,34 @@ class AgentRunner:
             max_retry_attempts=1,
         )
         # 思考摘要只有 reasoning 模型走 Responses API 才支援；其他情況不帶參數以免被端點拒絕。
-        model_settings = ModelSettings(max_tokens=settings.max_output_tokens)
+        # parallel_tool_calls：彼此獨立的查詢在同一步一起發出，SDK 會並行執行
+        model_settings = ModelSettings(
+            max_tokens=settings.max_output_tokens, parallel_tool_calls=True
+        )
         if settings.reasoning_summary and settings.openai_use_responses_api:
             model_settings.reasoning = Reasoning(summary="auto")
+
+        tools = [suggest_replies, *PERSONAL_TOOL_OBJECTS]
+        # 網路搜尋需要官方 OpenAI 的 Responses API（web_search 工具）
+        self._web_search = settings.web_search_enabled and settings.openai_use_responses_api
+        if settings.web_search_enabled and not self._web_search:
+            logger.warning("WEB_SEARCH_ENABLED ignored: requires OPENAI_USE_RESPONSES_API=true")
+        if self._web_search:
+            tools.append(
+                build_web_search_tool(
+                    client,
+                    settings.web_search_model or settings.openai_model,
+                    settings.web_search_domains,
+                    _tool_error_message,
+                )
+            )
 
         self._agent = Agent(
             name="狗狗情報員",
             instructions=_instructions,
             model=model,
             model_settings=model_settings,
-            tools=[suggest_replies],
+            tools=tools,
             mcp_servers=[self._mcp],
         )
 
@@ -239,7 +337,7 @@ class AgentRunner:
 
     # -- chat --
     async def stream(
-        self, history: list[Message], user_text: str
+        self, history: list[Message], user_text: str, context: ChatContext | None = None
     ) -> AsyncIterator[AgentEvent]:
         try:
             await self._ensure_connected()
@@ -250,14 +348,13 @@ class AgentRunner:
 
         cap = self._settings.history_message_chars
         items: list[dict[str, Any]] = [
-            {"role": m.role, "content": _preview(m.content, cap)}
-            for m in history
-            if m.content
+            {"role": m.role, "content": _preview(m.content, cap)} for m in history if m.content
         ]
         items.append({"role": "user", "content": user_text})
 
         pending: dict[str, tuple[str, dict[str, Any], float]] = {}
         suggestion_calls: set[str] = set()
+        personal_calls: set[str] = set()
         tool_calls: list[ToolCall] = []
         text_parts: list[str] = []
         interims: list[str] = []
@@ -266,9 +363,18 @@ class AgentRunner:
         preview_chars = self._settings.tool_result_preview_chars
         summary_parts = 0
 
+        # 必須在 run_streamed 之前設定：SDK 的背景 task 會複製當下的 context
+        run_state = RunState(
+            max_tool_calls=self._settings.max_tool_calls_per_message,
+            max_web_searches=self._settings.max_web_searches_per_message,
+        )
+        token = RUN.set(run_state)
         try:
             result = Runner.run_streamed(
-                self._agent, input=items, max_turns=self._settings.max_agent_turns
+                self._agent,
+                input=items,
+                max_turns=self._settings.max_agent_turns,
+                context=context,
             )
             async for event in result.stream_events():
                 if event.type == "raw_response_event":
@@ -276,9 +382,7 @@ class AgentRunner:
                     data_type = getattr(data, "type", "")
                     if data_type == "response.output_text.delta" and data.delta:
                         if pending_question is not None:
-                            yield AgentEvent(
-                                "interim", {"text": pending_question, "discard": True}
-                            )
+                            yield AgentEvent("interim", {"text": pending_question, "discard": True})
                             pending_question = None
                         text_parts.append(data.delta)
                         yield AgentEvent("token", {"delta": data.delta})
@@ -313,6 +417,10 @@ class AgentRunner:
                             )
                             yield AgentEvent("suggestions", {"options": options})
                         continue
+                    if name in PERSONAL_TOOLS:
+                        # 寫入使用者資料：不顯示成工具卡片，也不把內容存進訊息的 tool_calls
+                        personal_calls.add(call_id)
+                        continue
                     # 模型在呼叫工具前講的話只是過場（「本汪查一下！」），不算最終回答：
                     # 通知前端把已串流的文字移到過程卡片，並從頭累積正式回答。
                     interim = "".join(text_parts).strip()
@@ -338,9 +446,12 @@ class AgentRunner:
                     )
                     if call_id in suggestion_calls:
                         continue
-                    name, args, started = pending.pop(
-                        call_id, ("unknown", {}, time.monotonic())
-                    )
+                    if call_id in personal_calls:
+                        personal = _personal_event(_output_text(item.output))
+                        if personal is not None:
+                            yield personal
+                        continue
+                    name, args, started = pending.pop(call_id, ("unknown", {}, time.monotonic()))
                     output_text = _output_text(item.output)
                     ok = not output_text.startswith(TOOL_ERROR_PREFIX)
                     tool_call = ToolCall(
@@ -372,18 +483,23 @@ class AgentRunner:
                 or (interims[-1] if interims else "")
                 or (final if isinstance(final, str) else "")
             )
+            # 只記次數，方便在 Logging 觀察成本；不含任何 ID 或內容
+            logger.info(
+                "Agent run finished: {} tool calls, {} web searches",
+                run_state.tool_calls,
+                run_state.web_searches,
+            )
             yield AgentEvent(
                 "done",
                 {
                     "content": content[: self._settings.max_output_chars],
                     "tool_calls": [tc.model_dump() for tc in tool_calls],
+                    "usage": _usage(result),
                 },
             )
 
         except MaxTurnsExceeded:
-            yield AgentEvent(
-                "error", {"message": "工具呼叫次數過多，請把問題拆小一點再試。"}
-            )
+            yield AgentEvent("error", {"message": "工具呼叫次數過多，請把問題拆小一點再試。"})
         except APIStatusError as error:
             logger.warning("LLM API error: {}", error.status_code)
             if error.status_code in (413, 429):
@@ -400,3 +516,9 @@ class AgentRunner:
             logger.error("Unexpected agent failure: {}", type(error).__name__)
             logger.opt(exception=True).debug("Agent failure traceback")
             yield AgentEvent("error", {"message": "系統暫時無法回應，請稍後再試。"})
+        finally:
+            try:
+                RUN.reset(token)
+            except ValueError:
+                # 產生器在不同的 context 被關閉（例如連線中斷）：該 context 隨請求結束
+                pass

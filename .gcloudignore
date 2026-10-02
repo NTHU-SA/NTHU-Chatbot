@@ -18,3 +18,8 @@ firebase-adminsdk.json
 **/*.key
 infra
 tests
+.coverage
+coverage.xml
+htmlcov
+frontend
+build
