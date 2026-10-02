@@ -77,7 +77,7 @@ async def rss(event):
         return [TextMessage(text="未知的圖書館消息分類")]
     try:
         page_num = max(1, int(event.params.get("page", 1)))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return [TextMessage(text="頁碼必須是整數")]
     return await lib_news_message(rss_type, page_num)
 
@@ -133,10 +133,10 @@ async def lib_news_message(rss, page_num):
 def convert_datetime_string(datetime_string):
     try:
         datetime_obj = parsedate_to_datetime(datetime_string)
-    except (TypeError, ValueError, OverflowError):
+    except TypeError, ValueError, OverflowError:
         try:
             datetime_obj = datetime.datetime.fromisoformat(datetime_string)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return "未知"
     return datetime_obj.strftime("%Y 年 %m 月 %d 日")
 
