@@ -43,7 +43,7 @@ async def handle_callback(request: Request):
         events = request.app.state.parser.parse(decoded_body, signature)
     except InvalidSignatureError:
         logger.error("無效的簽名。請檢查 Channel Access Token 和 Channel Secret。")
-        raise HTTPException(status_code=400, detail="Invalid signature")
+        raise HTTPException(status_code=400, detail="Invalid signature") from None
 
     state = request.app.state
     for event in events:

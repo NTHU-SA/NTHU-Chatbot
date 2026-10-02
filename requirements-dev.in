@@ -1,0 +1,8 @@
+# Development / CI tools. Regenerate the lock after editing:
+#   uv pip compile requirements-dev.in --universal --generate-hashes --python-version 3.12 -o requirements-dev.txt
+-c requirements.txt
+-r requirements.in
+pytest>=9,<10
+pytest-asyncio>=1.4,<2
+pytest-cov>=7,<8
+ruff>=0.16,<1

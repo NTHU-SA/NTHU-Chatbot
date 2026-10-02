@@ -20,3 +20,6 @@ tests
 firestore.rules
 firestore.indexes.json
 firebase.json
+.coverage
+coverage.xml
+htmlcov

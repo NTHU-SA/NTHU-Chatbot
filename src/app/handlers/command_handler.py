@@ -1,9 +1,9 @@
 import asyncio
 import importlib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable, Optional, Tuple
 
 import yaml
 from linebot.v3.messaging import (
@@ -24,7 +24,7 @@ class MenuInfo:
     title: str
     description: str
     actions: list[Action]
-    image_url: Optional[str] = None
+    image_url: str | None = None
 
 
 @dataclass
@@ -34,7 +34,7 @@ class Command:
     module: str
     names: list[str]
     function: Callable
-    menu_info: Optional[MenuInfo] = None
+    menu_info: MenuInfo | None = None
 
 
 @dataclass
@@ -42,8 +42,8 @@ class ModuleConfig:
     """模組配置。"""
 
     commands: dict[str, Command] = field(default_factory=dict)
-    default_menu: Optional[Callable] = None
-    default_reply: Optional[Callable] = None
+    default_menu: Callable | None = None
+    default_reply: Callable | None = None
 
 
 class CommandEvent:
@@ -152,7 +152,7 @@ class CommandHandler:
         title: str,
         description: str,
         actions: list[Action],
-        image_url: Optional[str] = None,
+        image_url: str | None = None,
     ) -> Callable:
         """添加帶選單資訊的命令裝飾器。
 
@@ -292,7 +292,7 @@ class CommandHandler:
         if module in self._menu_cache:
             del self._menu_cache[module]
 
-    def parse_command(self, message: str) -> Tuple[str, str, str, dict]:
+    def parse_command(self, message: str) -> tuple[str, str, str, dict]:
         """解析命令字串。
 
         從使用者輸入的訊息中解析出模組名稱、前綴、命令名稱和參數。

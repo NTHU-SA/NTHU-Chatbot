@@ -120,7 +120,7 @@ async def query_stop_bus(event):
     )
 
     # 製作新的 data for postbackaction
-    new_params = str()
+    new_params = ""
     for param in params:
         new_params += f" {param}={params[param]}"
 

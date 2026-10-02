@@ -1,0 +1,31 @@
+# 只放開發工具設定；執行期依賴在 requirements.in / requirements.txt
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "firestore: 需要 Firestore emulator（FIRESTORE_EMULATOR_HOST）",
+]
+
+[tool.coverage.run]
+source = ["src", "templates"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+# 基準 76%（2026-10-02，不含 emulator 測試）；之後每個 PR 往 80% 提升
+fail_under = 75
+
+[tool.ruff]
+target-version = "py312"
+extend-exclude = ["data", "scripts/*.png"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "B", "UP", "I"]
+# B008：FastAPI 的 Depends() 慣用寫法
+ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+# 模組套件以 star import 觸發指令註冊
+"src/modules/*/__init__.py" = ["F403"]

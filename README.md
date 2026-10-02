@@ -43,7 +43,10 @@ src/application/                  資料模型、ChatStore 介面與記憶體實
 src/infrastructure/ai/            AgentRunner、狗狗情報員 prompt
 src/infrastructure/firebase/      FirestoreChatStore
 templates/messages/               Flex 訊息（含 LIFF 入口泡泡）
-tests/                            pytest（unittest 風格）
+tests/                            pytest（fixture 在 conftest.py）
+requirements*.in / *.txt          直接依賴 / uv 產生的含雜湊鎖定檔
+pyproject.toml                    pytest、coverage、ruff 設定
+.github/workflows/ci.yml          CI：鎖定檔檢查、ruff、pytest + Firestore emulator
 ```
 
 ## 機密與設定
@@ -74,11 +77,11 @@ Firestore 憑證不是環境變數：Cloud Run 用執行服務帳號的 ADC，�
 
 ## 本機開發
 
-需要 Python 3.12+。以下為 PowerShell 指令：
+需要 Python 3.12（與 Dockerfile、CI 一致）。以下為 PowerShell 指令：
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pip install --require-hashes -r requirements-dev.txt
 Copy-Item .env.template .env
 ```
 
@@ -181,13 +184,32 @@ LIFF 對話單次最多 `MAX_AGENT_TURNS` 回合、120 秒逾時、每人每日 
 舊版程式曾包含硬編碼 Gemini 金鑰。移除檔案不會撤銷金鑰，也不會移除 Git 歷史；請在供應商 Console 撤銷或輪替。
 LLM 供應商會接收最近 `HISTORY_WINDOW` 則對話，且有其自身的資料政策；MCP 會接收模型產生的查詢參數。Agents SDK 的 tracing 已停用，不會把對話送到 OpenAI 追蹤後端。
 
-## 測試
+## 依賴管理
+
+直接依賴寫在 `requirements.in`（執行期）與 `requirements-dev.in`（測試/CI 工具）；
+`requirements*.txt` 是由 [uv](https://docs.astral.sh/uv/) 產生、含雜湊的跨平台鎖定檔，**不要手動編輯**。
+Dockerfile 與 CI 都以 `--require-hashes` 安裝：任何套件（含間接依賴）的內容和鎖定的雜湊不符，安裝就會失敗。
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m pip install uv   # 只在本機用來產生鎖定檔
+# 修改 .in 後重新產生鎖定檔（其他套件會保留既有版本）
+.\.venv\Scripts\uv pip compile requirements.in --universal --generate-hashes --python-version 3.12 -o requirements.txt
+.\.venv\Scripts\uv pip compile requirements-dev.in --universal --generate-hashes --python-version 3.12 -o requirements-dev.txt
+# 要升級某個套件時加上 --upgrade-package <name>
 ```
 
-純單元測試不使用雲端金鑰或付費模型（LLM、LINE 驗證與 Firestore 皆以假物件或記憶體實作取代），Firestore 整合測試沒有 emulator 時會跳過。
+CI 會重新編譯並比對，鎖定檔與 `.in` 不一致時 PR 會失敗。Dependabot 每週更新 pip 套件、Docker base image 與 GitHub Actions（小版本合併成一個 PR）。
+
+## 測試
+
+測試使用 pytest（`asyncio_mode = "auto"`；共用 fixture 在 `tests/conftest.py`，假物件在 `tests/fakes.py`），設定寫在 `pyproject.toml`。
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q --cov   # 含覆蓋率，低於門檻會失敗
+.\.venv\Scripts\python.exe -m ruff check .
+```
+
+純單元測試不使用雲端金鑰或付費模型（LLM、LINE 驗證與 Firestore 皆以假物件或記憶體實作取代），Firestore 整合測試（`@pytest.mark.firestore`）沒有 emulator 時會跳過。
 安裝 Firebase CLI 與 Java 21+ 後可跑完整測試：
 
 ```powershell
@@ -196,6 +218,11 @@ firebase emulators:exec --only firestore --project demo-nthu-chatbot ".venv\Scri
 
 本機使用 emulator 開發時，在另一個終端執行 `firebase emulators:start --only firestore --project demo-nthu-chatbot`，
 並將應用的 `GOOGLE_CLOUD_PROJECT=demo-nthu-chatbot`、`FIRESTORE_EMULATOR_HOST=127.0.0.1:8085` 設為一致。
+
+### CI
+
+`.github/workflows/ci.yml` 會在每個 PR 與每次 push 到 `main` / `dev` 時執行：檢查鎖定檔是否最新 → `ruff check` → 在 Firestore emulator 下執行 `pytest --cov`（含整合測試）。
+workflow 只有 `contents: read` 權限，第三方 action 都釘選 commit SHA。建議在 `main`、`dev` 開啟 branch protection，要求經過 PR 且 CI 通過才能合併；這樣 Cloud Build 只會部署通過測試的程式。
 
 ## Contributing
 ### Commit Messages:

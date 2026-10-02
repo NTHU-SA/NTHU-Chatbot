@@ -1,0 +1,24 @@
+# Direct runtime dependencies. Edit this file, then regenerate the lock:
+#   uv pip compile requirements.in --universal --generate-hashes --python-version 3.12 -o requirements.txt
+# Keep comments ASCII-only (Windows cp950 console).
+
+# Line Bot
+line-bot-sdk>=3.25,<4
+# Logging
+loguru>=0.7,<1
+# Server
+fastapi>=0.141,<1
+uvicorn>=0.53,<1
+# Environment
+python-dotenv>=1.2,<2
+cachetools>=7,<8
+pyyaml>=6,<7
+# Campus API
+httpx>=0.28,<1
+# Flex Message
+jinja2>=3.1,<4
+# AI (OpenAI Agents SDK + MCP client; openai is a dependency of openai-agents)
+openai>=3.15,<4
+openai-agents>=0.22,<1
+# Firebase Firestore
+google-cloud-firestore>=2.31,<3
