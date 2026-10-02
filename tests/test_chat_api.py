@@ -32,8 +32,12 @@ def internal_id(chat_app) -> str:
 
 
 def accept_policy(client, headers=AUTH):
+    """每個 client 只同意一次：避免大量建立對話的測試撞上限流。"""
+    if getattr(client, "_policy_accepted", False):
+        return
     response = client.post("/api/consents/privacy_policy", headers=headers, json={"version": "1"})
     assert response.status_code == 200
+    client._policy_accepted = True
 
 
 def new_session(client) -> str:
