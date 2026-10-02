@@ -76,7 +76,7 @@ pyproject.toml / uv.lock          依賴（執行期、dev、test group）與工
 
 ## 本機開發
 
-需要 [uv](https://docs.astral.sh/uv/)；Python 版本寫在 `.python-version`（3.12，與 `pyproject.toml`、Dockerfile、CI 一致），uv 會自動準備。以下為 PowerShell 指令：
+需要 [uv](https://docs.astral.sh/uv/)；Python 版本寫在 `.python-version`（3.14，與 `pyproject.toml`、Dockerfile、CI 一致），uv 會自動準備。以下為 PowerShell 指令：
 
 ```powershell
 uv sync --locked                  # 依 uv.lock 建立 .venv（含 dev 與 test group）
