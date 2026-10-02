@@ -194,7 +194,7 @@ def _personal_event(output: str) -> AgentEvent | None:
     """個人化工具的結果 → 前端的 memory 事件；沒有寫入任何東西時回傳 None。"""
     try:
         data = json.loads(output)
-    except (TypeError, json.JSONDecodeError):
+    except TypeError, json.JSONDecodeError:
         return None
     if data.get("status") == "saved" and data.get("saved"):
         return AgentEvent("memory", {"action": "saved", "items": data["saved"]})

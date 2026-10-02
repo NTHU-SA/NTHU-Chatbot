@@ -130,11 +130,11 @@ class FirestoreUserStore:
                 await lookup.delete(
                     option=self._db.write_option(last_update_time=snapshot.update_time)
                 )
-            except (FailedPrecondition, NotFound):
+            except FailedPrecondition, NotFound:
                 pass
         try:
             return await self._create(identity, lookup)
-        except (AlreadyExists, Conflict):
+        except AlreadyExists, Conflict:
             # 另一個請求剛好同時建立了同一個身分：沿用它建立的 user
             snapshot = await lookup.get()
             user_id = snapshot.get("userId")
@@ -453,7 +453,7 @@ class FirestoreUserStore:
             reference = collection.document(slot)
             try:
                 await reference.create(payload)
-            except (AlreadyExists, Conflict):
+            except AlreadyExists, Conflict:
                 continue
             if not await self._undo_if_deleted(user_id, reference):
                 raise AccountDisabledError(user_id, DELETED)
@@ -545,7 +545,7 @@ class FirestoreUserStore:
             batch.delete(doc.reference)
         try:
             await batch.commit()
-        except (FailedPrecondition, NotFound, Conflict):
+        except FailedPrecondition, NotFound, Conflict:
             raise DeletionIncompleteError(user_id) from None
 
     async def _wipe(self, user, keep: tuple[str, ...] = ()) -> None:

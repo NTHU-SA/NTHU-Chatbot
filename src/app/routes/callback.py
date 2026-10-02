@@ -139,7 +139,7 @@ async def handle_message(event: MessageEvent, state, user_id, writes):
                 await state.messaging_api.show_loading_animation(
                     ShowLoadingAnimationRequest(chatId=event.source.user_id)
                 )
-            except (ApiException, ClientError, TimeoutError):
+            except ApiException, ClientError, TimeoutError:
                 logger.warning("Loading animation unavailable")
         messages = await run_command(message_text, user_id, state, writes)
     elif event.source.type == "user":

@@ -178,7 +178,7 @@ class FirestoreChatStore:
         try:
             await batch.commit()
             return session, True
-        except (AlreadyExists, Conflict):
+        except AlreadyExists, Conflict:
             pass
 
         @firestore.async_transactional
@@ -273,7 +273,7 @@ class FirestoreChatStore:
         )
         try:
             await batch.commit()
-        except (FailedPrecondition, NotFound, Conflict):
+        except FailedPrecondition, NotFound, Conflict:
             return False
         return True
 

@@ -94,7 +94,7 @@ async def query_stop_bus(event):
 
     try:
         limits = min(12, max(1, int(params.get("limits", 5))))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return [TextMessage(text="班次數量必須是整數，請重新查詢")]
 
     query_params = {
