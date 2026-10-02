@@ -220,12 +220,12 @@ staging 與 prod 放在兩個獨立的 GCP 專案，建置、監測與前端部�
 
 ```bash
 bash infra/bootstrap.sh infra/environments/prod.conf                               # Firebase、Firestore、AR、SA、WIF、Secret、Cloud Run、trigger
-ALERT_EMAIL=you@example.com bash infra/monitoring.sh infra/environments/prod.conf  # uptime check（兼保溫）、告警
+ALERT_EMAIL=you@example.com bash infra/monitoring.sh infra/environments/prod.conf  # 5xx 與 ERROR log 告警（防冷啟動用外部 ping 服務）
 ```
 
 - **API**：push 到對應分支 → Cloud Build（`cloudbuild.yaml`，專用的最小權限部署 SA）建置映像 → 只更新 Cloud Run 的映像。環境變數與 Secret 設定在服務上，每個 revision 自動沿用。`--timeout=180` 必須大於 120 秒的 agent 上限。
 - **前端**：push 到 `dev` / `main` 且測試通過後，CI 以 Workload Identity Federation 部署到 Hosting（`infra/build_frontend.py` 依環境產生 `config.json` 與 CSP）；手動部署用 `bash infra/deploy_frontend.sh infra/environments/<env>.conf`。
-- **監測**：Cloud Run 上的 log 是帶 `severity` 的 JSON，可用 `severity>=ERROR` 篩選；`infra/monitoring.sh` 建立 uptime 失敗、5xx 與 ERROR log 告警。
+- **監測**：Cloud Run 上的 log 是帶 `severity` 的 JSON，可用 `severity>=ERROR` 篩選；`infra/monitoring.sh` 建立 5xx 與 ERROR log 告警。防冷啟動與存活檢查由外部 ping 服務定期打 `/ping`（間隔 ≤ 10 分鐘）；需要時可用 `UPTIME_CHECK=true` 改建 GCP uptime check。
 - 部署後把 API 網址填進 LINE Webhook、Hosting 網址填進 LIFF Endpoint URL，再驗證 `/ping`、LINE Verify、指令查詢，以及聊天室提問 → 開啟 LIFF → 串流回覆。
 - 更新 Secret 後要部署新 revision 才會生效；不得在 Cloud Run 設定 `FIRESTORE_EMULATOR_HOST`。建議設定 GCP 與 LLM 供應商的預算告警。
 
