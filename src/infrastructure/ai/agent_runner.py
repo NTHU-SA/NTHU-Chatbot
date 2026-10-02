@@ -6,6 +6,7 @@
 
   thinking        {delta}      模型的思考摘要（需 REASONING_SUMMARY=true 與 reasoning 模型）
   suggestions     {options}    模型反問時提供的快速回覆選項
+  memory          {action, items}  個人化工具寫入了稱呼 / 系所 / 記憶（action: saved / forgotten）
   interim         {text, discard}  呼叫工具前講的過場句；前端把它從回答移到「過程」卡片，
                                    discard=true 時只清掉（模型在 suggest_replies 後重講了問題）
   tool_call_start {call_id, name, args}
@@ -41,6 +42,13 @@ from openai.types.shared import Reasoning
 
 from src.application.models.chat import Message, TokenUsage, ToolCall
 from src.core.config import Settings
+from src.infrastructure.ai.personal_tools import (
+    CURRENT,
+    PERSONAL_TOOL_OBJECTS,
+    PERSONAL_TOOLS,
+    ChatContext,
+    mark_external_data,
+)
 from src.infrastructure.ai.prompts import build_instructions
 
 TOOL_ERROR_PREFIX = "[TOOL_ERROR]"
@@ -61,6 +69,8 @@ class BoundedMCPServer(MCPServerStreamableHttp):
         self._max_output_chars = max_output_chars
 
     async def call_tool(self, tool_name, arguments, meta=None):
+        # 外部資料即將進入對話：本輪之後的個人化寫入工具一律拒絕（防 prompt injection）
+        mark_external_data()
         result = await super().call_tool(tool_name, arguments, meta)
         budget = self._max_output_chars
         for block in result.content:
@@ -136,8 +146,26 @@ def _usage(result: Any) -> dict[str, int] | None:
     ).model_dump()
 
 
-def _instructions(_ctx, _agent) -> str:
-    return build_instructions()
+def _instructions(ctx, _agent) -> str:
+    context = ctx.context if isinstance(getattr(ctx, "context", None), ChatContext) else None
+    if context is None:
+        return build_instructions()
+    return build_instructions(profile=context.profile, onboarding=context.onboarding)
+
+
+def _personal_event(output: str) -> AgentEvent | None:
+    """個人化工具的結果 → 前端的 memory 事件；沒有寫入任何東西時回傳 None。"""
+    try:
+        data = json.loads(output)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if data.get("status") == "saved" and data.get("saved"):
+        return AgentEvent("memory", {"action": "saved", "items": data["saved"]})
+    if data.get("status") == "forgotten":
+        return AgentEvent(
+            "memory", {"action": "forgotten", "items": [{"kind": "memory", "value": data["forgotten"]}]}
+        )
+    return None
 
 
 @function_tool(name_override=SUGGEST_TOOL)
@@ -217,7 +245,7 @@ class AgentRunner:
             instructions=_instructions,
             model=model,
             model_settings=model_settings,
-            tools=[suggest_replies],
+            tools=[suggest_replies, *PERSONAL_TOOL_OBJECTS],
             mcp_servers=[self._mcp],
         )
 
@@ -253,7 +281,7 @@ class AgentRunner:
 
     # -- chat --
     async def stream(
-        self, history: list[Message], user_text: str
+        self, history: list[Message], user_text: str, context: ChatContext | None = None
     ) -> AsyncIterator[AgentEvent]:
         try:
             await self._ensure_connected()
@@ -272,6 +300,7 @@ class AgentRunner:
 
         pending: dict[str, tuple[str, dict[str, Any], float]] = {}
         suggestion_calls: set[str] = set()
+        personal_calls: set[str] = set()
         tool_calls: list[ToolCall] = []
         text_parts: list[str] = []
         interims: list[str] = []
@@ -280,9 +309,14 @@ class AgentRunner:
         preview_chars = self._settings.tool_result_preview_chars
         summary_parts = 0
 
+        # 必須在 run_streamed 之前設定：SDK 的背景 task 會複製當下的 context
+        token = CURRENT.set(context)
         try:
             result = Runner.run_streamed(
-                self._agent, input=items, max_turns=self._settings.max_agent_turns
+                self._agent,
+                input=items,
+                max_turns=self._settings.max_agent_turns,
+                context=context,
             )
             async for event in result.stream_events():
                 if event.type == "raw_response_event":
@@ -327,6 +361,10 @@ class AgentRunner:
                             )
                             yield AgentEvent("suggestions", {"options": options})
                         continue
+                    if name in PERSONAL_TOOLS:
+                        # 寫入使用者資料：不顯示成工具卡片，也不把內容存進訊息的 tool_calls
+                        personal_calls.add(call_id)
+                        continue
                     # 模型在呼叫工具前講的話只是過場（「本汪查一下！」），不算最終回答：
                     # 通知前端把已串流的文字移到過程卡片，並從頭累積正式回答。
                     interim = "".join(text_parts).strip()
@@ -351,6 +389,11 @@ class AgentRunner:
                         else getattr(raw, "call_id", None)
                     )
                     if call_id in suggestion_calls:
+                        continue
+                    if call_id in personal_calls:
+                        personal = _personal_event(_output_text(item.output))
+                        if personal is not None:
+                            yield personal
                         continue
                     name, args, started = pending.pop(
                         call_id, ("unknown", {}, time.monotonic())
@@ -415,3 +458,9 @@ class AgentRunner:
             logger.error("Unexpected agent failure: {}", type(error).__name__)
             logger.opt(exception=True).debug("Agent failure traceback")
             yield AgentEvent("error", {"message": "系統暫時無法回應，請稍後再試。"})
+        finally:
+            try:
+                CURRENT.reset(token)
+            except ValueError:
+                # 產生器在不同的 context 被關閉（例如連線中斷）：該 context 隨請求結束
+                pass

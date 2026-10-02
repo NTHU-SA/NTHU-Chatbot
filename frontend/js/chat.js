@@ -9,7 +9,7 @@ import {
 import { renderMarkdown, updateScrollHints } from "./markdown.js";
 import {
   appendMessage, appendThought, clearMessages, demoteToProgress, finishTool, hideThinking,
-  renderSuggestions, retireSuggestions, showThinking, toolNode,
+  memoryNote, renderSuggestions, retireSuggestions, showThinking, toolNode,
 } from "./messages.js";
 
 // --------------------------------------------------------------- sessions
@@ -176,6 +176,9 @@ export async function send(text, isRetry) {
           break;
         case "suggestions":
           renderSuggestions(node, data.options || []);
+          break;
+        case "memory":
+          memoryNote(node, data);
           break;
         case "interim":
           if (data.discard) bubble.innerHTML = ""; // repeated question, nothing worth keeping

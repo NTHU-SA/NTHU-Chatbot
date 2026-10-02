@@ -14,7 +14,15 @@ from src.app.auth.dependencies import get_principal
 from src.app.background import BackgroundWrites
 from src.application.models.chat import ConsentRequest, ConsentState, MeResponse
 from src.application.models.identity import CONSENT_TYPES, LiffClientInfo, Principal
+from src.application.models.profile import (
+    MAX_DEPARTMENT_CHARS,
+    MAX_NICKNAME_CHARS,
+    Profile,
+    ProfileUpdate,
+    clean_text,
+)
 from src.application.services.chat_store import ChatStore
+from src.application.services.departments import DepartmentDirectory
 from src.application.services.user_store import UserStore
 from src.core.config import Settings
 
@@ -116,10 +124,77 @@ async def revoke_consent(
     return ConsentState(type=consent_type, version=version, accepted=False)
 
 
+# -- personalisation --
+def _departments(request: Request) -> DepartmentDirectory:
+    return request.app.state.departments
+
+
+@router.get("/profile", response_model=Profile)
+async def get_profile(request: Request, user: Principal = Depends(get_principal)):
+    return await _users(request).get_profile(user.user_id)
+
+
+@router.patch("/profile", response_model=Profile)
+async def update_profile(
+    body: ProfileUpdate, request: Request, user: Principal = Depends(get_principal)
+):
+    """
+    設定頁修改稱呼與系所；空字串代表清除。
+
+    系所會比對清大正式名稱：有多個可能時回 422 `department_ambiguous` 與候選，
+    對不到時回 422 `department_not_found`；官方清單暫時無法取得時才接受原文。
+    """
+    users = _users(request)
+    filled = False
+    if body.nickname is not None:
+        nickname = clean_text(body.nickname, MAX_NICKNAME_CHARS)
+        if nickname:
+            await users.set_preference(user.user_id, "nickname", nickname, "user")
+            filled = True
+        else:
+            await users.delete_preference(user.user_id, "nickname")
+    if body.department is not None:
+        text = clean_text(body.department, MAX_DEPARTMENT_CHARS)
+        if not text:
+            await users.delete_preference(user.user_id, "department")
+        else:
+            directory = _departments(request)
+            name, candidates = await directory.resolve(text)
+            if name is None and candidates:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    {"code": "department_ambiguous", "message": "請選擇正確的系所", "candidates": candidates},
+                )
+            if name is None and await directory.names():
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    {"code": "department_not_found", "message": "找不到這個系所，請從清單選擇"},
+                )
+            await users.set_preference(user.user_id, "department", name or text, "user")
+            filled = True
+    if filled:
+        await users.set_onboarding(user.user_id, "done")
+    elif body.skip_onboarding:
+        await users.set_onboarding(user.user_id, "skipped")
+    return await users.get_profile(user.user_id)
+
+
+@router.delete("/memories/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_memory(memory_id: str, request: Request, user: Principal = Depends(get_principal)):
+    if not await _users(request).delete_memory(user.user_id, memory_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "memory not found")
+
+
+@router.get("/departments", response_model=list[str])
+async def list_departments(request: Request, user: Principal = Depends(get_principal)):
+    """清大學術單位的正式名稱（公開資料），供設定頁自動完成。"""
+    return list(await _departments(request).names())
+
+
 @router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_me(request: Request, user: Principal = Depends(get_principal)):
     """
-    刪除我的所有資料：對話與訊息、偏好、同意紀錄、使用紀錄、外部身分對應與帳號本身。
+    刪除我的所有資料：對話與訊息、稱呼與系所、記憶、同意紀錄、使用紀錄、外部身分對應與帳號本身。
 
     完成後同一個 LINE 帳號再開啟頁面會是全新的使用者（需要重新同意隱私權政策）。
     """

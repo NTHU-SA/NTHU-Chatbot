@@ -23,6 +23,7 @@
       <ul id="sessionList" class="session-list"></ul>
       <p class="sidebar-note">最多保留 50 則對話；新增對話時，最久未更新的對話會被自動刪除。</p>
       <div class="sidebar-section" aria-label="隱私權與資料">
+        <button id="profileBtn" class="side-link" type="button">我的資料（稱呼、系所、記住的事）</button>
         <a class="side-link" href="./privacy.html" target="_blank" rel="noopener">隱私權政策</a>
         <button id="revokeBtn" class="side-link" type="button">撤回同意</button>
         <button id="deleteDataBtn" class="side-link danger" type="button">刪除我的所有資料</button>
@@ -63,7 +64,7 @@
       <ul class="consent-points">
         <li>你的提問會送到 <strong>OpenAI（美國）</strong>產生回答，並查詢清大校園資料服務。</li>
         <li>對話紀錄存在 <strong>Google Cloud（東京）</strong>，只有你看得到；每人最多保留 50 則對話。</li>
-        <li>我們只保存 LINE 顯示名稱、頭像與使用紀錄，不會拿來做廣告或分享給其他人。</li>
+        <li>我們只保存 LINE 顯示名稱、頭像、使用紀錄，以及你選擇提供的稱呼、系所與要本汪記住的事，不會拿來做廣告或分享給其他人。</li>
         <li>你可以隨時在側欄撤回同意，或刪除你的所有資料。</li>
       </ul>
       <p><a href="./privacy.html" target="_blank" rel="noopener">閱讀完整隱私權政策</a></p>
@@ -71,6 +72,34 @@
       <p class="consent-note">不同意的話，仍可以在 LINE 聊天室使用 @ 指令（例如 @公車）。</p>
     </section>
   </div>
+
+  <dialog id="profileDlg" class="dialog profile-dialog" aria-labelledby="profileTitle">
+    <form id="profileForm" method="dialog" novalidate>
+      <h2 id="profileTitle">我的資料</h2>
+      <p id="profileIntro" class="profile-intro" hidden>想讓本汪怎麼稱呼你？讀哪個系？填了之後本汪查課程、公告會更貼心；不想說也可以直接略過。</p>
+      <label class="field">
+        <span>稱呼</span>
+        <input id="nicknameInput" type="text" maxlength="20" autocomplete="nickname" placeholder="例如：小明">
+      </label>
+      <label class="field">
+        <span>系所</span>
+        <input id="departmentInput" type="text" maxlength="40" list="departmentList" autocomplete="off" placeholder="例如：資訊工程學系">
+        <datalist id="departmentList"></datalist>
+      </label>
+      <div id="departmentChoices" class="suggestions" hidden></div>
+      <p id="profileError" class="field-error" role="alert" hidden></p>
+      <section id="memorySection" class="memory-section">
+        <h3>本汪記住的事</h3>
+        <ul id="memoryList" class="memory-list"></ul>
+        <p id="memoryEmpty" class="memory-empty">還沒有。聊天時說「記得我住清齋」，本汪就會記下來。</p>
+      </section>
+      <div class="dialog-actions">
+        <button id="profileSkip" value="skip" class="btn ghost" type="submit">略過</button>
+        <button id="profileClose" value="close" class="btn ghost" type="submit">關閉</button>
+        <button id="profileSave" value="save" class="btn" type="submit">儲存</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="confirmDlg" class="dialog">
     <form method="dialog">

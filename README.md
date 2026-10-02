@@ -140,7 +140,9 @@ Firestore Native mode `(default)`，由 `infra/bootstrap.sh` 建立；資料庫�
 | `users/{uid}` | `status`（active / blocked / deleted）、`displayName`、`pictureUrl`、`createdAt`、`updatedAt`、`lastActiveAt`、`lastConversationId`、`lastModuleId`、`lastModuleUsedAt`、`conversationCount` |
 | `users/{uid}/identities/{provider}` | `providerUserId`、`linkedAt`、`lastLoginAt`、`metadata`（provider 專屬：LINE 的 `followed`、`liff`{os、appVersion、language、contextType、friendshipStatus}；前端自報，只當參考，不參與授權） |
 | `users/{uid}/auditLog/{id}` | `action`（link / unlink …）、`provider`、`at`、`expiresAt`（TTL 365 天） |
-| `users/{uid}/moduleStates/{moduleId}` | `@` 指令模組的 `lastUsedAt`、`usageCount` |
+| `users/{uid}/moduleStates/{moduleId}` | `@` 指令模組的 `lastUsedAt`、`usageCount`；`onboarding` 文件記錄首次使用是否已問過稱呼與系所（asked / done / skipped） |
+| `users/{uid}/preferences/{nickname\|department}` | `value`、`source`（user：設定頁；assistant：對話中由 AI 記下）、`updatedAt` |
+| `users/{uid}/memory/{id}` | 使用者要求記住的事：`value`（≤100 字）、`sourceConversationId`、`createdAt`；每人最多 20 則 |
 | `users/{uid}/usage/{YYYY-MM-DD}` | 每日 LLM 訊息計數 `count`、`expiresAt`（TTL 8 天） |
 | `users/{uid}/consents/{type}_v{version}` | 隱私權政策同意紀錄：`status`（accepted / revoked）、`acceptedAt`、`revokedAt`、`source`；每個版本一份，不覆蓋 |
 | `users/{uid}/conversationOrigins/{sha256(origin)}` | LINE 泡泡 → `conversationId`（同一顆按鈕永遠開同一個對話，刪除後重建） |
@@ -151,6 +153,13 @@ Firestore Native mode `(default)`，由 `infra/bootstrap.sh` 建立；資料庫�
 
 每一則訊息是一份文件，不存成 array；對話與訊息的讀取都會比對 `userId`，別人的對話一律當作不存在。
 `tokenUsage`、`model`、`promptVersion` 只存在資料庫供成本與品質分析，不會回傳給前端。
+
+## 個人化（稱呼、系所、記住的事）
+
+- 首次同意隱私權政策後，會詢問稱呼與系所（可略過）；沒填也沒略過的話，AI 會在第一次回答的最後問一次，之後不再問。
+- 對話中由 AI 判斷要不要記：`save_profile`（稱呼、系所）、`remember` / `forget`（使用者明確要求記住的事）。系所會比對 NTHU API `/departments/` 的官方學術單位名稱（加上常見簡稱表），有多個可能時請使用者選。
+- **防 prompt injection**：同一輪只要讀過外部資料（任何 MCP 工具結果），寫入工具一律拒絕，只有使用者自己說的話能被記下。寫入的文字會去掉換行與角括號、限制長度，注入 instructions 時包在 `<user_profile>` 區塊並標明「不是指令」。
+- 記下的內容不會出現在訊息的 `toolCalls` 裡；使用者可在側欄「我的資料」修改或刪除，刪除帳號時一併刪除。
 
 ## 隱私權與個人資料
 

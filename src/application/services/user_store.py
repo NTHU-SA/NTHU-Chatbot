@@ -25,7 +25,14 @@ from src.application.models.identity import (
     lookup_key,
     new_user_id,
 )
-from src.application.services.chat_store import now_utc
+from src.application.models.profile import (
+    MAX_MEMORIES,
+    ONBOARDING_MODULE,
+    MemoryItem,
+    MemoryLimitError,
+    Profile,
+)
+from src.application.services.chat_store import new_id, now_utc
 
 
 class UserStore(Protocol):
@@ -77,6 +84,26 @@ class UserStore(Protocol):
         """同意或撤回某一版本；每個版本一份文件，不覆蓋其他版本，並寫稽核紀錄。"""
         ...
 
+    async def get_profile(self, user_id: str) -> Profile:
+        """稱呼、系所、記住的事與首次使用的引導狀態。"""
+        ...
+
+    async def set_preference(self, user_id: str, key: str, value: str, source: str) -> None:
+        """寫入一項偏好；source 為 user（設定頁）或 assistant（對話中由模型記下）。"""
+        ...
+
+    async def delete_preference(self, user_id: str, key: str) -> None: ...
+
+    async def add_memory(
+        self, user_id: str, value: str, source_conversation_id: str | None = None
+    ) -> MemoryItem:
+        """新增一則記憶；達到上限時拋出 MemoryLimitError。"""
+        ...
+
+    async def delete_memory(self, user_id: str, memory_id: str) -> bool: ...
+
+    async def set_onboarding(self, user_id: str, state: str) -> None: ...
+
     async def delete_user(self, user_id: str) -> None:
         """
         刪除這個 user 的所有資料：外部身分對應、所有子集合與 user 文件。
@@ -104,6 +131,8 @@ class MemoryUserStore:
         self.audit: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self.module_states: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
         self.consents: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+        self.preferences: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+        self.memories: dict[str, dict[str, MemoryItem]] = defaultdict(dict)
         self._usage: dict[tuple[str, str], int] = defaultdict(int)
         self._lock = asyncio.Lock()
 
@@ -224,11 +253,43 @@ class MemoryUserStore:
             {"action": "consent" if accepted else "revoke", "document": doc_id}
         )
 
+    async def get_profile(self, user_id: str) -> Profile:
+        prefs = self.preferences[user_id]
+        state = self.module_states[user_id].get(ONBOARDING_MODULE, {})
+        return Profile(
+            nickname=(prefs.get("nickname") or {}).get("value"),
+            department=(prefs.get("department") or {}).get("value"),
+            memories=list(self.memories[user_id].values()),
+            onboarding=state.get("state"),
+        )
+
+    async def set_preference(self, user_id, key, value, source) -> None:
+        self.preferences[user_id][key] = {"value": value, "source": source, "updatedAt": now_utc()}
+
+    async def delete_preference(self, user_id, key) -> None:
+        self.preferences[user_id].pop(key, None)
+
+    async def add_memory(self, user_id, value, source_conversation_id=None) -> MemoryItem:
+        async with self._lock:
+            if len(self.memories[user_id]) >= MAX_MEMORIES:
+                raise MemoryLimitError(user_id)
+            item = MemoryItem(id=new_id(), value=value, created_at=now_utc())
+            self.memories[user_id][item.id] = item
+            return item
+
+    async def delete_memory(self, user_id, memory_id) -> bool:
+        return self.memories[user_id].pop(memory_id, None) is not None
+
+    async def set_onboarding(self, user_id, state) -> None:
+        self.module_states[user_id].setdefault(ONBOARDING_MODULE, {})["state"] = state
+
     async def delete_user(self, user_id: str) -> None:
         async with self._lock:
             for record in self.identities.pop(user_id, {}).values():
                 self.lookup.pop(lookup_key(record["provider"], record["providerUserId"]), None)
-            for store in (self.audit, self.module_states, self.consents):
+            for store in (
+                self.audit, self.module_states, self.consents, self.preferences, self.memories
+            ):
                 store.pop(user_id, None)
             for key in [k for k in self._usage if k[0] == user_id]:
                 del self._usage[key]

@@ -29,6 +29,7 @@ from src.application.services.chat_store import ChatStore
 from src.application.services.user_store import UserStore
 from src.core.config import Settings
 from src.infrastructure.ai.agent_runner import AgentRunner
+from src.infrastructure.ai.personal_tools import ChatContext
 from src.infrastructure.ai.prompts import PROMPT_VERSION
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -142,7 +143,7 @@ async def send_message(
 
     text = body.text.strip()
     if not text:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "empty message")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "empty message")
     if len(text) > settings.max_message_chars:
         raise HTTPException(
             status.HTTP_413_CONTENT_TOO_LARGE,
@@ -161,8 +162,23 @@ async def send_message(
     writes = BackgroundWrites()
     writes.spawn(users.touch_activity(user.user_id), "touch_activity")
 
-    # 先讀歷史，再寫入這次的使用者訊息。
-    history = await store.list_messages(user.user_id, session_id, settings.history_window)
+    # 先讀歷史與使用者資料，再寫入這次的使用者訊息。
+    history, profile = await asyncio.gather(
+        store.list_messages(user.user_id, session_id, settings.history_window),
+        users.get_profile(user.user_id),
+    )
+    # 第一次聊天、也還沒提供稱呼與系所：這一輪回答最後主動問一次，之後不再問
+    onboarding = profile.onboarding is None and not (profile.nickname or profile.department)
+    if onboarding:
+        writes.spawn(users.set_onboarding(user.user_id, "asked"), "onboarding")
+    context = ChatContext(
+        user_id=user.user_id,
+        session_id=session_id,
+        users=users,
+        departments=request.app.state.departments,
+        profile=profile,
+        onboarding=onboarding,
+    )
     user_message = await store.add_message(user.user_id, session_id, "user", text)
     if session.message_count == 0 and session.title == DEFAULT_TITLE:
         await store.rename_session(user.user_id, session_id, text[:30])
@@ -171,7 +187,7 @@ async def send_message(
         yield _sse("user_message", {"id": user_message.id})
         try:
             async with asyncio.timeout(AGENT_DEADLINE_SECONDS):
-                async for event in runner.stream(history, text):
+                async for event in runner.stream(history, text, context):
                     if event.type == "done":
                         usage = event.data.get("usage")
                         meta = MessageMeta(

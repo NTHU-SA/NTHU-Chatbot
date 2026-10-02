@@ -26,6 +26,7 @@ export const el = {
   consentAccept: $("consentAccept"),
   revokeBtn: $("revokeBtn"),
   deleteDataBtn: $("deleteDataBtn"),
+  profileBtn: $("profileBtn"),
   tplMessage: $("tplMessage"),
 };
 

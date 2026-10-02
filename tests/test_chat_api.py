@@ -342,7 +342,7 @@ def test_oversized_agent_output_is_bounded_before_persistence(client, chat_app):
     output = "超長回覆" * 20
 
     class OversizedRunner(FakeRunner):
-        async def stream(self, history, user_text):
+        async def stream(self, history, user_text, context=None):
             yield AgentEvent("done", {"content": output, "tool_calls": []})
 
     chat_app.state.agent_runner = OversizedRunner()

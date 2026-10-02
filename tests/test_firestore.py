@@ -442,3 +442,40 @@ async def test_stale_lookup_after_interrupted_deletion_creates_a_new_user(db, us
     assert created and again != user_id
     lookup = await doc(db, f"identityLookup/{lookup_key('line', who.provider_user_id)}")
     assert lookup["userId"] == again
+
+
+# personalisation
+@pytest.mark.firestore
+async def test_profile_preferences_memory_and_onboarding(db, users):
+    from src.application.models.profile import MAX_MEMORIES, MemoryLimitError
+
+    user_id = await new_user(users)
+    assert (await users.get_profile(user_id)).is_empty
+    await users.set_preference(user_id, "nickname", "小明", "assistant")
+    await users.set_preference(user_id, "department", "資訊工程學系", "user")
+    first = await users.add_memory(user_id, "住清齋", "conv-1")
+    await users.add_memory(user_id, "大二")
+    await users.set_onboarding(user_id, "asked")
+
+    profile = await users.get_profile(user_id)
+    assert (profile.nickname, profile.department, profile.onboarding) == ("小明", "資訊工程學系", "asked")
+    assert [m.value for m in profile.memories] == ["住清齋", "大二"]
+    stored = await doc(db, f"users/{user_id}/preferences/nickname")
+    assert stored["source"] == "assistant" and isinstance(stored["updatedAt"], datetime)
+    memory = await doc(db, f"users/{user_id}/memory/{first.id}")
+    assert memory["sourceConversationId"] == "conv-1" and memory["type"] == "fact"
+
+    assert await users.delete_memory(user_id, first.id)
+    assert not await users.delete_memory(user_id, first.id)
+    await users.delete_preference(user_id, "nickname")
+    profile = await users.get_profile(user_id)
+    assert profile.nickname is None and [m.value for m in profile.memories] == ["大二"]
+
+    for index in range(MAX_MEMORIES - 1):
+        await users.add_memory(user_id, f"m{index}")
+    with pytest.raises(MemoryLimitError):
+        await users.add_memory(user_id, "too many")
+
+    await users.delete_user(user_id)
+    for sub in ("preferences", "memory"):
+        assert [d async for d in db.collection(f"users/{user_id}/{sub}").stream()] == []
