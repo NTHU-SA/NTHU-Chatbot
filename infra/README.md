@@ -5,7 +5,7 @@
 | | staging | prod |
 |---|---|---|
 | 設定檔 | `infra/environments/staging.conf` | `infra/environments/prod.conf` |
-| GCP 專案 | `nthusa-chatbot` | 另開（填進 `prod.env`） |
+| GCP 專案 | `nthusa-chatbot` | 另開（填進 `prod.conf`） |
 | 部署來源 | `NTHU-SA/NTHU-Chatbot` 的 `dev` | `NTHU-SA/NTHU-Chatbot` 的 `main` |
 | Cloud Run | `nthu-chatbot-staging` | `nthu-chatbot` |
 | LINE | 測試用 Provider 的頻道 | 正式 Provider（Messaging API 與 LINE Login 必須在**同一個 Provider**） |
@@ -14,6 +14,18 @@
 
 兩個環境共用 repo 根目錄的 `cloudbuild.yaml`，差別只在 trigger 的 substitutions。
 前端由 CI（`.github/workflows/ci.yml` 的 `deploy-frontend`）部署到 Firebase Hosting；`infra/build_frontend.py` 依環境設定檔產生 `config.json`（只有公開的 LIFF ID 與 API 網址）和 CSP（`connect-src` 只允許該環境的 API）。
+
+## LINE 頻道設定（不寫在 repo）
+
+LINE 的 ID 和金鑰都依環境注入，repo 裡的設定檔不含任何 LINE 頻道資訊：
+
+| 值 | 放在哪裡 | 怎麼設定 |
+|---|---|---|
+| `LINE_LOGIN_CHANNEL_ID`、`LIFF_ID`（後端） | 該環境 Cloud Run 的環境變數 | 第一次建立或更換頻道時：`LINE_LOGIN_CHANNEL_ID=... LIFF_ID=... bash infra/bootstrap.sh infra/environments/<env>.conf`；之後重跑 bootstrap 不帶這兩個變數會沿用服務上的值 |
+| `LIFF_ID`（前端 `config.json`） | GitHub repo variable `LIFF_ID_STAGING` / `LIFF_ID_PROD` | `gh variable set LIFF_ID_<ENV> -R NTHU-SA/NTHU-Chatbot --body <LIFF ID>`；沒設定時 CI 跳過前端部署。手動部署（`deploy_frontend.sh`）沒給 `LIFF_ID` 時讀 Cloud Run 上的值 |
+| channel secret、access token | 該環境專案的 Secret Manager | 用 stdin 加入（見下方「加入 Secret 值」） |
+
+更換頻道時後端與前端要一起換，否則 LIFF 的 id_token 會因 channel ID 不符被拒絕。
 
 ## 腳本
 
@@ -73,12 +85,12 @@ gcloud secrets versions disable <舊版本號> --secret=<name> --project=<PROJEC
 ## 建立 prod
 
 1. 建立 GCP 專案並連結帳單帳戶（Console → 建立專案），把專案 ID 填進 `infra/environments/prod.conf`。
-2. 在 LINE Developers 的**正式 Provider** 建立 Messaging API 與 LINE Login channel；LINE Login 底下建立 LIFF app。把 channel ID、LIFF ID 填進 `prod.env`。
+2. 在 LINE Developers 的**正式 Provider** 建立 Messaging API 與 LINE Login channel；LINE Login 底下建立 LIFF app。記下 channel ID 與 LIFF ID（不寫進 repo，見「LINE 頻道設定」）。
 3. Console → Cloud Build → Repositories：連結 `NTHU-SA/NTHU-Chatbot`（需要 org 管理者同意安裝 Cloud Build GitHub App）。
-4. `bash infra/bootstrap.sh infra/environments/prod.conf`：第一次會停在 Secret 沒有值的那一步。
-5. 依上一節加入三個 Secret 值，再跑一次 bootstrap。
+4. `LINE_LOGIN_CHANNEL_ID=<正式 Login channel ID> LIFF_ID=<正式 LIFF ID> bash infra/bootstrap.sh infra/environments/prod.conf`：第一次會停在 Secret 沒有值的那一步。
+5. 依上一節加入三個 Secret 值，再跑一次 bootstrap（同樣帶上兩個 LINE ID）。
 6. `ALERT_EMAIL=... bash infra/monitoring.sh infra/environments/prod.conf`，並把外部 ping 服務指向 prod 的 `/ping`
-7. 把 bootstrap 印出的服務網址填進 `prod.conf` 的 `API_ORIGIN`，`HOSTING_SITE` 填網站 ID；在 GitHub repo 設定印出的兩個 variables（`..._PROD`）。
+7. 把 bootstrap 印出的服務網址填進 `prod.conf` 的 `API_ORIGIN`，`HOSTING_SITE` 填網站 ID；在 GitHub repo 設定印出的兩個 variables（`..._PROD`），以及 `LIFF_ID_PROD`。
 8. LINE Developers：Webhook URL 設為 `<服務網址>/callback`、開啟 Use webhook；LIFF Endpoint URL 設為 `https://<HOSTING_SITE>.web.app/`。
 9. 把 `main` 合併一次，觸發 API 與前端的第一次部署，再用 `/ping` 和 LINE 實測。
 

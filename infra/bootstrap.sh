@@ -4,6 +4,9 @@
 # 用法：
 #   bash infra/bootstrap.sh infra/environments/staging.conf
 #   bash infra/bootstrap.sh infra/environments/prod.conf
+#   LINE_LOGIN_CHANNEL_ID=... LIFF_ID=... bash infra/bootstrap.sh ...   # 第一次建立或更換 LINE 頻道時
+#
+# LINE 的 ID 不寫在 repo：由執行者以環境變數注入；沒給時沿用 Cloud Run 服務上現有的值。
 #
 # 這支腳本不處理任何機密值：Secret 只建立「容器」，值由人另外用 stdin 加入（見 infra/README.md）。
 # 刪除類操作（服務、資料庫、舊 trigger）一律不做，只印出建議指令。
@@ -15,7 +18,7 @@ ENV_FILE="${1:?usage: bash infra/bootstrap.sh infra/environments/<name>.conf}"
 source "$ENV_FILE"
 
 : "${PROJECT_ID:?}" "${REGION:?}" "${SERVICE:?}" "${GITHUB_OWNER:?}" "${GITHUB_REPO:?}" "${BRANCH_REGEX:?}"
-: "${LINE_LOGIN_CHANNEL_ID:?}" "${LIFF_ID:?}" "${OPENAI_MODEL:?}" "${MAX_INSTANCES:?}"
+: "${OPENAI_MODEL:?}" "${MAX_INSTANCES:?}"
 : "${HOSTING_SITE:?}" "${DEPLOY_REF:?}"
 if grep -q "REPLACE_ME" "$ENV_FILE"; then
   echo "${ENV_FILE} 還有 REPLACE_ME 沒填" >&2
@@ -43,6 +46,21 @@ HOSTING_SA="${HOSTING_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 G=(gcloud --project="$PROJECT_ID" --quiet)
 
 step() { printf '\n==> %s\n' "$*"; }
+
+# 服務上目前的環境變數值（服務不存在時為空）
+service_env() {
+  "${G[@]}" run services describe "$SERVICE" --region="$REGION" --format=json 2>/dev/null \
+    | "$PYTHON" -c 'import json, sys
+raw = sys.stdin.read()
+env = json.loads(raw)["spec"]["template"]["spec"]["containers"][0].get("env", []) if raw.strip() else []
+print(next((e.get("value", "") for e in env if e["name"] == sys.argv[1]), ""))' "$1" | tr -d '\r' || true
+}
+LINE_LOGIN_CHANNEL_ID="${LINE_LOGIN_CHANNEL_ID:-$(service_env LINE_LOGIN_CHANNEL_ID)}"
+LIFF_ID="${LIFF_ID:-$(service_env LIFF_ID)}"
+if [[ -z "$LINE_LOGIN_CHANNEL_ID" || -z "$LIFF_ID" ]]; then
+  echo "第一次建立服務：請以環境變數提供 LINE_LOGIN_CHANNEL_ID 與 LIFF_ID" >&2
+  exit 1
+fi
 
 step "啟用 API"
 "${G[@]}" services enable \
@@ -269,4 +287,5 @@ echo "conf 的 API_ORIGIN 應為：${url}（staging 可用 https://${SERVICE}-${
 echo "GitHub repo variables（Settings → Secrets and variables → Actions → Variables，不是機密）："
 echo "  GCP_WIF_PROVIDER_<ENV>=${WIF_PROVIDER_NAME}"
 echo "  GCP_HOSTING_SA_<ENV>=${HOSTING_SA}"
+echo "  LIFF_ID_<ENV>=${LIFF_ID}"
 echo "監測與告警：ALERT_EMAIL=you@example.com bash infra/monitoring.sh ${ENV_FILE}"

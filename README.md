@@ -109,7 +109,7 @@ uv run python -m http.server 5500 --directory frontend
 | 類別 | 變數 |
 | --- | --- |
 | 機密（Secret Manager） | `LINE_CHANNEL_SECRET`、`LINE_CHANNEL_ACCESS_TOKEN`、`OPENAI_API_KEY` |
-| LINE Login / LIFF | `LINE_LOGIN_CHANNEL_ID`、`LIFF_ID` |
+| LINE Login / LIFF | `LINE_LOGIN_CHANNEL_ID`、`LIFF_ID`（部署環境不寫在 repo：Cloud Run 環境變數與 repo variable `LIFF_ID_<ENV>`，見 `infra/README.md`） |
 | 前端 | `CORS_ALLOWED_ORIGINS`（逗號分隔；只接受 https 網域，本機可用 `http://localhost:<port>`） |
 | LLM | `OPENAI_MODEL`、`OPENAI_BASE_URL`（選填，任何 OpenAI 相容端點）、`OPENAI_USE_RESPONSES_API`、`REASONING_SUMMARY`、`MAX_OUTPUT_TOKENS`、`MAX_OUTPUT_CHARS` |
 | MCP | `MCP_SERVER_URL`、`MCP_ALLOWED_TOOLS`（逗號分隔）、`MCP_TIMEOUT_SECONDS` |
@@ -130,7 +130,7 @@ uv run python -m http.server 5500 --directory frontend
    Scopes 勾選 `profile` 與 **`openid`**（缺少就拿不到 id_token）。LIFF ID → `LIFF_ID`。
    在 LINE 以外的瀏覽器測試時，要把自己加入 Login channel 的 tester 或發佈 channel。
 
-Rich Menu 不在啟動時建立；更新選單請執行 `python -m scripts.rich_menu`（需要 `.env` 的 `LINE_CHANNEL_ACCESS_TOKEN` 與 `LIFF_ID`）。
+Rich Menu 不在啟動時建立；更新選單請執行 `uv run python -m scripts.rich_menu`，需要該環境的 `LINE_CHANNEL_ACCESS_TOKEN` 與 `LIFF_ID`（環境變數或 `.env`）。
 這會取代現有選單，執行前確認 `data/richmenu/menu-main.png`、`data/richmenu/menu-more.png` 都正確。
 
 ## 身分與資料

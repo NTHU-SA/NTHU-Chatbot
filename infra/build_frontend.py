@@ -1,19 +1,21 @@
 """
 產生某個環境的 Firebase Hosting 部署內容。
 
-    python infra/build_frontend.py infra/environments/staging.conf
+    LIFF_ID=<該環境的 LIFF ID> python infra/build_frontend.py infra/environments/staging.conf
 
 輸出到 `build/frontend-<環境>/`：
 - `public/`：`frontend/` 的複本，加上該環境的 `config.json`（只含公開的 LIFF ID、API 網址與隱私權政策版本）；
   `privacy.html` 顯示的版本換成 `src/core/privacy.py` 的版本（與後端同一個來源）
 - `firebase.json`：Hosting 設定與安全標頭；CSP 的 connect-src 只列出這個環境的 API
 
+LIFF ID 不寫在 repo：從環境變數 `LIFF_ID` 讀取（CI 用 GitHub repo variable `LIFF_ID_<ENV>` 注入）。
 不讀也不寫任何機密。
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import runpy
 import shutil
@@ -24,7 +26,8 @@ ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
 POLICY_SOURCE = ROOT / "src" / "core" / "privacy.py"
 POLICY_MARKER = re.compile(r"(<span data-policy-version>)[^<]*(</span>)")
-REQUIRED = ("PROJECT_ID", "LIFF_ID", "API_ORIGIN")
+REQUIRED = ("PROJECT_ID", "API_ORIGIN")
+LIFF_ID_PATTERN = re.compile(r"^\d+-[A-Za-z0-9]+$")
 ORIGIN = re.compile(r"^https://[a-z0-9-]+(\.[a-z0-9-]+)+$")
 
 
@@ -82,6 +85,13 @@ def hosting_config(conf: dict[str, str]) -> dict:
     }
 
 
+def liff_id() -> str:
+    value = os.environ.get("LIFF_ID", "").strip()
+    if not LIFF_ID_PATTERN.match(value):
+        raise SystemExit("LIFF_ID environment variable is missing or malformed")
+    return value
+
+
 def policy_version() -> str:
     """後端要求同意的版本（src/core/privacy.py）。只執行那個沒有任何 import 的小檔案。"""
     return str(runpy.run_path(str(POLICY_SOURCE))["PRIVACY_POLICY_VERSION"])
@@ -103,7 +113,7 @@ def build(conf_path: Path) -> Path:
         shutil.rmtree(out)
     shutil.copytree(FRONTEND, out / "public", ignore=shutil.ignore_patterns("config*.json"))
     public_config = {
-        "liffId": conf["LIFF_ID"],
+        "liffId": liff_id(),
         "apiBase": conf["API_ORIGIN"],
         "privacyPolicyVersion": version,
     }
