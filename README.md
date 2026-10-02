@@ -1,7 +1,7 @@
 # NTHU-LINE-Bot
 
 清華校園 LINE Bot「狗狗情報員」，使用 FastAPI、LINE Messaging API、LIFF、OpenAI Agents SDK、NTHU Data MCP 與 Firebase Firestore。
-應用部署於 Cloud Run，不需要叢集或常駐背景 worker。
+API 部署於 Cloud Run，LIFF 前端部署於 Firebase Hosting，不需要叢集或常駐背景 worker。
 
 ## 架構
 
@@ -9,14 +9,18 @@
 LINE 聊天室 ──webhook──▶ /callback ──▶ @ 指令模組（公車/餐廳/圖書館/地圖/公告…）→ NTHU REST API v2
                                    └─ 其他文字 → 回一則按鈕，開啟 LIFF 並帶入問題（按鈕綁定該對話，重新點擊回到同一串對話）
 
-LIFF 網頁 (/liff/) ──Bearer id_token──▶ /api/* ──▶ AgentRunner（OpenAI Agents SDK）
-                                                 ├─ MCP: https://api.nthusa.tw/mcp（9 個唯讀工具）
-                                                 └─ Firestore: users/{uid}/sessions/{sid}/messages
+LIFF 網頁（Firebase Hosting：frontend/）
+   │  CORS · Bearer id_token · X-Auth-Provider: line
+   ▼
+Cloud Run /api/* ──▶ AgentRunner（OpenAI Agents SDK）
+                   ├─ MCP: https://api.nthusa.tw/mcp（9 個唯讀工具）
+                   └─ Firestore: users / conversations / messages
                        ◀── SSE: user_message / tool_call_start / tool_call_end / token / done / error
 ```
 
 - **聊天室只做「reply token 一定來得及」的事**；AI 對話在 LIFF 網頁進行（多 session、串流、即時顯示正在使用哪個工具）。
-- 身分：LIFF `id_token` → 後端向 `https://api.line.me/oauth2/v2.1/verify` 驗證 → `sub` 即 userId。Messaging API 與 LINE Login channel 必須在同一 Provider 下，userId 才相同。
+- 前後端分離：頁面由 Firebase Hosting 提供（CDN、頁面的 CSP 在 Hosting 設定），直接以 CORS 呼叫 Cloud Run。不用 Hosting rewrite 轉到 Cloud Run，因為 rewrite 有 60 秒上限，會切斷超過 60 秒的 SSE 回覆。API 只允許 `CORS_ALLOWED_ORIGINS` 列出的網域，不使用 cookie。
+- 身分：LIFF `id_token` → 後端向 `https://api.line.me/oauth2/v2.1/verify` 驗證 → 對應到內部 user（見「Firebase 資料」）。Messaging API 與 LINE Login channel 必須在同一 Provider 下，userId 才相同。
 - LLM 可接任何 OpenAI 相容端點（`OPENAI_BASE_URL`），預設 `gpt-5.6-luna`；MCP 工具由後端呼叫，白名單 `MCP_ALLOWED_TOOLS`。
 - 群組內只使用 `@` 指令；其他文字會回帶問題的 LIFF 按鈕，不讀取私人對話。
 - 輸入「說明」、「help」或 `@說明` 會回使用說明泡泡（指令清單依 `bot_config.yaml` 自動產生）。
@@ -36,8 +40,8 @@ src/app/__init__.py               create_app()、lifespan 組裝 app.state
 src/app/routes/callback.py        LINE webhook
 src/app/routes/chat.py            /api/*（LIFF 對話，SSE）
 src/app/auth/                     登入驗證（Authenticator）、外部身分 → 內部 user、限流
-src/app/middleware.py             安全標頭與 CSP
-src/app/static/liff/              LIFF 前端（原生 JS）
+src/app/middleware.py             API 的安全標頭與 CORS
+frontend/                         LIFF 前端（原生 JS ES modules，無建置工具；Firebase Hosting）
 src/app/handlers/、src/modules/   聊天室內 @ 指令
 src/application/                  資料模型；ChatStore / UserStore / ModuleRegistry 介面與記憶體實作
 src/infrastructure/ai/            AgentRunner、狗狗情報員 prompt
@@ -73,7 +77,7 @@ Firestore 憑證不是環境變數：Cloud Run 用執行服務帳號的 ADC，�
 
 1. **Messaging API channel**：Channel secret → `LINE_CHANNEL_SECRET`；長期 Channel access token → `LINE_CHANNEL_ACCESS_TOKEN`。
    Webhook URL 設為 `https://YOUR_SERVICE_URL/callback`，啟用 Webhook，停用衝突的自動回應與歡迎訊息。
-2. **LINE Login channel**：Channel ID → `LINE_LOGIN_CHANNEL_ID`。新增 **LIFF app**：Endpoint URL `https://YOUR_SERVICE_URL/liff/`、Size `Full`、
+2. **LINE Login channel**：Channel ID → `LINE_LOGIN_CHANNEL_ID`。新增 **LIFF app**：Endpoint URL `https://<HOSTING_SITE>.web.app/`（Firebase Hosting）、Size `Full`、
    Scopes 勾選 `profile` 與 **`openid`**（缺少就拿不到 id_token）。LIFF ID → `LIFF_ID`。
    在 LINE 以外的瀏覽器測試時，需把自己加入 Login channel 的 tester 或發佈 channel。
 
@@ -95,8 +99,16 @@ gcloud auth application-default login
 .\.venv\Scripts\python.exe main.py
 ```
 
-預設網址為 `http://localhost:5000`，健康檢查為 `/ping`，`GET /api/config` 應只回傳 `liff_id`。
-LINE 需要公開 HTTPS 網址：`ngrok http 5000` 後，把 ngrok 網址填到 Webhook URL（`/callback`）與 LIFF Endpoint URL（`/liff/`）。
+API 預設在 `http://localhost:5000`，健康檢查為 `/ping`。
+
+前端是純靜態檔，可以用任何靜態伺服器開：
+
+```powershell
+Copy-Item frontend\config.example.json frontend\config.json   # 填入 LIFF ID 與 API 網址（git-ignored）
+.\.venv\Scripts\python.exe -m http.server 5500 --directory frontend
+```
+
+並在 `.env` 設 `CORS_ALLOWED_ORIGINS=http://localhost:5500`。在 LINE 裡測試需要公開的 HTTPS 網址：用 `ngrok http 5000` 取得 API 網址填到 Webhook URL（`/callback`）與 `config.json` 的 `apiBase`；LIFF Endpoint URL 則要指向能公開存取的前端（例如另一個 ngrok 指向 5500，或直接部署到 staging Hosting）。
 
 ## Firebase 資料
 
@@ -156,7 +168,8 @@ ALERT_EMAIL=you@example.com bash infra/monitoring.sh infra/environments/prod.con
 - `--timeout=180` 必須大於 LIFF 對話的 120 秒 agent 上限（SSE 長連線）；使用非官方端點時再加 `OPENAI_BASE_URL`。
 - 執行期 SA 透過 ADC 存取 Firestore，不使用 JSON 私鑰。不得在 Cloud Run 設定 `FIRESTORE_EMULATOR_HOST`。更新 Secret 後要部署新 revision 才會生效。
 - Cloud Run 上的 log 是帶 `severity` 的 JSON（見 `log.py`），可以在 Logs Explorer 用 `severity>=ERROR` 篩選。
-- 部署後把服務網址填進 LINE Webhook（`/callback`），再驗證 `/ping`、`/api/config`、LINE Verify、指令查詢，以及聊天室提問 → 開啟 LIFF → 串流回覆。
+- 前端：push 到 `dev` / `main` 且測試通過後，CI 以 Workload Identity Federation 部署到 Firebase Hosting（`infra/build_frontend.py` 依環境產生 `config.json` 與 CSP）；手動部署用 `bash infra/deploy_frontend.sh infra/environments/<env>.conf`。
+- 部署後把 API 網址填進 LINE Webhook（`/callback`）、Hosting 網址填進 LIFF Endpoint URL，再驗證 `/ping`、LINE Verify、指令查詢，以及聊天室提問 → 開啟 LIFF → 串流回覆。
 
 LIFF 對話單次最多 `MAX_AGENT_TURNS` 回合、120 秒逾時、每人每日 `DAILY_MESSAGE_LIMIT` 則；單一實例另有突發限流。
 `RateLimiter`、id_token 快取與 MCP 連線都是單一實例狀態；每日額度存在 Firestore，跨實例仍正確。
