@@ -65,9 +65,22 @@ class SendMessageRequest(BaseModel):
     text: str = Field(min_length=1)
 
 
+class ConsentState(BaseModel):
+    type: str
+    version: str
+    accepted: bool
+
+
+class ConsentRequest(BaseModel):
+    """同意時必須帶上目前的版本，避免使用者同意的是畫面上已過期的版本。"""
+
+    version: str = Field(min_length=1, max_length=20)
+
+
 class MeResponse(BaseModel):
-    """不回傳任何 ID（內部或外部）；前端只需要顯示用資料。"""
+    """不回傳任何 ID（內部或外部）；前端只需要顯示用資料與是否已同意目前的隱私權政策。"""
 
     display_name: str | None
     picture_url: str | None
     liff_id: str
+    consent: ConsentState

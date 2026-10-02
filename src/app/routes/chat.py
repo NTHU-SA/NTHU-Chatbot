@@ -7,15 +7,15 @@ import json
 import time
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 from loguru import logger
 
 from src.app.auth.dependencies import get_principal
 from src.app.background import BackgroundWrites
+from src.app.routes.account import require_consent
 from src.application.models.chat import (
     CreateSessionRequest,
-    MeResponse,
     Message,
     MessageMeta,
     RenameSessionRequest,
@@ -24,7 +24,7 @@ from src.application.models.chat import (
     TokenUsage,
     ToolCall,
 )
-from src.application.models.identity import LiffClientInfo, Principal
+from src.application.models.identity import Principal
 from src.application.services.chat_store import ChatStore
 from src.application.services.user_store import UserStore
 from src.core.config import Settings
@@ -63,41 +63,6 @@ async def _owned_session(store: ChatStore, user: Principal, session_id: str) -> 
     if session is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "session not found")
     return session
-
-
-async def _me(
-    request: Request, user: Principal, client: LiffClientInfo | None
-) -> MeResponse:
-    settings = _settings(request)
-    metadata = {"liff": client.as_metadata(settings.liff_id)} if client else None
-    writes = BackgroundWrites()
-    writes.spawn(_users(request).record_login(user, metadata), "record_login")
-    response = MeResponse(
-        display_name=user.display_name,
-        picture_url=user.picture_url,
-        liff_id=settings.liff_id,
-    )
-    await writes.drain()
-    return response
-
-
-@router.get("/me", response_model=MeResponse)
-async def me(request: Request, user: Principal = Depends(get_principal)):
-    return await _me(request, user, None)
-
-
-@router.post("/me", response_model=MeResponse)
-async def me_with_client(
-    request: Request,
-    client: LiffClientInfo = Body(default_factory=LiffClientInfo),
-    user: Principal = Depends(get_principal),
-):
-    """
-    LIFF 頁面開啟時呼叫，順帶回報 LIFF 執行環境。
-
-    這些資訊是前端自報的，只存成 `identities/line.metadata.liff`，不參與任何授權判斷。
-    """
-    return await _me(request, user, client)
 
 
 @router.get("/sessions", response_model=list[Session])
@@ -185,6 +150,8 @@ async def send_message(
         )
 
     session = await _owned_session(store, user, session_id)
+    # 訊息會交給 LLM 處理：必須先同意目前版本的隱私權政策
+    await require_consent(request, user)
     if not await users.consume_daily_quota(user.user_id, settings.daily_message_limit):
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS, "今日對話額度已用完，明天再來吧。"

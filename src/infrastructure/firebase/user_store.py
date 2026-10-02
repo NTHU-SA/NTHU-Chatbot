@@ -11,6 +11,7 @@ Firestore 使用者與外部身分儲存。
   users/{uid}/auditLog/{id}                 action / provider / at / expiresAt（TTL）
   users/{uid}/moduleStates/{moduleId}       lastUsedAt / usageCount / updatedAt
   users/{uid}/usage/{YYYY-MM-DD}            count / expiresAt（TTL）
+  users/{uid}/consents/{type}_v{version}    type / version / status / acceptedAt / revokedAt / source
 
 瀏覽器永遠不直接碰 Firestore（rules 全部拒絕），這裡以 Admin SDK / ADC 存取。
 """
@@ -19,7 +20,12 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from google.api_core.exceptions import AlreadyExists, Conflict
+from google.api_core.exceptions import (
+    AlreadyExists,
+    Conflict,
+    FailedPrecondition,
+    NotFound,
+)
 from google.cloud import firestore
 
 from src.application.models.identity import (
@@ -28,6 +34,7 @@ from src.application.models.identity import (
     LastIdentityError,
     Principal,
     VerifiedIdentity,
+    consent_doc_id,
     lookup_key,
     new_user_id,
 )
@@ -68,13 +75,16 @@ class FirestoreUserStore:
             "metadata": {},
         }
 
-    def _audit_payload(self, action: str, provider: str) -> dict:
-        return {
+    def _audit_payload(self, action: str, provider: str | None = None, **extra) -> dict:
+        payload = {
             "action": action,
-            "provider": provider,
             "at": firestore.SERVER_TIMESTAMP,
             "expiresAt": now_utc() + AUDIT_RETENTION,
+            **extra,
         }
+        if provider is not None:
+            payload["provider"] = provider
+        return payload
 
     # -- resolve --
     async def resolve_or_create(self, identity: VerifiedIdentity) -> tuple[str, bool]:
@@ -82,8 +92,16 @@ class FirestoreUserStore:
         snapshot = await lookup.get()
         if snapshot.exists:
             user_id = snapshot.get("userId")
-            await self._ensure_active(user_id)
-            return user_id, False
+            if await self.get_status(user_id) is not None:
+                await self._ensure_active(user_id)
+                return user_id, False
+            # 指向的 user 已被刪除（刪除流程中斷）：移除過期的 lookup，建立新的 user
+            try:
+                await lookup.delete(
+                    option=self._db.write_option(last_update_time=snapshot.update_time)
+                )
+            except (FailedPrecondition, NotFound):
+                pass
         try:
             return await self._create(identity, lookup)
         except (AlreadyExists, Conflict):
@@ -260,3 +278,49 @@ class FirestoreUserStore:
         )
         snapshot = await reference.get(field_paths=["count"])
         return (snapshot.to_dict() or {}).get("count", 0) <= limit
+
+    # -- consent --
+    async def has_consent(self, user_id: str, consent_type: str, version: str) -> bool:
+        snapshot = await (
+            self._user(user_id)
+            .collection("consents")
+            .document(consent_doc_id(consent_type, version))
+            .get(field_paths=["status"])
+        )
+        return snapshot.exists and (snapshot.to_dict() or {}).get("status") == "accepted"
+
+    async def set_consent(self, user_id, consent_type, version, accepted, source) -> None:
+        doc_id = consent_doc_id(consent_type, version)
+        payload = {
+            "type": consent_type,
+            "version": version,
+            "status": "accepted" if accepted else "revoked",
+            "source": source,
+            "acceptedAt" if accepted else "revokedAt": firestore.SERVER_TIMESTAMP,
+        }
+        batch = self._db.batch()
+        batch.set(self._user(user_id).collection("consents").document(doc_id), payload, merge=True)
+        batch.create(
+            self._audit(user_id),
+            self._audit_payload("consent" if accepted else "revoke", document=doc_id),
+        )
+        await batch.commit()
+
+    # -- deletion --
+    async def delete_user(self, user_id: str) -> None:
+        """
+        刪除 user 的所有資料。
+
+        1. 先標記 `status=deleted`：其他實例的狀態快取過期後立刻擋下這個帳號；
+        2. 刪除外部身分的 lookup：同一個 LINE 帳號之後登入會是全新的 user；
+        3. 遞迴刪除 user 文件與所有子集合（identities、consents、auditLog、usage、moduleStates…）。
+        """
+        user = self._user(user_id)
+        await user.set({"status": "deleted", "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True)
+        batch = self._db.batch()
+        async for doc in user.collection("identities").stream():
+            data = doc.to_dict() or {}
+            if data.get("provider") and data.get("providerUserId"):
+                batch.delete(self._lookup(data["provider"], data["providerUserId"]))
+        await batch.commit()
+        await self._db.recursive_delete(user)

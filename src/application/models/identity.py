@@ -62,6 +62,14 @@ class LastIdentityError(Exception):
     """不能解除最後一個登入方式，否則帳號將無法再登入。"""
 
 
+# 需要使用者同意的文件；文件 ID 為 `{type}_v{version}`，改版時另存一份，不覆蓋舊版本
+CONSENT_TYPES = ("privacy_policy",)
+
+
+def consent_doc_id(consent_type: str, version: str) -> str:
+    return f"{consent_type}_v{version}"
+
+
 class LiffClientInfo(BaseModel):
     """
     LIFF 前端自報的執行環境資訊。

@@ -387,3 +387,58 @@ async def test_cleanup_failure_persists_marker_until_next_success(db, users, cha
     assert await doc(db, marker) is None
     assert [m async for m in db.collection(f"conversations/{old.id}/messages").stream()] == []
     assert replacement.id not in await owned_ids(db, user_id)  # 上限 1：也被淘汰了
+
+
+# consent / deletion
+@pytest.mark.firestore
+async def test_consent_documents_are_per_version_and_audited(db, users):
+    user_id = await new_user(users)
+    assert not await users.has_consent(user_id, "privacy_policy", "1")
+    await users.set_consent(user_id, "privacy_policy", "1", True, "LIFF")
+    assert await users.has_consent(user_id, "privacy_policy", "1")
+    await users.set_consent(user_id, "privacy_policy", "1", False, "LIFF")
+    assert not await users.has_consent(user_id, "privacy_policy", "1")
+    await users.set_consent(user_id, "privacy_policy", "2", True, "LIFF")
+
+    v1 = await doc(db, f"users/{user_id}/consents/privacy_policy_v1")
+    assert v1["status"] == "revoked"
+    assert isinstance(v1["acceptedAt"], datetime) and isinstance(v1["revokedAt"], datetime)
+    assert (await doc(db, f"users/{user_id}/consents/privacy_policy_v2"))["status"] == "accepted"
+    audit = [d.to_dict() async for d in db.collection(f"users/{user_id}/auditLog").stream()]
+    assert sorted(entry["action"] for entry in audit) == ["consent", "consent", "revoke"]
+
+
+@pytest.mark.firestore
+async def test_delete_user_leaves_nothing_behind(db, users, chats):
+    who = identity()
+    user_id, _ = await users.resolve_or_create(who)
+    await users.set_consent(user_id, "privacy_policy", "1", True, "LIFF")
+    await users.consume_daily_quota(user_id, 10)
+    await users.record_module_use(user_id, "bus")
+    session, _ = await chats.get_or_create_session(user_id, "x", "ev-1")
+    await chats.add_message(user_id, session.id, "user", "我的秘密")
+
+    await chats.delete_all_sessions(user_id)
+    await users.delete_user(user_id)
+
+    assert await doc(db, f"users/{user_id}") is None
+    for sub in ("identities", "consents", "auditLog", "usage", "moduleStates", "conversationOrigins"):
+        assert [d async for d in db.collection(f"users/{user_id}/{sub}").stream()] == [], sub
+    assert await doc(db, f"identityLookup/{lookup_key('line', who.provider_user_id)}") is None
+    assert await owned_ids(db, user_id) == set()
+    assert [m async for m in db.collection(f"conversations/{session.id}/messages").stream()] == []
+
+    again, created = await users.resolve_or_create(who)
+    assert created and again != user_id
+
+
+@pytest.mark.firestore
+async def test_stale_lookup_after_interrupted_deletion_creates_a_new_user(db, users):
+    who = identity()
+    user_id, _ = await users.resolve_or_create(who)
+    # 模擬刪除中斷：user 文件已刪除，但 lookup 還在
+    await db.recursive_delete(db.document(f"users/{user_id}"))
+    again, created = await users.resolve_or_create(who)
+    assert created and again != user_id
+    lookup = await doc(db, f"identityLookup/{lookup_key('line', who.provider_user_id)}")
+    assert lookup["userId"] == again

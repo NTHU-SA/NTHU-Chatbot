@@ -231,6 +231,11 @@ class FirestoreChatStore:
             return False
         return True
 
+    async def delete_all_sessions(self, user_id: str) -> None:
+        """刪除該 user 的所有對話（含訊息）；origin 與 cleanup 文件隨 user 文件一起刪除。"""
+        async for doc in self._owned(user_id).stream():
+            await self._db.recursive_delete(doc.reference)
+
     async def _drain_cleanup(self, user_id: str) -> None:
         """
         清除已刪除對話留下的訊息。

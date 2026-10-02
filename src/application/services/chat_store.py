@@ -52,6 +52,10 @@ class ChatStore(Protocol):
 
     async def delete_session(self, user_id: str, session_id: str) -> None: ...
 
+    async def delete_all_sessions(self, user_id: str) -> None:
+        """刪除該 user 的所有對話與訊息（刪除個人資料時使用）。"""
+        ...
+
     async def list_messages(
         self, user_id: str, session_id: str, limit: int
     ) -> list[Message]: ...
@@ -115,6 +119,10 @@ class MemoryChatStore:
     async def delete_session(self, user_id: str, session_id: str) -> None:
         self._sessions[user_id].pop(session_id, None)
         self._messages.pop((user_id, session_id), None)
+
+    async def delete_all_sessions(self, user_id: str) -> None:
+        for session_id in list(self._sessions.pop(user_id, {})):
+            self._messages.pop((user_id, session_id), None)
 
     async def list_messages(self, user_id, session_id, limit) -> list[Message]:
         return self._messages[(user_id, session_id)][-limit:]
