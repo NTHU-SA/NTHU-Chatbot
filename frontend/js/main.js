@@ -40,7 +40,9 @@ function bindUi() {
   el.messages.addEventListener("scroll", updateScrollButton, { passive: true });
   new MutationObserver(updateScrollButton).observe(el.messages, { childList: true, subtree: true, characterData: true });
   el.scrollBtn.addEventListener("click", () => {
-    el.messages.scrollTo({ top: el.messages.scrollHeight, behavior: "smooth" });
+    // ScrollToOptions ignores the CSS reduced-motion rule, so check the preference here.
+    const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.messages.scrollTo({ top: el.messages.scrollHeight, behavior: reduce ? "auto" : "smooth" });
   });
 }
 
