@@ -40,7 +40,9 @@ def test_config_json_holds_only_public_values(built):
 
 def test_privacy_page_shows_the_backend_policy_version(built, monkeypatch):
     page = built / "public" / "privacy.html"
-    assert f"<span data-policy-version>{PRIVACY_POLICY_VERSION}</span>" in page.read_text(encoding="utf-8")
+    assert f"<span data-policy-version>{PRIVACY_POLICY_VERSION}</span>" in page.read_text(
+        encoding="utf-8"
+    )
     build_frontend.stamp_policy_version(page, "7")
     assert "<span data-policy-version>7</span>" in page.read_text(encoding="utf-8")
 
@@ -65,7 +67,11 @@ def test_hosting_headers_lock_connections_to_this_api(built):
 
 @pytest.mark.parametrize(
     "line",
-    ["API_ORIGIN=REPLACE_ME", "API_ORIGIN=http://api.example", "API_ORIGIN=https://api.example/path"],
+    [
+        "API_ORIGIN=REPLACE_ME",
+        "API_ORIGIN=http://api.example",
+        "API_ORIGIN=https://api.example/path",
+    ],
 )
 def test_bad_or_missing_api_origin_is_rejected(tmp_path, line):
     conf = tmp_path / "bad.conf"

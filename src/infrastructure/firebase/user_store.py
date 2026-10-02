@@ -250,9 +250,7 @@ class FirestoreUserStore:
         return False
 
     async def touch_activity(self, user_id: str) -> None:
-        await self._user(user_id).set(
-            {"lastActiveAt": firestore.SERVER_TIMESTAMP}, merge=True
-        )
+        await self._user(user_id).set({"lastActiveAt": firestore.SERVER_TIMESTAMP}, merge=True)
         await self._undo_if_deleted(user_id, user_fields=("lastActiveAt",))
 
     async def record_login(self, user: Principal, metadata: dict | None = None) -> None:
@@ -324,9 +322,7 @@ class FirestoreUserStore:
         每天一份文件（取代原本無限長大的 usage map），`expiresAt` 由 TTL 自動清除。
         """
         now = now_utc()
-        reference = (
-            self._user(user_id).collection("usage").document(now.strftime("%Y-%m-%d"))
-        )
+        reference = self._user(user_id).collection("usage").document(now.strftime("%Y-%m-%d"))
         await reference.set(
             {"count": firestore.Increment(1), "expiresAt": now + USAGE_RETENTION},
             merge=True,

@@ -139,11 +139,7 @@ def _tool_error_message(_ctx, err: Exception) -> str:
 
 
 def _preview(value: Any, limit: int) -> str:
-    text = (
-        value
-        if isinstance(value, str)
-        else json.dumps(value, ensure_ascii=False, default=str)
-    )
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
     return text if len(text) <= limit else text[:limit] + "…"
 
 
@@ -154,11 +150,7 @@ def _output_text(output: Any) -> str:
     if isinstance(output, dict) and output.get("type") == "text":
         return output.get("text") or ""
     if isinstance(output, list):
-        texts = [
-            b.get("text")
-            for b in output
-            if isinstance(b, dict) and b.get("type") == "text"
-        ]
+        texts = [b.get("text") for b in output if isinstance(b, dict) and b.get("type") == "text"]
         if texts:
             return "\n".join(t for t in texts if t)
     return _preview(output, 10_000)
@@ -208,7 +200,8 @@ def _personal_event(output: str) -> AgentEvent | None:
         return AgentEvent("memory", {"action": "saved", "items": data["saved"]})
     if data.get("status") == "forgotten":
         return AgentEvent(
-            "memory", {"action": "forgotten", "items": [{"kind": "memory", "value": data["forgotten"]}]}
+            "memory",
+            {"action": "forgotten", "items": [{"kind": "memory", "value": data["forgotten"]}]},
         )
     return None
 
@@ -355,9 +348,7 @@ class AgentRunner:
 
         cap = self._settings.history_message_chars
         items: list[dict[str, Any]] = [
-            {"role": m.role, "content": _preview(m.content, cap)}
-            for m in history
-            if m.content
+            {"role": m.role, "content": _preview(m.content, cap)} for m in history if m.content
         ]
         items.append({"role": "user", "content": user_text})
 
@@ -391,9 +382,7 @@ class AgentRunner:
                     data_type = getattr(data, "type", "")
                     if data_type == "response.output_text.delta" and data.delta:
                         if pending_question is not None:
-                            yield AgentEvent(
-                                "interim", {"text": pending_question, "discard": True}
-                            )
+                            yield AgentEvent("interim", {"text": pending_question, "discard": True})
                             pending_question = None
                         text_parts.append(data.delta)
                         yield AgentEvent("token", {"delta": data.delta})
@@ -462,9 +451,7 @@ class AgentRunner:
                         if personal is not None:
                             yield personal
                         continue
-                    name, args, started = pending.pop(
-                        call_id, ("unknown", {}, time.monotonic())
-                    )
+                    name, args, started = pending.pop(call_id, ("unknown", {}, time.monotonic()))
                     output_text = _output_text(item.output)
                     ok = not output_text.startswith(TOOL_ERROR_PREFIX)
                     tool_call = ToolCall(
@@ -512,9 +499,7 @@ class AgentRunner:
             )
 
         except MaxTurnsExceeded:
-            yield AgentEvent(
-                "error", {"message": "工具呼叫次數過多，請把問題拆小一點再試。"}
-            )
+            yield AgentEvent("error", {"message": "工具呼叫次數過多，請把問題拆小一點再試。"})
         except APIStatusError as error:
             logger.warning("LLM API error: {}", error.status_code)
             if error.status_code in (413, 429):

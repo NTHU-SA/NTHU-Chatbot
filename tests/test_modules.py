@@ -196,7 +196,9 @@ async def test_announcement_board_name_is_filtered_locally_not_as_article_title(
         {
             "title": "News",
             "language": "zh-tw",
-            "articles": [{"title": "Bus schedule", "link": "https://nthu.edu.tw/bus", "date": None}],
+            "articles": [
+                {"title": "Bus schedule", "link": "https://nthu.edu.tw/bus", "date": None}
+            ],
         },
     ]
     with fake_api(announcecrawler, boards) as get:

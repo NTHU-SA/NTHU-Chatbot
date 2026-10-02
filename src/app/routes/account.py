@@ -187,7 +187,11 @@ async def _resolve_department(request: Request, text: str) -> str:
     if name is None and candidates:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            {"code": "department_ambiguous", "message": "請選擇正確的系所", "candidates": candidates},
+            {
+                "code": "department_ambiguous",
+                "message": "請選擇正確的系所",
+                "candidates": candidates,
+            },
         )
     if name is None and await directory.names():
         raise HTTPException(

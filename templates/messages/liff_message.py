@@ -8,9 +8,7 @@ MAX_SESSION_KEY_CHARS = 64
 PREVIEW_CHARS = 120
 
 
-def liff_url(
-    liff_id: str, question: str | None = None, session_key: str | None = None
-) -> str:
+def liff_url(liff_id: str, question: str | None = None, session_key: str | None = None) -> str:
     """
     LIFF 網址。
 

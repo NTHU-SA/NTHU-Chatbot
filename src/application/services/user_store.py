@@ -60,9 +60,7 @@ class UserStore(Protocol):
 
     async def touch_activity(self, user_id: str) -> None: ...
 
-    async def record_login(
-        self, user: Principal, metadata: dict[str, Any] | None = None
-    ) -> None:
+    async def record_login(self, user: Principal, metadata: dict[str, Any] | None = None) -> None:
         """更新顯示資料（只採用驗證過的 claims）、登入時間與 provider 專屬 metadata。"""
         ...
 
@@ -315,7 +313,11 @@ class MemoryUserStore:
             for record in self.identities.pop(user_id, {}).values():
                 self.lookup.pop(lookup_key(record["provider"], record["providerUserId"]), None)
             for store in (
-                self.audit, self.module_states, self.consents, self.preferences, self.memories
+                self.audit,
+                self.module_states,
+                self.consents,
+                self.preferences,
+                self.memories,
             ):
                 store.pop(user_id, None)
             for key in [k for k in self._usage if k[0] == user_id]:

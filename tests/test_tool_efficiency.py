@@ -53,7 +53,9 @@ async def test_cacheable_results_are_reused_and_isolated(server, run_state):
     mcp, calls = server
     first = await mcp.call_tool("get_announcements", {"department": "x", "limit": 5})
     first.content[0].text = "mutated by caller"
-    second = await mcp.call_tool("get_announcements", {"limit": 5, "department": "x"})  # 參數順序不同
+    second = await mcp.call_tool(
+        "get_announcements", {"limit": 5, "department": "x"}
+    )  # 參數順序不同
     assert len(calls) == 1
     assert second.content[0].text == "get_announcements:1"
     await mcp.call_tool("get_announcements", {"department": "y"})
@@ -81,7 +83,9 @@ async def test_error_results_are_not_cached(run_state):
     mcp._max_output_chars = 50
     mcp._cache = {}
     error = CallToolResult(content=[TextContent(type="text", text="boom")], isError=True)
-    with patch.object(agent_runner.MCPServerStreamableHttp, "call_tool", AsyncMock(return_value=error)) as call:
+    with patch.object(
+        agent_runner.MCPServerStreamableHttp, "call_tool", AsyncMock(return_value=error)
+    ) as call:
         await mcp.call_tool("search_courses", {"q": "x"})
         await mcp.call_tool("search_courses", {"q": "x"})
     assert call.await_count == 2
@@ -90,7 +94,8 @@ async def test_error_results_are_not_cached(run_state):
 async def test_results_are_truncated_before_reaching_the_model(server, run_state):
     mcp, _ = server
     with patch.object(
-        agent_runner.MCPServerStreamableHttp, "call_tool",
+        agent_runner.MCPServerStreamableHttp,
+        "call_tool",
         AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="x" * 500)])),
     ):
         result = await mcp.call_tool("get_next_buses", {})
@@ -141,7 +146,9 @@ async def call_search(tool, query="註冊時間"):
 
 
 async def test_web_search_returns_only_allowed_https_sources(run_state):
-    client = SimpleNamespace(responses=SimpleNamespace(create=AsyncMock(return_value=fake_response())))
+    client = SimpleNamespace(
+        responses=SimpleNamespace(create=AsyncMock(return_value=fake_response()))
+    )
     tool = build_web_search_tool(client, "test-model", ("nthu.edu.tw",), _tool_error_message)
     result = json.loads(await call_search(tool, "註冊\n時間<script>"))
     assert result["summary"] == "摘要 [1]"
@@ -156,7 +163,9 @@ async def test_web_search_returns_only_allowed_https_sources(run_state):
 
 
 async def test_web_search_limit_is_reported_to_the_model(run_state):
-    client = SimpleNamespace(responses=SimpleNamespace(create=AsyncMock(return_value=fake_response())))
+    client = SimpleNamespace(
+        responses=SimpleNamespace(create=AsyncMock(return_value=fake_response()))
+    )
     tool = build_web_search_tool(client, "m", ("nthu.edu.tw",), _tool_error_message)
     await call_search(tool)
     second = await call_search(tool)
@@ -166,8 +175,12 @@ async def test_web_search_limit_is_reported_to_the_model(run_state):
 
 # -- settings / wiring --
 BASE = {
-    "LINE_CHANNEL_SECRET": "s", "LINE_CHANNEL_ACCESS_TOKEN": "t", "LINE_LOGIN_CHANNEL_ID": "1",
-    "LIFF_ID": "l", "OPENAI_API_KEY": "k", "CHAT_STORE": "memory",
+    "LINE_CHANNEL_SECRET": "s",
+    "LINE_CHANNEL_ACCESS_TOKEN": "t",
+    "LINE_LOGIN_CHANNEL_ID": "1",
+    "LIFF_ID": "l",
+    "OPENAI_API_KEY": "k",
+    "CHAT_STORE": "memory",
 }
 
 
@@ -177,7 +190,9 @@ def test_tool_settings_defaults_and_validation():
     assert settings.max_tool_calls_per_message == 6
     assert not settings.web_search_enabled
     assert settings.web_search_domains == ("nthu.edu.tw",)
-    with patch.dict(os.environ, {**BASE, "WEB_SEARCH_DOMAINS": "nthu.edu.tw, NCTU.edu.tw"}, clear=True):
+    with patch.dict(
+        os.environ, {**BASE, "WEB_SEARCH_DOMAINS": "nthu.edu.tw, NCTU.edu.tw"}, clear=True
+    ):
         assert Settings.from_env().web_search_domains == ("nthu.edu.tw", "nctu.edu.tw")
     for bad in ("https://nthu.edu.tw", "*.nthu.edu.tw", "nthu"):
         with (

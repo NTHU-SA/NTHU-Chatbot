@@ -48,9 +48,7 @@ async def lib_space_flex_message(event):
     template = env.get_template("library_space.json.jinja")
     flex_template_str = template.render(spaces=data)
     flex_template = json.loads(flex_template_str)
-    result = FlexMessage(
-        alt_text="圖書館空間現況", contents=FlexContainer.from_dict(flex_template)
-    )
+    result = FlexMessage(alt_text="圖書館空間現況", contents=FlexContainer.from_dict(flex_template))
     return [result]
 
 
@@ -154,9 +152,7 @@ def libxmltemplate(data, page_num=1):
     columns = []
     for item in data:
         image_url = (item.get("image") or {}).get("url")
-        thumbnail_image_url = (
-            urllib.parse.quote(image_url, safe=":/?&=%") if image_url else None
-        )
+        thumbnail_image_url = urllib.parse.quote(image_url, safe=":/?&=%") if image_url else None
         title = item.get("title") or "圖書館消息"
         if len(title) > 40:
             title = title[:37] + "..."

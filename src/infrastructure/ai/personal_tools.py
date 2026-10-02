@@ -33,8 +33,7 @@ PERSONAL_TOOLS = (SAVE_PROFILE, REMEMBER, FORGET)
 SOURCE = "assistant"
 
 BLOCKED = (
-    "blocked: 這一輪已經讀取過外部資料，為了安全不能寫入記憶。"
-    "請使用者在下一則訊息直接再說一次。"
+    "blocked: 這一輪已經讀取過外部資料，為了安全不能寫入記憶。" "請使用者在下一則訊息直接再說一次。"
 )
 
 

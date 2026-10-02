@@ -80,9 +80,11 @@ class FirestoreChatStore:
         )
 
     async def list_sessions(self, user_id: str) -> list[Session]:
-        query = self._owned(user_id).order_by(
-            "lastMessageAt", direction=firestore.Query.DESCENDING
-        ).limit(MAX_SESSIONS_PER_USER)
+        query = (
+            self._owned(user_id)
+            .order_by("lastMessageAt", direction=firestore.Query.DESCENDING)
+            .limit(MAX_SESSIONS_PER_USER)
+        )
         return [self._session_from(doc) async for doc in query.stream()]
 
     async def create_session(self, user_id, title, origin=None) -> Session:
@@ -152,7 +154,10 @@ class FirestoreChatStore:
         if session.origin:
             await self._origin(user_id, session.origin).delete()
         await self._user(user_id).update(
-            {"conversationCount": firestore.DELETE_FIELD, "lastConversationId": firestore.DELETE_FIELD}
+            {
+                "conversationCount": firestore.DELETE_FIELD,
+                "lastConversationId": firestore.DELETE_FIELD,
+            }
         )
         raise AccountDisabledError(user_id, DELETED)
 
@@ -180,9 +185,11 @@ class FirestoreChatStore:
         async def reuse_or_replace(transaction):
             snapshot = await origin_ref.get(transaction=transaction)
             if snapshot.exists:
-                existing = await self._conversations().document(
-                    snapshot.get("conversationId")
-                ).get(transaction=transaction)
+                existing = (
+                    await self._conversations()
+                    .document(snapshot.get("conversationId"))
+                    .get(transaction=transaction)
+                )
                 if existing.exists and (existing.to_dict() or {}).get("userId") == user_id:
                     return self._session_from(existing), False
             transaction.set(origin_ref, origin_payload)
@@ -199,9 +206,11 @@ class FirestoreChatStore:
         excess = count - MAX_SESSIONS_PER_USER
         if excess <= 0:
             return
-        query = self._owned(user_id).order_by(
-            "lastMessageAt", direction=firestore.Query.ASCENDING
-        ).limit(excess)
+        query = (
+            self._owned(user_id)
+            .order_by("lastMessageAt", direction=firestore.Query.ASCENDING)
+            .limit(excess)
+        )
         async for doc in query.stream():
             await self._delete(user_id, doc.id)
 
@@ -328,9 +337,7 @@ class FirestoreChatStore:
         messages.reverse()
         return messages
 
-    async def add_message(
-        self, user_id, session_id, role, content, tool_calls=None, meta=None
-    ):
+    async def add_message(self, user_id, session_id, role, content, tool_calls=None, meta=None):
         now = now_utc()
         meta = meta or MessageMeta()
         reference = self._messages(session_id).document(new_id())

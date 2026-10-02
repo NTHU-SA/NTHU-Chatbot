@@ -48,9 +48,7 @@ def new_session(client) -> str:
 
 
 def send(client, session_id: str, text: str):
-    return client.post(
-        f"/api/sessions/{session_id}/messages", headers=AUTH, json={"text": text}
-    )
+    return client.post(f"/api/sessions/{session_id}/messages", headers=AUTH, json={"text": text})
 
 
 def messages_of(client, session_id: str, headers=AUTH):
@@ -70,10 +68,7 @@ def test_frontend_is_not_served_by_the_api(client, path):
 
 def test_api_requires_valid_bearer(client):
     assert client.get("/api/sessions").status_code == 401
-    assert (
-        client.get("/api/sessions", headers={"Authorization": "Bearer nope"}).status_code
-        == 401
-    )
+    assert client.get("/api/sessions", headers={"Authorization": "Bearer nope"}).status_code == 401
     response = client.get("/api/me", headers=AUTH)
     assert response.status_code == 200
     assert response.json()["display_name"] == "測試者"
@@ -149,7 +144,9 @@ def test_security_headers_on_api_responses(client):
     response = client.get("/api/sessions", headers=AUTH)
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["x-frame-options"] == "DENY"
-    assert response.headers["content-security-policy"] == "default-src 'none'; frame-ancestors 'none'"
+    assert (
+        response.headers["content-security-policy"] == "default-src 'none'; frame-ancestors 'none'"
+    )
 
 
 FRONTEND = "https://nthusa-chatbot.web.app"
@@ -209,9 +206,7 @@ def test_session_crud(client):
     assert [s["id"] for s in sessions] == [session_id]
     assert sessions[0]["title"] == "新對話"
 
-    response = client.patch(
-        f"/api/sessions/{session_id}", headers=AUTH, json={"title": "公車"}
-    )
+    response = client.patch(f"/api/sessions/{session_id}", headers=AUTH, json={"title": "公車"})
     assert response.json()["title"] == "公車"
 
     assert messages_of(client, "nope").status_code == 404
@@ -232,9 +227,7 @@ def test_bubble_origin_reopens_same_session_until_deleted(client):
     assert len(session_ids(client)) == 1
 
     # 不同泡泡：新對話
-    other = client.post(
-        "/api/sessions", headers=AUTH, json={"title": "x", "origin": "event-2"}
-    )
+    other = client.post("/api/sessions", headers=AUTH, json={"title": "x", "origin": "event-2"})
     assert other.status_code == 201
     assert other.json()["id"] != first.json()["id"]
 
@@ -255,9 +248,7 @@ def test_bubble_origin_is_scoped_per_user(client, other_user):
 
 async def test_concurrent_bubble_requests_create_only_once(chat_app):
     store = chat_app.state.store
-    async with AsyncClient(
-        transport=ASGITransport(app=chat_app), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=chat_app), base_url="http://test") as client:
         responses = await asyncio.gather(
             *(
                 client.post("/api/sessions", headers=AUTH, json={"origin": "concurrent-event"})

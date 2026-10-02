@@ -85,9 +85,7 @@ async def create_session(
     不存在（沒點過或已刪除）才建立並回 201。超過上限時 store 會自動刪除最舊的對話。
     """
     title = (body.title or "").strip() or DEFAULT_TITLE
-    session, created = await _store(request).get_or_create_session(
-        user.user_id, title, body.origin
-    )
+    session, created = await _store(request).get_or_create_session(user.user_id, title, body.origin)
     if not created:
         response.status_code = status.HTTP_200_OK
     return session
@@ -181,9 +179,7 @@ async def send_message(
     history = history[:-1] if retried else history[-settings.history_window :]
 
     if not await users.consume_daily_quota(user.user_id, settings.daily_message_limit):
-        raise HTTPException(
-            status.HTTP_429_TOO_MANY_REQUESTS, "今日對話額度已用完，明天再來吧。"
-        )
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "今日對話額度已用完，明天再來吧。")
 
     # 最近活動時間與 LLM 回覆並行寫入，串流結束前收尾
     writes = BackgroundWrites()
