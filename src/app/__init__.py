@@ -21,6 +21,7 @@ from src.app.auth.line import LineLiffAuthenticator
 from src.app.auth.rate_limit import RateLimiter
 from src.app.auth.service import IdentityService
 from src.application.services.chat_store import MemoryChatStore
+from src.application.services.departments import DepartmentDirectory
 from src.application.services.module_registry import StaticModuleRegistry
 from src.application.services.user_store import MemoryUserStore
 from src.core.config import Settings, parse_cors_origins
@@ -28,6 +29,12 @@ from src.infrastructure.ai.agent_runner import AgentRunner
 from src.infrastructure.firebase.chat_store import FirestoreChatStore
 from src.infrastructure.firebase.module_registry import FirestoreModuleRegistry
 from src.infrastructure.firebase.user_store import FirestoreUserStore
+
+
+async def _fetch_departments():
+    from src.utils import nthuapi
+
+    return await nthuapi.get("/departments/")
 
 
 @asynccontextmanager
@@ -59,6 +66,7 @@ async def lifespan(app: FastAPI):
             app.state.user_store = user_store
             app.state.module_registry = module_registry
             app.state.identity_service = IdentityService(user_store)
+            app.state.departments = DepartmentDirectory(_fetch_departments)
             # 新增登入方式時在這裡註冊；provider 名稱即前端 X-Auth-Provider 的值
             app.state.authenticators = {
                 "line": LineLiffAuthenticator(settings.line_login_channel_id, http),

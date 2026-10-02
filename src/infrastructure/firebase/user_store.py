@@ -12,12 +12,15 @@ Firestore 使用者與外部身分儲存。
   users/{uid}/moduleStates/{moduleId}       lastUsedAt / usageCount / updatedAt
   users/{uid}/usage/{YYYY-MM-DD}            count / expiresAt（TTL）
   users/{uid}/consents/{type}_v{version}    type / version / status / acceptedAt / revokedAt / source
+  users/{uid}/preferences/{key}             value / source(user|assistant) / updatedAt（nickname、department）
+  users/{uid}/memory/{id}                   type / value / sourceConversationId / createdAt / updatedAt
 
 瀏覽器永遠不直接碰 Firestore（rules 全部拒絕），這裡以 Admin SDK / ADC 存取。
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 
 from google.api_core.exceptions import (
@@ -37,6 +40,13 @@ from src.application.models.identity import (
     consent_doc_id,
     lookup_key,
     new_user_id,
+)
+from src.application.models.profile import (
+    MAX_MEMORIES,
+    ONBOARDING_MODULE,
+    MemoryItem,
+    MemoryLimitError,
+    Profile,
 )
 from src.application.services.chat_store import new_id, now_utc
 
@@ -306,6 +316,67 @@ class FirestoreUserStore:
         )
         await batch.commit()
 
+    # -- personalisation --
+    async def get_profile(self, user_id: str) -> Profile:
+        user = self._user(user_id)
+        prefs, memories, onboarding = await asyncio.gather(
+            _collect(user.collection("preferences").stream()),
+            _collect(user.collection("memory").order_by("createdAt").limit(MAX_MEMORIES).stream()),
+            user.collection("moduleStates").document(ONBOARDING_MODULE).get(),
+        )
+        values = {doc.id: (doc.to_dict() or {}).get("value") for doc in prefs}
+        return Profile(
+            nickname=values.get("nickname"),
+            department=values.get("department"),
+            memories=[
+                MemoryItem(
+                    id=doc.id,
+                    value=(doc.to_dict() or {}).get("value", ""),
+                    created_at=(doc.to_dict() or {}).get("createdAt"),
+                )
+                for doc in memories
+            ],
+            onboarding=(onboarding.to_dict() or {}).get("state") if onboarding.exists else None,
+        )
+
+    async def set_preference(self, user_id, key, value, source) -> None:
+        await self._user(user_id).collection("preferences").document(key).set(
+            {"value": value, "source": source, "updatedAt": firestore.SERVER_TIMESTAMP}
+        )
+
+    async def delete_preference(self, user_id, key) -> None:
+        await self._user(user_id).collection("preferences").document(key).delete()
+
+    async def add_memory(self, user_id, value, source_conversation_id=None) -> MemoryItem:
+        collection = self._user(user_id).collection("memory")
+        aggregate = await collection.count().get()
+        if (aggregate[0][0].value if aggregate else 0) >= MAX_MEMORIES:
+            raise MemoryLimitError(user_id)
+        now = now_utc()
+        reference = collection.document(new_id())
+        await reference.create(
+            {
+                "type": "fact",
+                "value": value,
+                "sourceConversationId": source_conversation_id,
+                "createdAt": now,
+                "updatedAt": now,
+            }
+        )
+        return MemoryItem(id=reference.id, value=value, created_at=now)
+
+    async def delete_memory(self, user_id, memory_id) -> bool:
+        reference = self._user(user_id).collection("memory").document(memory_id)
+        if not (await reference.get()).exists:
+            return False
+        await reference.delete()
+        return True
+
+    async def set_onboarding(self, user_id, state) -> None:
+        await self._user(user_id).collection("moduleStates").document(ONBOARDING_MODULE).set(
+            {"state": state, "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True
+        )
+
     # -- deletion --
     async def delete_user(self, user_id: str) -> None:
         """
@@ -324,3 +395,7 @@ class FirestoreUserStore:
                 batch.delete(self._lookup(data["provider"], data["providerUserId"]))
         await batch.commit()
         await self._db.recursive_delete(user)
+
+
+async def _collect(stream) -> list:
+    return [doc async for doc in stream]

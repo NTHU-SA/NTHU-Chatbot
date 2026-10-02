@@ -46,15 +46,32 @@ class FakeAuthenticator:
         raise HTTPException(401, "invalid id_token")
 
 
+# NTHU API 單位目錄的一小部分（假資料的形狀與正式 API 相同；只取名稱，不含人員）
+FAKE_DEPARTMENTS = [
+    {"index": "6907", "name": "資訊工程學系", "parent_name": "電機資訊學院"},
+    {"index": "6905", "name": "電機工程學系", "parent_name": "電機資訊學院"},
+    {"index": "6913", "name": "資訊系統與應用研究所", "parent_name": "電機資訊學院"},
+    {"index": "6917", "name": "資訊安全研究所", "parent_name": "電機資訊學院"},
+    {"index": "5301", "name": "數學系", "parent_name": "理學院"},
+    {"index": "0101", "name": "教務處", "parent_name": None},
+]
+
+
+async def fake_departments():
+    return FAKE_DEPARTMENTS
+
+
 class FakeRunner:
     """固定送出一串事件；記錄輸入供斷言。"""
 
     def __init__(self):
         self.streams: list[tuple[list, str]] = []
+        self.contexts: list = []
         self.fail = False
 
-    async def stream(self, history, user_text):
+    async def stream(self, history, user_text, context=None):
         self.streams.append((list(history), user_text))
+        self.contexts.append(context)
         if self.fail:
             yield AgentEvent("error", {"message": "boom"})
             return
