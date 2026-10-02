@@ -21,7 +21,8 @@
 
 ```bash
 bash infra/bootstrap.sh infra/environments/<env>.conf                          # 建立 / 校正資源
-ALERT_EMAIL=you@example.com bash infra/monitoring.sh infra/environments/<env>.conf  # 監測與告警
+bash infra/monitoring.sh infra/environments/<env>.conf                            # 只建 uptime check（保溫）
+ALERT_EMAIL=you@example.com bash infra/monitoring.sh infra/environments/<env>.conf  # 再加上告警
 ```
 
 兩支腳本都可以重複執行：已存在的資源只會被校正。刪除類操作一律不做，只在下面列出指令，由人確認後手動執行。
