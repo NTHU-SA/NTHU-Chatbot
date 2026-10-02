@@ -10,8 +10,10 @@
 | Cloud Run | `nthu-chatbot-staging` | `nthu-chatbot` |
 | LINE | 測試用 Provider 的頻道 | 正式 Provider（Messaging API 與 LINE Login 必須在**同一個 Provider**） |
 | Firestore 刪除保護 | 關 | 開 |
+| LIFF 前端 | `nthusa-chatbot.web.app`（Firebase Hosting） | `<HOSTING_SITE>.web.app` |
 
 兩個環境共用 repo 根目錄的 `cloudbuild.yaml`，差別只在 trigger 的 substitutions。
+前端由 CI（`.github/workflows/ci.yml` 的 `deploy-frontend`）部署到 Firebase Hosting；`infra/build_frontend.py` 依環境設定檔產生 `config.json`（只有公開的 LIFF ID 與 API 網址）和 CSP（`connect-src` 只允許該環境的 API）。
 
 ## 腳本
 
@@ -27,7 +29,7 @@ Windows 上如果 `python` 不是正確的直譯器，可以加 `PYTHON=.venv/Sc
 
 ### `bootstrap.sh` 做的事
 
-1. 啟用需要的 API。
+1. 啟用需要的 API；把專案加入 Firebase（**不可逆**，只能刪除整個專案）並建立 Hosting 網站。
 2. 建立 Firestore `(default)`（Native mode），發布 `firestore.rules`（全部拒絕），套用 `firestore.indexes.json` 的索引豁免。
 3. 建立 Artifact Registry，設定清理規則：保留最新 3 個、刪除 7 天前的映像。
 4. 建立兩個 service account，只給最小權限：
@@ -37,9 +39,11 @@ Windows 上如果 `python` 不是正確的直譯器，可以加 `PYTHON=.venv/Sc
    | `nthu-chatbot`（執行期） | `datastore.user`；三個 Secret **個別**授予 `secretAccessor` |
    | `nthu-chatbot-deployer`（Cloud Build） | `run.developer`、`logging.logWriter`、只限該 AR repo 的 `artifactregistry.writer`、只能代理執行期 SA 的 `iam.serviceAccountUser` |
 
-5. 建立 Secret（只建容器，不碰值）；任何 Secret 還沒有值時會停下來。
-6. 建立或更新 Cloud Run 服務：環境變數、Secret 掛載、`--timeout=180 --concurrency=40 --cpu-boost`、`min-instances=0`，並開放公開呼叫（webhook 與 API 自己驗證簽章和 id_token）。
-7. 建立 Cloud Build trigger（`deploy-<service>`），使用 `cloudbuild.yaml` 和部署 SA。
+5. GitHub Actions 部署前端用的 Workload Identity Federation：provider 只信任 `GITHUB_OWNER/GITHUB_REPO` 在 `DEPLOY_REF` 上的 workflow，換到的身分是只有 `firebasehosting.admin` 的 `nthu-chatbot-hosting` SA；不產生任何金鑰。
+6. 建立 Secret（只建容器，不碰值）；任何 Secret 還沒有值時會停下來。
+7. 建立或更新 Cloud Run 服務：環境變數（含 `CORS_ALLOWED_ORIGINS` = Hosting 的兩個預設網域）、Secret 掛載、`--timeout=180 --concurrency=40 --cpu-boost`、`min-instances=0`，並開放公開呼叫（webhook 與 API 自己驗證簽章和 id_token）。
+8. 建立 Cloud Build trigger（`deploy-<service>`），使用 `cloudbuild.yaml` 和部署 SA。
+9. 最後印出要設定的 GitHub repo variables（`GCP_WIF_PROVIDER_<ENV>`、`GCP_HOSTING_SA_<ENV>`，不是機密）。設定後 CI 才會部署前端，沒設定時該 job 會略過。
 
 ### `monitoring.sh` 做的事
 
@@ -72,8 +76,9 @@ gcloud secrets versions disable <舊版本號> --secret=<name> --project=<PROJEC
 4. `bash infra/bootstrap.sh infra/environments/prod.conf`：第一次會停在 Secret 沒有值的那一步。
 5. 依上一節加入三個 Secret 值，再跑一次 bootstrap。
 6. `ALERT_EMAIL=... bash infra/monitoring.sh infra/environments/prod.conf`
-7. LINE Developers：Webhook URL 設為 `<服務網址>/callback`，開啟 Use webhook。
-8. 把 `main` 合併一次，觸發第一次部署，再用 `/ping` 和 LINE 實測。
+7. 把 bootstrap 印出的服務網址填進 `prod.conf` 的 `API_ORIGIN`，`HOSTING_SITE` 填網站 ID；在 GitHub repo 設定印出的兩個 variables（`..._PROD`）。
+8. LINE Developers：Webhook URL 設為 `<服務網址>/callback`、開啟 Use webhook；LIFF Endpoint URL 設為 `https://<HOSTING_SITE>.web.app/`。
+9. 把 `main` 合併一次，觸發 API 與前端的第一次部署，再用 `/ping` 和 LINE 實測。
 
 ## 把 staging 校正到同一套設定
 
@@ -94,7 +99,8 @@ done
 
 ```bash
 curl -fsS <服務網址>/ping                       # {"message":"pong"}
-curl -fsS <服務網址>/api/config                  # 只會有 liff_id
+curl -fsS https://<HOSTING_SITE>.web.app/config.json   # 只有 liffId 與 apiBase
+curl -sI -X OPTIONS <服務網址>/api/sessions -H "Origin: https://evil.example" -H "Access-Control-Request-Method: GET"   # 不應有 access-control-allow-origin
 gcloud run services describe <service> --region=<region> --project=<PROJECT_ID> \
   --format="yaml(spec.template.spec.serviceAccountName,spec.template.metadata.annotations)"
 ```
