@@ -210,17 +210,17 @@ Firestore Native mode `(default)`，由 `infra/bootstrap.sh` 建立；區域建�
 
 ## 部署與環境
 
-staging 與 prod 放在兩個獨立的 GCP 專案，建置、監測與前端部署都是可重複執行的腳本，詳見 **[infra/README.md](infra/README.md)**。
+staging 與 prod 在同一個 GCP 專案，Firestore 資料庫、Secret、service account、WIF pool、Cloud Run 服務與 Hosting 網站都分開，權限只授予自己那一份。建置、監測與前端部署都是可重複執行的腳本，詳見 **[infra/README.md](infra/README.md)**。
 
 | | staging | prod |
 | --- | --- | --- |
 | 分支 | `dev` | `main` |
-| GCP 專案 | `nthusa-chatbot` | 另開 |
+| GCP 專案 | `nthusa-chatbot` | `nthusa-chatbot`（Firestore 資料庫 `prod`、Secret 加 `-prod`） |
 | API | Cloud Run `nthu-chatbot-staging` | Cloud Run `nthu-chatbot` |
-| 前端 | `nthusa-chatbot.web.app` | `<HOSTING_SITE>.web.app` |
+| 前端 | `nthusa-chatbot.web.app` | `nthusa-chatbot-prod.web.app` |
 
 ```bash
-bash infra/bootstrap.sh infra/environments/prod.conf                               # Firebase、Firestore、AR、SA、WIF、Secret、Cloud Run、trigger
+LINE_LOGIN_CHANNEL_ID=... LIFF_ID=... bash infra/bootstrap.sh infra/environments/prod.conf  # Firebase、Firestore、AR、SA、WIF、Secret、Cloud Run、trigger
 ALERT_EMAIL=you@example.com bash infra/monitoring.sh infra/environments/prod.conf  # 5xx 與 ERROR log 告警（防冷啟動用外部 ping 服務）
 ```
 
