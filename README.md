@@ -35,13 +35,13 @@ src/core/config.py                Settings（全部從環境變數讀取）
 src/app/__init__.py               create_app()、lifespan 組裝 app.state
 src/app/routes/callback.py        LINE webhook
 src/app/routes/chat.py            /api/*（LIFF 對話，SSE）
-src/app/security.py               id_token 驗證、限流
+src/app/auth/                     登入驗證（Authenticator）、外部身分 → 內部 user、限流
 src/app/middleware.py             安全標頭與 CSP
 src/app/static/liff/              LIFF 前端（原生 JS）
 src/app/handlers/、src/modules/   聊天室內 @ 指令
-src/application/                  資料模型、ChatStore 介面與記憶體實作
+src/application/                  資料模型；ChatStore / UserStore / ModuleRegistry 介面與記憶體實作
 src/infrastructure/ai/            AgentRunner、狗狗情報員 prompt
-src/infrastructure/firebase/      FirestoreChatStore
+src/infrastructure/firebase/      上述介面的 Firestore 實作
 templates/messages/               Flex 訊息（含 LIFF 入口泡泡）
 tests/                            pytest（fixture 在 conftest.py）
 requirements*.in / *.txt          直接依賴 / uv 產生的含雜湊鎖定檔
@@ -100,27 +100,47 @@ LINE 需要公開 HTTPS 網址：`ngrok http 5000` 後，把 ngrok 網址填到 
 
 ## Firebase 資料
 
-在 Firebase Console 建立專案及 **Firestore Native mode `(default)`** 資料庫。
-建議與 Cloud Run 使用相近區域；資料庫位置建立後不能任意更換。
+Firestore Native mode `(default)`，由 `infra/bootstrap.sh` 建立；資料庫區域建立後不能更換。
+結構依 `firebase.spec`：**高頻一起讀的放同一份文件、持續增長的用 subcollection、需要跨 user 查詢的放 top-level**。
+
+### 身分：內部 user id 與外部登入方式分開
+
+所有資料都以內部 `userId`（`usr_` + 128 bit 隨機值，建立後不可變）為主鍵。LINE 只是第一個連結到 user 的外部身分；
+之後加學校 OAuth 或 Google，只需要新增一個 `Authenticator`（`src/app/auth/`），資料層不用改。
+
+```text
+請求 → Authenticator（依 X-Auth-Provider，目前只有 line）→ VerifiedIdentity
+     → IdentityService：identityLookup/{sha256(provider:id)} → userId
+     → 路由、限流、每日額度、所有資料都只認 userId
+```
+
+- `identityLookup` 的文件 ID 是雜湊值：學號這類個資不會出現在文件路徑、Console 與 log；原始外部 ID 只存在 `users/{uid}/identities/{provider}`。
+- 第一次見到的身分會在同一個交易裡建立 user、identity 與 lookup；同一個 LINE 帳號同時進來也只會建立一個 user。
+- 帳號連結（之後開放）**只能明確進行**：要在同一個請求裡同時證明兩個身分，絕不用 email、名稱或學號自動合併。同一個外部身分不能屬於兩個 user（衝突回 409 且不透露是誰），至少要保留一個登入方式，連結與解除都會寫進 `auditLog`。
+- LINE Login channel 必須和 Messaging API channel 在同一個 Provider，否則 LIFF 的 `sub` 和 webhook 的 userId 不同，同一個人會變成兩個 user。
+- 群組裡的發言者沒有和 bot 建立關係，webhook 不會為他們建立任何資料。
+
+### 路徑
 
 | 路徑 | 資料 |
 | --- | --- |
-| `users/{uid}` | `last_seen_at`、`followed`（僅 follow/unfollow 時變更）、`display_name`（LIFF 登入時寫入）、`created_at`、`usage.{YYYY-MM-DD}`（每日 LLM 訊息計數） |
-| `users/{uid}/sessions/{sid}` | `title`、`created_at`、`updated_at`、`message_count`、`origin`（LINE 泡泡的 webhook event id，同一顆按鈕永遠開同一個對話）；每位使用者最多保留 50 個，超過時最久未更新的對話會被自動刪除 |
-| `users/{uid}/sessions/{sid}/messages/{mid}` | `role`、`content`、`created_at`、`tool_calls` |
+| `identityLookup/{sha256(provider:id)}` | `userId`、`provider`、`createdAt` |
+| `users/{uid}` | `status`（active / blocked / deleted）、`displayName`、`pictureUrl`、`createdAt`、`updatedAt`、`lastActiveAt`、`lastConversationId`、`lastModuleId`、`lastModuleUsedAt`、`conversationCount` |
+| `users/{uid}/identities/{provider}` | `providerUserId`、`linkedAt`、`lastLoginAt`、`metadata`（provider 專屬：LINE 的 `followed`、`liff`{os、appVersion、language、contextType、friendshipStatus}；前端自報，只當參考，不參與授權） |
+| `users/{uid}/auditLog/{id}` | `action`（link / unlink …）、`provider`、`at`、`expiresAt`（TTL 365 天） |
+| `users/{uid}/moduleStates/{moduleId}` | `@` 指令模組的 `lastUsedAt`、`usageCount` |
+| `users/{uid}/usage/{YYYY-MM-DD}` | 每日 LLM 訊息計數 `count`、`expiresAt`（TTL 8 天） |
+| `users/{uid}/conversationOrigins/{sha256(origin)}` | LINE 泡泡 → `conversationId`（同一顆按鈕永遠開同一個對話，刪除後重建） |
+| `users/{uid}/conversationCleanup/{cid}` | 已刪除、訊息尚未清完的對話（中斷後下次繼續清） |
+| `conversations/{cid}` | `userId`、`channel`、`status`、`title`、`startedAt`、`lastMessageAt`、`messageCount`、`metadata.origin`；每人最多 50 個，超過時刪除最久未更新的 |
+| `conversations/{cid}/messages/{mid}` | `role`、`contentType`、`content`、`toolCalls`、`model`、`promptVersion`、`tokenUsage`、`latencyMs`、`createdAt` |
+| `modules/{moduleId}` | `enabled: false` 可暫停某個 `@` 指令模組（沒有文件代表啟用；快取 60 秒） |
 
-`uid` 是 LINE userId，webhook 與 LIFF 共用同一份 `users/{uid}`。若需刪除個人資料，管理者以 `recursive_delete` 移除 `users/{uid}` 及其子集合。
-資料沒有自動到期；上線前應公告資料用途、保存期限與刪除聯絡方式。
+每一則訊息是一份文件，不存成 array；對話與訊息的讀取都會比對 `userId`，別人的對話一律當作不存在。
+`tokenUsage`、`model`、`promptVersion` 只存在資料庫供成本與品質分析，不會回傳給前端。
 
 Firestore 規則拒絕所有用戶端直接存取；後端透過服務帳號 IAM 存取，不依賴 Firebase Auth。
-部署規則與索引排除：
-
-```powershell
-firebase deploy --only firestore --project YOUR_PROJECT_ID
-```
-
-注意：此命令會套用專案的規則，若與其他應用共用 Firebase，先合併規則再部署。
-舊版的 `conversations` collection 已不再使用，請在 Console 手動刪除後再部署（移除 TTL 設定後殘留文件不會自動清除）。
+規則、複合索引、大型欄位的索引豁免與 TTL 都由 `infra/bootstrap.sh` 依 `firestore.rules`、`firestore.indexes.json` 套用。
 
 ## Cloud Run 部署
 
