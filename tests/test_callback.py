@@ -284,3 +284,13 @@ def test_rich_menu_missing_assets_does_not_call_line(tmp_path):
     ):
         rich_menu.set_rich_menu()
     api_client.assert_not_called()
+
+
+@pytest.mark.parametrize("data", ["menu-main", "menu-more"])
+def test_rich_menu_switch_postbacks_are_ignored_quietly(post, webhook_app, data):
+    switch = event(kind="postback")
+    switch["postback"] = {"data": data}
+    with patch("src.app.routes.callback.logger") as log:
+        assert post([switch]).status_code == 200
+    webhook_app.state.messaging_api.reply_message.assert_not_awaited()
+    log.warning.assert_not_called()

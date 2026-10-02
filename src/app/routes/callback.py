@@ -27,6 +27,8 @@ router = APIRouter()
 # 不用加 @ 也能叫出使用說明的關鍵字
 HELP_KEYWORDS = {"說明", "使用說明", "幫助", "help", "?", "？"}
 MODULE_DISABLED_MESSAGE = "這個功能暫停使用中，請稍後再試。"
+# Rich menu 的切換按鈕（RichMenuSwitchAction）也會送 postback；切換由 LINE 完成，不需要回覆
+RICH_MENU_SWITCH_DATA = {"menu-main", "menu-more"}
 
 
 async def resolve_user(event, state) -> str | None:
@@ -182,6 +184,8 @@ async def handle_postback(event: PostbackEvent, state, user_id, writes):
         writes.spawn(state.user_store.touch_activity(user_id), "touch_activity")
     postback_data = event.postback.data
     reply_token = event.reply_token
+    if postback_data in RICH_MENU_SWITCH_DATA:
+        return
 
     messages = None
 
