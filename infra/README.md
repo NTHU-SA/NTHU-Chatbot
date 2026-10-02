@@ -1,0 +1,102 @@
+# 環境建置（staging / prod）
+
+兩個環境放在**不同的 GCP 專案**，IAM、Secret、Firestore 和帳單都完全分開；在 staging 誤操作不會影響正式資料。
+
+| | staging | prod |
+|---|---|---|
+| 設定檔 | `infra/environments/staging.conf` | `infra/environments/prod.conf` |
+| GCP 專案 | `nthusa-chatbot` | 另開（填進 `prod.env`） |
+| 部署來源 | `NTHU-SA/NTHU-Chatbot` 的 `dev` | `NTHU-SA/NTHU-Chatbot` 的 `main` |
+| Cloud Run | `nthu-chatbot-staging` | `nthu-chatbot` |
+| LINE | 測試用 Provider 的頻道 | 正式 Provider（Messaging API 與 LINE Login 必須在**同一個 Provider**） |
+| Firestore 刪除保護 | 關 | 開 |
+
+兩個環境共用 repo 根目錄的 `cloudbuild.yaml`，差別只在 trigger 的 substitutions。
+
+## 腳本
+
+在 repo 根目錄，用 Git Bash 執行（需要已登入的 gcloud、curl、Python）：
+
+```bash
+bash infra/bootstrap.sh infra/environments/<env>.conf                          # 建立 / 校正資源
+ALERT_EMAIL=you@example.com bash infra/monitoring.sh infra/environments/<env>.conf  # 監測與告警
+```
+
+兩支腳本都可以重複執行：已存在的資源只會被校正。刪除類操作一律不做，只在下面列出指令，由人確認後手動執行。
+Windows 上如果 `python` 不是正確的直譯器，可以加 `PYTHON=.venv/Scripts/python.exe`。
+
+### `bootstrap.sh` 做的事
+
+1. 啟用需要的 API。
+2. 建立 Firestore `(default)`（Native mode），發布 `firestore.rules`（全部拒絕），套用 `firestore.indexes.json` 的索引豁免。
+3. 建立 Artifact Registry，設定清理規則：保留最新 3 個、刪除 7 天前的映像。
+4. 建立兩個 service account，只給最小權限：
+
+   | SA | 權限 |
+   |---|---|
+   | `nthu-chatbot`（執行期） | `datastore.user`；三個 Secret **個別**授予 `secretAccessor` |
+   | `nthu-chatbot-deployer`（Cloud Build） | `run.developer`、`logging.logWriter`、只限該 AR repo 的 `artifactregistry.writer`、只能代理執行期 SA 的 `iam.serviceAccountUser` |
+
+5. 建立 Secret（只建容器，不碰值）；任何 Secret 還沒有值時會停下來。
+6. 建立或更新 Cloud Run 服務：環境變數、Secret 掛載、`--timeout=180 --concurrency=40 --cpu-boost`、`min-instances=0`，並開放公開呼叫（webhook 與 API 自己驗證簽章和 id_token）。
+7. 建立 Cloud Build trigger（`deploy-<service>`），使用 `cloudbuild.yaml` 和部署 SA。
+
+### `monitoring.sh` 做的事
+
+- Email 通知管道（`ALERT_EMAIL` 只從環境變數讀，不會寫進 repo）。
+- Uptime check：每 5 分鐘 `GET /ping`、檢查回應含 `pong`。它也會讓實例保持在溫的狀態，減少冷啟動。
+- Log-based metric：該服務 `severity>=ERROR` 的 log。Cloud Run 上 log 是帶 severity 的 JSON，見 `log.py`。
+- 三個告警：uptime 失敗、5 分鐘內超過 5 個 5xx、出現 ERROR log。
+
+## 加入 Secret 值
+
+值只從 stdin 進 Secret Manager，不會出現在指令列、shell history 或檔案裡：
+
+```bash
+read -rsp "openai-api-key: " v && printf %s "$v" | gcloud secrets versions add openai-api-key --project=<PROJECT_ID> --data-file=- ; unset v
+read -rsp "line-channel-secret: " v && printf %s "$v" | gcloud secrets versions add line-channel-secret --project=<PROJECT_ID> --data-file=- ; unset v
+read -rsp "line-channel-access-token: " v && printf %s "$v" | gcloud secrets versions add line-channel-access-token --project=<PROJECT_ID> --data-file=- ; unset v
+```
+
+這幾行要在**自己的終端機**執行（需要互動輸入）。輪替金鑰時加新版本，再把舊版本 disable：
+
+```bash
+gcloud secrets versions disable <舊版本號> --secret=<name> --project=<PROJECT_ID>
+```
+
+## 建立 prod
+
+1. 建立 GCP 專案並連結帳單帳戶（Console → 建立專案），把專案 ID 填進 `infra/environments/prod.conf`。
+2. 在 LINE Developers 的**正式 Provider** 建立 Messaging API 與 LINE Login channel；LINE Login 底下建立 LIFF app。把 channel ID、LIFF ID 填進 `prod.env`。
+3. Console → Cloud Build → Repositories：連結 `NTHU-SA/NTHU-Chatbot`（需要 org 管理者同意安裝 Cloud Build GitHub App）。
+4. `bash infra/bootstrap.sh infra/environments/prod.conf`：第一次會停在 Secret 沒有值的那一步。
+5. 依上一節加入三個 Secret 值，再跑一次 bootstrap。
+6. `ALERT_EMAIL=... bash infra/monitoring.sh infra/environments/prod.conf`
+7. LINE Developers：Webhook URL 設為 `<服務網址>/callback`，開啟 Use webhook。
+8. 把 `main` 合併一次，觸發第一次部署，再用 `/ping` 和 LINE 實測。
+
+## 把 staging 校正到同一套設定
+
+staging 是在這套腳本之前手動建的。跑一次 `bootstrap.sh` 會補上部署 SA 與新 trigger（`deploy-nthu-chatbot-staging`），服務設定也會被校正成和 prod 相同。
+確認新 trigger 能成功部署後，再手動清掉舊設定：
+
+```bash
+# 舊 trigger（部署 fork 的 feat/liff-chat）
+gcloud builds triggers delete rmgpgab-nthu-chatbot-staging-asia-northeast1-ChiuKuanHsun-NTrrv --project=nthusa-chatbot
+# 舊 trigger 用的 default compute SA 權限過大（專案層級 run.admin 與 serviceAccountUser）
+for role in roles/run.admin roles/run.builder roles/iam.serviceAccountUser roles/artifactregistry.writer roles/logging.logWriter; do
+  gcloud projects remove-iam-policy-binding nthusa-chatbot \
+    --member=serviceAccount:1008940193124-compute@developer.gserviceaccount.com --role="$role" --condition=None
+done
+```
+
+## 驗證
+
+```bash
+curl -fsS <服務網址>/ping                       # {"message":"pong"}
+curl -fsS <服務網址>/api/config                  # 只會有 liff_id
+gcloud run services describe <service> --region=<region> --project=<PROJECT_ID> \
+  --format="yaml(spec.template.spec.serviceAccountName,spec.template.metadata.annotations)"
+```
+
+告警測試：暫時把 uptime check 的路徑改成不存在的頁面（例如 `/nope`），幾分鐘內應該會收到告警信；測完改回 `/ping`。

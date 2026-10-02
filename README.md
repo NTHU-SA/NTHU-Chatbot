@@ -47,6 +47,8 @@ tests/                            pytest（fixture 在 conftest.py）
 requirements*.in / *.txt          直接依賴 / uv 產生的含雜湊鎖定檔
 pyproject.toml                    pytest、coverage、ruff 設定
 .github/workflows/ci.yml          CI：鎖定檔檢查、ruff、pytest + Firestore emulator
+cloudbuild.yaml                   Cloud Build：建置映像並更新 Cloud Run（兩個環境共用）
+infra/                            環境建置與監測腳本、各環境設定（非機密）
 ```
 
 ## 機密與設定
@@ -122,54 +124,23 @@ firebase deploy --only firestore --project YOUR_PROJECT_ID
 
 ## Cloud Run 部署
 
-需要啟用計費的 Firebase/GCP 專案、Google Cloud CLI 及 Firebase CLI。
-建置使用 Cloud Build / Artifact Registry，金鑰使用 Secret Manager。
-部署者需 Cloud Run 管理與服務帳號使用權限；建置服務帳號需 `roles/run.builder`。
-請參考 [Cloud Run source deployment prerequisites](https://cloud.google.com/run/docs/deploying-source-code)。
+staging（`dev` 分支）與 prod（`main` 分支）放在兩個獨立的 GCP 專案，建置與設定都寫成可重複執行的腳本。
+完整步驟、權限設計與 Secret 加入方式見 **[infra/README.md](infra/README.md)**。
 
-1. 啟用 API 並建立專用執行服務帳號（只需執行一次）：
-
-```powershell
-$ProjectId = "YOUR_PROJECT_ID"
-gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com firestore.googleapis.com secretmanager.googleapis.com --project $ProjectId
-gcloud iam service-accounts create nthu-chatbot --project $ProjectId
-$RuntimeAccount = "nthu-chatbot@$ProjectId.iam.gserviceaccount.com"
-gcloud projects add-iam-policy-binding $ProjectId --member "serviceAccount:$RuntimeAccount" --role roles/datastore.user
+```bash
+bash infra/bootstrap.sh infra/environments/prod.conf                            # Firestore、AR、SA、Secret、Cloud Run、trigger
+ALERT_EMAIL=you@example.com bash infra/monitoring.sh infra/environments/prod.conf  # uptime check、告警
 ```
 
-2. 在 Secret Manager Console 建立 `openai-api-key`、`line-channel-secret`、`line-channel-access-token`，各加入一個啟用版本。不要把金鑰貼進聊天或提交至 Git。
-
-```powershell
-foreach ($Secret in @("openai-api-key", "line-channel-secret", "line-channel-access-token")) {
-    gcloud secrets add-iam-policy-binding $Secret --project $ProjectId --member "serviceAccount:$RuntimeAccount" --role roles/secretmanager.secretAccessor
-}
-```
-
-3. 部署 Firestore 設定，再以 repo 根目錄首次部署（之後可改由 GitHub 持續部署）：
-
-```powershell
-firebase deploy --only firestore --project $ProjectId
-gcloud run deploy nthu-chatbot --source . --project $ProjectId --region asia-east1 `
-  --service-account $RuntimeAccount --allow-unauthenticated `
-  --timeout=180 --concurrency=40 --min-instances=0 --max-instances=3 `
-  --set-secrets "OPENAI_API_KEY=openai-api-key:latest,LINE_CHANNEL_SECRET=line-channel-secret:latest,LINE_CHANNEL_ACCESS_TOKEN=line-channel-access-token:latest" `
-  --set-env-vars "LINE_LOGIN_CHANNEL_ID=YOUR_LOGIN_CHANNEL_ID,LIFF_ID=YOUR_LIFF_ID,OPENAI_MODEL=gpt-5.6-luna,MCP_SERVER_URL=https://api.nthusa.tw/mcp,CHAT_STORE=firestore,GOOGLE_CLOUD_PROJECT=$ProjectId"
-```
-
-`--timeout=180` 需大於 LIFF 對話的 120 秒 agent 上限（SSE 長連線）；使用非官方端點時再加 `OPENAI_BASE_URL`。
-執行服務帳號透過 ADC 存取 Firestore，不上傳 JSON 私鑰。`.gcloudignore` 與 `.dockerignore` 會排除本機金鑰、環境檔與虛擬環境。
-不得在 Cloud Run 設定 `FIRESTORE_EMULATOR_HOST`。更新 Secret 後需重新部署新 revision。
-
-4. **從 GitHub 持續部署**：在 Cloud Run Console 對此服務設定「Continuous deployment from repo」，連結 GitHub repo 並選擇以 Dockerfile 建置。
-   機密與環境變數設定在 service 層級（上一步），之後每次 push 產生的 revision 會自動繼承，GitHub 端不需要任何 GCP 金鑰。
-   若改用 GitHub Actions，只能使用 Workload Identity Federation，不得把服務帳號 JSON 存進 GitHub Secrets。
-
-5. 將部署輸出的 HTTPS 網址填入 LINE Webhook（`/callback`）與 LIFF Endpoint URL（`/liff/`），驗證 `/ping`、`/api/config`、LINE Verify、指令查詢，
-   以及在聊天室輸入問題 → 按鈕開啟 LIFF → 串流回覆。
+- 部署：push 到對應分支 → Cloud Build（`cloudbuild.yaml`，使用專用的最小權限部署 SA）建置映像 → 只更新 Cloud Run 的映像。環境變數與 Secret 設定在服務上，每個新 revision 自動沿用；GitHub 端不需要任何 GCP 金鑰。
+- `--timeout=180` 必須大於 LIFF 對話的 120 秒 agent 上限（SSE 長連線）；使用非官方端點時再加 `OPENAI_BASE_URL`。
+- 執行期 SA 透過 ADC 存取 Firestore，不使用 JSON 私鑰。不得在 Cloud Run 設定 `FIRESTORE_EMULATOR_HOST`。更新 Secret 後要部署新 revision 才會生效。
+- Cloud Run 上的 log 是帶 `severity` 的 JSON（見 `log.py`），可以在 Logs Explorer 用 `severity>=ERROR` 篩選。
+- 部署後把服務網址填進 LINE Webhook（`/callback`），再驗證 `/ping`、`/api/config`、LINE Verify、指令查詢，以及聊天室提問 → 開啟 LIFF → 串流回覆。
 
 LIFF 對話單次最多 `MAX_AGENT_TURNS` 回合、120 秒逾時、每人每日 `DAILY_MESSAGE_LIMIT` 則；單一實例另有突發限流。
 `RateLimiter`、id_token 快取與 MCP 連線都是單一實例狀態；每日額度存在 Firestore，跨實例仍正確。
-建議設定 Google Cloud 與 LLM 供應商的預算告警，並依流量調整實例上限。
+建議設定 Google Cloud 與 LLM 供應商的預算告警，並依流量調整實例上限（`MAX_INSTANCES`）。
 
 ## API v2 遷移
 
