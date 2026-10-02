@@ -72,30 +72,36 @@ async def save_profile(
     使用者明確告訴你想被怎麼稱呼、或自己讀哪個系所時呼叫（例如「叫我小明」「我是資工系」）。
 
     只填使用者這次說出口的那一項，不要猜。department 會比對清大正式系所名稱；
-    回傳 ambiguous 時請用 suggest_replies 讓使用者從 candidates 選一個。
+    回傳 ambiguous 時什麼都沒存，請用 suggest_replies 讓使用者從 candidates 選一個，
+    之後再把稱呼與選好的系所一起存。
     """
     context = _writable(ctx)
     if context is None:
         return BLOCKED
-    saved = []
-    if nickname:
-        value = clean_text(nickname, MAX_NICKNAME_CHARS)
-        if value:
-            await context.users.set_preference(context.user_id, "nickname", value, SOURCE)
-            context.profile.nickname = value
-            saved.append({"kind": "nickname", "value": value})
+    # 先確定系所，再一起寫入：系所有多個可能時什麼都不改，等使用者選好再整筆存
+    values: dict[str, str] = {}
     if department:
         name, candidates = await context.departments.resolve(department)
         if name is None and candidates:
-            return _result("ambiguous", saved=saved, candidates=candidates)
+            return _result("ambiguous", saved=[], candidates=candidates)
         if name is None:
             # 清單不可用或對不到：仍記下使用者的說法（清理過、限長）
             name = clean_text(department, MAX_DEPARTMENT_CHARS)
         if name:
-            await context.users.set_preference(context.user_id, "department", name, SOURCE)
-            context.profile.department = name
-            saved.append({"kind": "department", "value": name})
-    return _result("saved" if saved else "nothing_to_save", saved=saved)
+            values["department"] = name
+    if nickname:
+        value = clean_text(nickname, MAX_NICKNAME_CHARS)
+        if value:
+            values["nickname"] = value
+    if not values:
+        return _result("nothing_to_save", saved=[])
+    await context.users.set_preferences(context.user_id, values, SOURCE)
+    saved = []
+    for kind in ("nickname", "department"):
+        if kind in values:
+            setattr(context.profile, kind, values[kind])
+            saved.append({"kind": kind, "value": values[kind]})
+    return _result("saved", saved=saved)
 
 
 @function_tool(name_override=REMEMBER)

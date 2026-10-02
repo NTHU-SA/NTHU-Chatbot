@@ -6,10 +6,14 @@ from fastapi import Depends, HTTPException, Request, status
 
 from src.app.auth.rate_limit import RateLimiter
 from src.app.auth.service import IdentityService
-from src.application.models.identity import AccountDisabledError, Principal
+from src.application.models.identity import DELETING, AccountDisabledError, Principal
 
 PROVIDER_HEADER = "x-auth-provider"
 DEFAULT_PROVIDER = "line"
+ACCOUNT_DELETING = {
+    "code": "account_deleting",
+    "message": "你的資料刪除還沒完成，請再執行一次刪除。",
+}
 
 
 def _bearer_token(request: Request) -> str:
@@ -27,6 +31,17 @@ def _bearer_token(request: Request) -> str:
 async def get_principal(
     request: Request, token: str = Depends(_bearer_token)
 ) -> Principal:
+    return await _principal(request, token, allow_deleting=False)
+
+
+async def get_principal_for_deletion(
+    request: Request, token: str = Depends(_bearer_token)
+) -> Principal:
+    """同 `get_principal`，但刪除中途失敗（status=deleting）的帳號也能通過，好讓使用者重試刪除。"""
+    return await _principal(request, token, allow_deleting=True)
+
+
+async def _principal(request: Request, token: str, *, allow_deleting: bool) -> Principal:
     """
     依 `X-Auth-Provider`（預設 line）挑選 authenticator 驗證 token。
 
@@ -41,8 +56,10 @@ async def get_principal(
 
     identities: IdentityService = request.app.state.identity_service
     try:
-        principal = await identities.resolve(identity)
-    except AccountDisabledError:
+        principal = await identities.resolve(identity, allow_deleting=allow_deleting)
+    except AccountDisabledError as error:
+        if error.status == DELETING:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, ACCOUNT_DELETING) from None
         raise HTTPException(status.HTTP_403_FORBIDDEN, "account disabled") from None
 
     limiter: RateLimiter = request.app.state.rate_limiter

@@ -6,6 +6,7 @@ Firestore 使用者與外部身分儲存。
   users/{uid}                               status / displayName / pictureUrl / createdAt / updatedAt /
                                             lastActiveAt / lastConversationId / lastModuleId /
                                             lastModuleUsedAt / conversationCount
+                                            （刪除後只剩墓碑：status=deleted / deletedAt / expiresAt（TTL））
   users/{uid}/identities/{provider}         provider / providerUserId / linkedAt / lastLoginAt /
                                             updatedAt / metadata{provider 專屬欄位}
   users/{uid}/auditLog/{id}                 action / provider / at / expiresAt（TTL）
@@ -13,7 +14,7 @@ Firestore 使用者與外部身分儲存。
   users/{uid}/usage/{YYYY-MM-DD}            count / expiresAt（TTL）
   users/{uid}/consents/{type}_v{version}    type / version / status / acceptedAt / revokedAt / source
   users/{uid}/preferences/{key}             value / source(user|assistant) / updatedAt（nickname、department）
-  users/{uid}/memory/{id}                   type / value / sourceConversationId / createdAt / updatedAt
+  users/{uid}/memory/{m00…m19}              type / value / sourceConversationId / createdAt / updatedAt
 
 瀏覽器永遠不直接碰 Firestore（rules 全部拒絕），這裡以 Admin SDK / ADC 存取。
 """
@@ -32,7 +33,11 @@ from google.api_core.exceptions import (
 from google.cloud import firestore
 
 from src.application.models.identity import (
+    ACTIVE,
+    DELETED,
+    DELETING,
     AccountDisabledError,
+    DeletionIncompleteError,
     IdentityConflictError,
     LastIdentityError,
     Principal,
@@ -53,6 +58,10 @@ from src.application.services.chat_store import new_id, now_utc
 TRANSACTION_ATTEMPTS = 10
 USAGE_RETENTION = timedelta(days=8)
 AUDIT_RETENTION = timedelta(days=365)
+# 墓碑要比 IdentityService 的對應快取（10 分鐘）與單次請求的時限活得久
+TOMBSTONE_RETENTION = timedelta(days=1)
+# BulkWriter 個別刪除的重試用盡時不會拋出例外，所以刪完要再列一次，必要時重刪
+DELETE_ATTEMPTS = 3
 
 
 class FirestoreUserStore:
@@ -102,10 +111,12 @@ class FirestoreUserStore:
         snapshot = await lookup.get()
         if snapshot.exists:
             user_id = snapshot.get("userId")
-            if await self.get_status(user_id) is not None:
-                await self._ensure_active(user_id)
+            status = await self.get_status(user_id)
+            if status not in (None, DELETED):
+                if status != ACTIVE:
+                    raise AccountDisabledError(user_id, status)
                 return user_id, False
-            # 指向的 user 已被刪除（刪除流程中斷）：移除過期的 lookup，建立新的 user
+            # 指向的 user 已刪除（只剩墓碑或文件不存在）：移除過期的 lookup，建立新的 user
             try:
                 await lookup.delete(
                     option=self._db.write_option(last_update_time=snapshot.update_time)
@@ -156,8 +167,9 @@ class FirestoreUserStore:
         return user_id, True
 
     async def _ensure_active(self, user_id: str) -> None:
-        if await self.get_status(user_id) != "active":
-            raise AccountDisabledError(user_id)
+        status = await self.get_status(user_id)
+        if status != ACTIVE:
+            raise AccountDisabledError(user_id, status)
 
     async def get_status(self, user_id: str) -> str | None:
         snapshot = await self._user(user_id).get(field_paths=["status"])
@@ -177,8 +189,8 @@ class FirestoreUserStore:
             lookup_snapshot = await lookup.get(transaction=transaction)
             identity_snapshot = await identity_ref.get(transaction=transaction)
             status = (user_snapshot.to_dict() or {}).get("status") if user_snapshot.exists else None
-            if status != "active":
-                raise AccountDisabledError(user_id)
+            if status != ACTIVE:
+                raise AccountDisabledError(user_id, status)
             if lookup_snapshot.exists:
                 if lookup_snapshot.get("userId") == user_id:
                     return
@@ -217,10 +229,31 @@ class FirestoreUserStore:
         await unlink(self._db.transaction(max_attempts=TRANSACTION_ATTEMPTS))
 
     # -- activity --
+    async def _undo_if_deleted(self, user_id: str, *refs, user_fields=()) -> bool:
+        """
+        寫入後確認帳號沒有被刪除；已刪除（墓碑）時撤銷剛寫入的文件與 user 欄位，回傳 False。
+
+        刪除流程是：status=deleting → 清資料 → 寫墓碑（status=deleted）→ 再清一次（見 `delete_user`）。
+        寫入若在墓碑之前完成，最後那次清除會刪掉它；在墓碑之後完成，這裡會讀到 deleted 並自己撤銷。
+        兩種順序都不會留下資料，也不需要交易鎖。
+        """
+        if await self.get_status(user_id) != DELETED:
+            return True
+        batch = self._db.batch()
+        for reference in refs:
+            batch.delete(reference)
+        if user_fields:
+            batch.update(
+                self._user(user_id), {field: firestore.DELETE_FIELD for field in user_fields}
+            )
+        await batch.commit()
+        return False
+
     async def touch_activity(self, user_id: str) -> None:
         await self._user(user_id).set(
             {"lastActiveAt": firestore.SERVER_TIMESTAMP}, merge=True
         )
+        await self._undo_if_deleted(user_id, user_fields=("lastActiveAt",))
 
     async def record_login(self, user: Principal, metadata: dict | None = None) -> None:
         """LIFF 頁面開啟時更新顯示資料與登入時間；顯示資料只採用驗證過的 claims。"""
@@ -246,11 +279,18 @@ class FirestoreUserStore:
         }
         batch.set(self._identity(user.user_id, user.provider), identity_update, merge=True)
         await batch.commit()
+        await self._undo_if_deleted(
+            user.user_id,
+            self._identity(user.user_id, user.provider),
+            user_fields=("displayName", "pictureUrl", "lastActiveAt", "updatedAt"),
+        )
 
     async def update_identity_metadata(self, user_id, provider, metadata) -> None:
-        await self._identity(user_id, provider).set(
+        reference = self._identity(user_id, provider)
+        await reference.set(
             {"metadata": metadata, "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True
         )
+        await self._undo_if_deleted(user_id, reference)
 
     async def record_module_use(self, user_id: str, module_id: str) -> None:
         batch = self._db.batch()
@@ -269,6 +309,11 @@ class FirestoreUserStore:
             merge=True,
         )
         await batch.commit()
+        await self._undo_if_deleted(
+            user_id,
+            self._user(user_id).collection("moduleStates").document(module_id),
+            user_fields=("lastModuleId", "lastModuleUsedAt"),
+        )
 
     # -- quota --
     async def consume_daily_quota(self, user_id: str, limit: int) -> bool:
@@ -286,6 +331,8 @@ class FirestoreUserStore:
             {"count": firestore.Increment(1), "expiresAt": now + USAGE_RETENTION},
             merge=True,
         )
+        if not await self._undo_if_deleted(user_id, reference):
+            return False
         snapshot = await reference.get(field_paths=["count"])
         return (snapshot.to_dict() or {}).get("count", 0) <= limit
 
@@ -308,13 +355,15 @@ class FirestoreUserStore:
             "source": source,
             "acceptedAt" if accepted else "revokedAt": firestore.SERVER_TIMESTAMP,
         }
+        consent = self._user(user_id).collection("consents").document(doc_id)
+        audit = self._audit(user_id)
         batch = self._db.batch()
-        batch.set(self._user(user_id).collection("consents").document(doc_id), payload, merge=True)
+        batch.set(consent, payload, merge=True)
         batch.create(
-            self._audit(user_id),
-            self._audit_payload("consent" if accepted else "revoke", document=doc_id),
+            audit, self._audit_payload("consent" if accepted else "revoke", document=doc_id)
         )
         await batch.commit()
+        await self._undo_if_deleted(user_id, consent, audit)
 
     # -- personalisation --
     async def get_profile(self, user_id: str) -> Profile:
@@ -340,30 +389,62 @@ class FirestoreUserStore:
         )
 
     async def set_preference(self, user_id, key, value, source) -> None:
-        await self._user(user_id).collection("preferences").document(key).set(
+        reference = self._user(user_id).collection("preferences").document(key)
+        await reference.set(
             {"value": value, "source": source, "updatedAt": firestore.SERVER_TIMESTAMP}
         )
+        await self._undo_if_deleted(user_id, reference)
+
+    async def set_preferences(self, user_id, values, source) -> None:
+        """一次寫入多項偏好（值為 None 代表清除），全部成功或全部不變。"""
+        collection = self._user(user_id).collection("preferences")
+        batch = self._db.batch()
+        written = []
+        for key, value in values.items():
+            reference = collection.document(key)
+            if value is None:
+                batch.delete(reference)
+            else:
+                batch.set(
+                    reference,
+                    {"value": value, "source": source, "updatedAt": firestore.SERVER_TIMESTAMP},
+                )
+                written.append(reference)
+        await batch.commit()
+        await self._undo_if_deleted(user_id, *written)
 
     async def delete_preference(self, user_id, key) -> None:
         await self._user(user_id).collection("preferences").document(key).delete()
 
     async def add_memory(self, user_id, value, source_conversation_id=None) -> MemoryItem:
+        """
+        每則記憶占一個固定的格子（文件 ID `m00`…`m19`），以 `create()` 搶空格。
+
+        「先數再寫」在並行時會超過上限；格子是有限的，`create()` 搶輸就換下一格，
+        所以不需要交易也絕不會超過 MAX_MEMORIES。
+        """
         collection = self._user(user_id).collection("memory")
-        aggregate = await collection.count().get()
-        if (aggregate[0][0].value if aggregate else 0) >= MAX_MEMORIES:
-            raise MemoryLimitError(user_id)
+        taken = {reference.id async for reference in collection.list_documents()}
         now = now_utc()
-        reference = collection.document(new_id())
-        await reference.create(
-            {
-                "type": "fact",
-                "value": value,
-                "sourceConversationId": source_conversation_id,
-                "createdAt": now,
-                "updatedAt": now,
-            }
-        )
-        return MemoryItem(id=reference.id, value=value, created_at=now)
+        payload = {
+            "type": "fact",
+            "value": value,
+            "sourceConversationId": source_conversation_id,
+            "createdAt": now,
+            "updatedAt": now,
+        }
+        for slot in memory_slots():
+            if slot in taken:
+                continue
+            reference = collection.document(slot)
+            try:
+                await reference.create(payload)
+            except (AlreadyExists, Conflict):
+                continue
+            if not await self._undo_if_deleted(user_id, reference):
+                raise AccountDisabledError(user_id, DELETED)
+            return MemoryItem(id=slot, value=value, created_at=now)
+        raise MemoryLimitError(user_id)
 
     async def delete_memory(self, user_id, memory_id) -> bool:
         reference = self._user(user_id).collection("memory").document(memory_id)
@@ -373,28 +454,76 @@ class FirestoreUserStore:
         return True
 
     async def set_onboarding(self, user_id, state) -> None:
-        await self._user(user_id).collection("moduleStates").document(ONBOARDING_MODULE).set(
-            {"state": state, "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True
-        )
+        reference = self._user(user_id).collection("moduleStates").document(ONBOARDING_MODULE)
+        await reference.set({"state": state, "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True)
+        await self._undo_if_deleted(user_id, reference)
 
     # -- deletion --
+    async def begin_deletion(self, user_id: str) -> None:
+        """
+        標記 `status=deleting`：之後的請求（其他實例在狀態快取過期後）只能再呼叫刪除。
+
+        刪除失敗時帳號停在這個狀態、外部身分對應也還在，使用者可以再按一次刪除。
+        """
+        await self._user(user_id).set(
+            {"status": DELETING, "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True
+        )
+
     async def delete_user(self, user_id: str) -> None:
         """
-        刪除 user 的所有資料。
+        刪除 user 的所有資料（呼叫前先 `begin_deletion`，對話由 ChatStore 另外刪除）。
 
-        1. 先標記 `status=deleted`：其他實例的狀態快取過期後立刻擋下這個帳號；
-        2. 刪除外部身分的 lookup：同一個 LINE 帳號之後登入會是全新的 user；
-        3. 遞迴刪除 user 文件與所有子集合（identities、consents、auditLog、usage、moduleStates…）。
+        1. 清除外部身分以外的所有子集合，並確認真的清空；
+        2. 同一個 batch 刪除外部身分與它的 lookup：之後同一個 LINE 帳號登入會是全新的 user；
+        3. user 文件換成不含個資的墓碑（status=deleted，TTL 自動消失）；
+        4. 再清一次：墓碑之前還在進行的寫入會在這裡被刪掉，之後的寫入會自己撤銷（`_undo_if_deleted`）。
+        任何一步沒清乾淨就拋出 DeletionIncompleteError。
         """
         user = self._user(user_id)
-        await user.set({"status": "deleted", "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True)
+        await self._wipe(user, keep=("identities",))
+        await self._delete_identities(user_id)
+        await user.set(
+            {
+                "status": DELETED,
+                "deletedAt": firestore.SERVER_TIMESTAMP,
+                "expiresAt": now_utc() + TOMBSTONE_RETENTION,
+            }
+        )
+        await self._wipe(user)
+
+    async def _delete_identities(self, user_id: str) -> None:
         batch = self._db.batch()
-        async for doc in user.collection("identities").stream():
+        async for doc in self._user(user_id).collection("identities").stream():
             data = doc.to_dict() or {}
             if data.get("provider") and data.get("providerUserId"):
-                batch.delete(self._lookup(data["provider"], data["providerUserId"]))
-        await batch.commit()
-        await self._db.recursive_delete(user)
+                lookup = self._lookup(data["provider"], data["providerUserId"])
+                snapshot = await lookup.get()
+                # 只刪指向自己的 lookup
+                if snapshot.exists and snapshot.get("userId") == user_id:
+                    batch.delete(
+                        lookup, option=self._db.write_option(last_update_time=snapshot.update_time)
+                    )
+            batch.delete(doc.reference)
+        try:
+            await batch.commit()
+        except (FailedPrecondition, NotFound, Conflict):
+            raise DeletionIncompleteError(user_id) from None
+
+    async def _wipe(self, user, keep: tuple[str, ...] = ()) -> None:
+        """遞迴刪除 user 文件底下的子集合（`keep` 除外），刪完重新列出確認，最多重試 DELETE_ATTEMPTS 次。"""
+        for attempt in range(DELETE_ATTEMPTS + 1):
+            remaining = [c async for c in user.collections() if c.id not in keep]
+            if not remaining:
+                return
+            if attempt == DELETE_ATTEMPTS:
+                break
+            for collection in remaining:
+                await self._db.recursive_delete(collection)
+        raise DeletionIncompleteError(user.id)
+
+
+def memory_slots() -> list[str]:
+    return [f"m{index:02d}" for index in range(MAX_MEMORIES)]
 
 
 async def _collect(stream) -> list:

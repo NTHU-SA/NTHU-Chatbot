@@ -10,10 +10,15 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 from loguru import logger
 
-from src.app.auth.dependencies import get_principal
+from src.app.auth.dependencies import get_principal, get_principal_for_deletion
 from src.app.background import BackgroundWrites
 from src.application.models.chat import ConsentRequest, ConsentState, MeResponse
-from src.application.models.identity import CONSENT_TYPES, LiffClientInfo, Principal
+from src.application.models.identity import (
+    CONSENT_TYPES,
+    DeletionIncompleteError,
+    LiffClientInfo,
+    Principal,
+)
 from src.application.models.profile import (
     MAX_DEPARTMENT_CHARS,
     MAX_NICKNAME_CHARS,
@@ -30,7 +35,10 @@ router = APIRouter(prefix="/api", tags=["account"])
 
 PRIVACY_POLICY = "privacy_policy"
 CONSENT_SOURCE = "LIFF"
-CONSENT_REQUIRED = {"code": "consent_required", "message": "請先閱讀並同意隱私權政策。"}
+DELETION_INCOMPLETE = {
+    "code": "deletion_incomplete",
+    "message": "部分資料還沒刪除完成，請稍後再執行一次刪除。",
+}
 
 
 def _users(request: Request) -> UserStore:
@@ -48,9 +56,20 @@ async def consent_state(request: Request, user: Principal) -> ConsentState:
 
 
 async def require_consent(request: Request, user: Principal) -> None:
-    """未同意目前版本的隱私權政策時回 403 `consent_required`（前端據此顯示同意畫面）。"""
-    if not (await consent_state(request, user)).accepted:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, CONSENT_REQUIRED)
+    """
+    未同意目前版本的隱私權政策時回 403 `consent_required`，並附上需要同意的版本，
+    前端據此顯示同意畫面（頁面開著時政策改版也能正確處理）。
+    """
+    state = await consent_state(request, user)
+    if not state.accepted:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            {
+                "code": "consent_required",
+                "message": "請先閱讀並同意隱私權政策。",
+                "version": state.version,
+            },
+        )
 
 
 async def _me(request: Request, user: Principal, client: LiffClientInfo | None) -> MeResponse:
@@ -145,38 +164,37 @@ async def update_profile(
     對不到時回 422 `department_not_found`；官方清單暫時無法取得時才接受原文。
     """
     users = _users(request)
-    filled = False
+    # 先驗證全部欄位，再一次寫入：系所有誤時回 422，稱呼也不會被改
+    values: dict[str, str | None] = {}
     if body.nickname is not None:
-        nickname = clean_text(body.nickname, MAX_NICKNAME_CHARS)
-        if nickname:
-            await users.set_preference(user.user_id, "nickname", nickname, "user")
-            filled = True
-        else:
-            await users.delete_preference(user.user_id, "nickname")
+        values["nickname"] = clean_text(body.nickname, MAX_NICKNAME_CHARS) or None
     if body.department is not None:
         text = clean_text(body.department, MAX_DEPARTMENT_CHARS)
-        if not text:
-            await users.delete_preference(user.user_id, "department")
-        else:
-            directory = _departments(request)
-            name, candidates = await directory.resolve(text)
-            if name is None and candidates:
-                raise HTTPException(
-                    status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    {"code": "department_ambiguous", "message": "請選擇正確的系所", "candidates": candidates},
-                )
-            if name is None and await directory.names():
-                raise HTTPException(
-                    status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    {"code": "department_not_found", "message": "找不到這個系所，請從清單選擇"},
-                )
-            await users.set_preference(user.user_id, "department", name or text, "user")
-            filled = True
+        values["department"] = await _resolve_department(request, text) if text else None
+    if values:
+        await users.set_preferences(user.user_id, values, "user")
+    filled = any(values.values())
     if filled:
         await users.set_onboarding(user.user_id, "done")
     elif body.skip_onboarding:
         await users.set_onboarding(user.user_id, "skipped")
     return await users.get_profile(user.user_id)
+
+
+async def _resolve_department(request: Request, text: str) -> str:
+    directory = _departments(request)
+    name, candidates = await directory.resolve(text)
+    if name is None and candidates:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            {"code": "department_ambiguous", "message": "請選擇正確的系所", "candidates": candidates},
+        )
+    if name is None and await directory.names():
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            {"code": "department_not_found", "message": "找不到這個系所，請從清單選擇"},
+        )
+    return name or text
 
 
 @router.delete("/memories/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -192,14 +210,26 @@ async def list_departments(request: Request, user: Principal = Depends(get_princ
 
 
 @router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_me(request: Request, user: Principal = Depends(get_principal)):
+async def delete_me(request: Request, user: Principal = Depends(get_principal_for_deletion)):
     """
     刪除我的所有資料：對話與訊息、稱呼與系所、記憶、同意紀錄、使用紀錄、外部身分對應與帳號本身。
 
+    1. 先把帳號標成 deleting：其他請求（其他實例在狀態快取過期後）一律被擋，只能再呼叫刪除；
+    2. 刪除對話與 user 資料，每一步都重新查詢確認清空；user 文件最後換成不含個資的墓碑；
+    3. 再刪一次對話：涵蓋墓碑寫入前還在進行的請求建立的對話（之後建立的會自己撤銷）。
+    沒刪乾淨時回 503 `deletion_incomplete`，帳號維持 deleting，使用者可以再呼叫一次。
     完成後同一個 LINE 帳號再開啟頁面會是全新的使用者（需要重新同意隱私權政策）。
     """
     chats: ChatStore = request.app.state.store
-    await chats.delete_all_sessions(user.user_id)
-    await _users(request).delete_user(user.user_id)
+    users = _users(request)
+    await users.begin_deletion(user.user_id)
+    request.app.state.identity_service.forget_user(user.user_id)
+    try:
+        await chats.delete_all_sessions(user.user_id)
+        await users.delete_user(user.user_id)
+        await chats.delete_all_sessions(user.user_id)
+    except DeletionIncompleteError:
+        logger.error("User data deletion incomplete")
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, DELETION_INCOMPLETE) from None
     request.app.state.identity_service.forget_user(user.user_id)
     logger.info("User data deleted on request")

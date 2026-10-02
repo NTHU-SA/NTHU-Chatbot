@@ -63,6 +63,8 @@ class RenameSessionRequest(BaseModel):
 
 class SendMessageRequest(BaseModel):
     text: str = Field(min_length=1)
+    # 重試上一則沒有得到回覆的訊息：帶那則使用者訊息的 id，伺服器不會再存一次
+    retry_of: str | None = Field(default=None, max_length=64)
 
 
 class ConsentState(BaseModel):

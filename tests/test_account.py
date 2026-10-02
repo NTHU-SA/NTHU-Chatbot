@@ -1,6 +1,7 @@
-import pytest
+from pathlib import Path
 
-from src.application.models.identity import lookup_key
+from src.application.models.identity import DeletionIncompleteError, lookup_key
+from src.core.privacy import PRIVACY_POLICY_VERSION
 from tests.fakes import AUTH, TEST_IDENTITY, make_settings, parse_sse
 
 CONSENT = "/api/consents/privacy_policy"
@@ -26,7 +27,9 @@ def test_new_user_must_consent_before_ai_chat(client, runner):
     session_id = session(client)  # 建立 / 列出對話不經過 AI，不需要同意
     response = send(client, session_id)
     assert response.status_code == 403
+    # 附上需要同意的版本：頁面開著時政策改版，前端也知道要請使用者同意哪一版
     assert response.json()["detail"]["code"] == "consent_required"
+    assert response.json()["detail"]["version"] == "1"
     assert runner.streams == []  # 沒有任何內容送到 LLM
     assert client.get(f"/api/sessions/{session_id}/messages", headers=AUTH).json() == []
 
@@ -84,7 +87,7 @@ def test_delete_me_removes_everything_and_next_login_is_a_new_user(client, chat_
     assert client.delete("/api/me", headers=AUTH).status_code == 204
 
     users, chats = chat_app.state.user_store, chat_app.state.store
-    assert old_id not in users.users
+    assert users.users[old_id] == {"status": "deleted"}  # 只剩不含個資的墓碑
     assert old_id not in users.identities
     assert old_id not in users.consents
     assert lookup_key("line", TEST_IDENTITY.provider_user_id) not in users.lookup
@@ -102,20 +105,39 @@ def test_delete_me_requires_auth(client):
     assert client.delete("/api/me").status_code == 401
 
 
-@pytest.mark.parametrize("value", ["", "has space", "x" * 21])
-def test_invalid_policy_version_fails_fast(value, monkeypatch):
-    import os
+def test_failed_deletion_can_be_retried_and_blocks_everything_else(client, chat_app, monkeypatch):
+    client.post(CONSENT, headers=AUTH, json={"version": "1"})
+    session(client)
+    users = chat_app.state.user_store
+    old_id = user_id(chat_app)
+    real_delete = users.delete_user
 
+    async def flaky(uid):
+        raise DeletionIncompleteError(uid)
+
+    monkeypatch.setattr(users, "delete_user", flaky)
+    failed = client.delete("/api/me", headers=AUTH)
+    assert failed.status_code == 503
+    assert failed.json()["detail"]["code"] == "deletion_incomplete"
+    assert users.users[old_id]["status"] == "deleting"
+
+    # 刪除中：其他 API 一律擋下，前端據此顯示「完成刪除」
+    blocked = client.get("/api/me", headers=AUTH)
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"]["code"] == "account_deleting"
+
+    monkeypatch.setattr(users, "delete_user", real_delete)
+    assert client.delete("/api/me", headers=AUTH).status_code == 204
+    assert users.users[old_id] == {"status": "deleted"}
+    assert client.get("/api/me", headers=AUTH).status_code == 200
+    assert user_id(chat_app) != old_id
+
+
+def test_policy_version_has_one_source():
     from src.core.config import Settings
 
-    base = {
-        "LINE_CHANNEL_SECRET": "s", "LINE_CHANNEL_ACCESS_TOKEN": "t", "LINE_LOGIN_CHANNEL_ID": "1",
-        "LIFF_ID": "l", "OPENAI_API_KEY": "k", "CHAT_STORE": "memory",
-        "PRIVACY_POLICY_VERSION": value,
-    }
-    monkeypatch.setattr(os, "environ", base)
-    if value == "":
-        assert Settings.from_env().privacy_policy_version == "1"  # 空值沿用預設
-    else:
-        with pytest.raises(RuntimeError, match="PRIVACY_POLICY_VERSION"):
-            Settings.from_env()
+    assert Settings.__dataclass_fields__["privacy_policy_version"].default == PRIVACY_POLICY_VERSION
+    # 沒有經過 build 的頁面（本機開發）也顯示同一個版本
+    page = Path(__file__).resolve().parent.parent / "frontend" / "privacy.html"
+    marker = f"<span data-policy-version>{PRIVACY_POLICY_VERSION}</span>"
+    assert marker in page.read_text(encoding="utf-8")

@@ -29,10 +29,17 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from loguru import logger
 
 from src.application.models.chat import Message, MessageMeta, Session, ToolCall
+from src.application.models.identity import (
+    DELETED,
+    AccountDisabledError,
+    DeletionIncompleteError,
+)
 from src.application.services.chat_store import MAX_SESSIONS_PER_USER, new_id, now_utc
 
 TRANSACTION_ATTEMPTS = 10
 CHANNEL = "liff"
+# 刪除後重新查詢確認；BulkWriter 個別刪除的重試用盡時不會拋出例外
+DELETE_ATTEMPTS = 3
 
 
 class FirestoreChatStore:
@@ -127,9 +134,27 @@ class FirestoreChatStore:
             )
 
         if created:
+            await self._undo_if_deleted(user_id, session)
             await self._enforce_limit(user_id)
         await self._drain_cleanup(user_id)
         return session, created
+
+    async def _undo_if_deleted(self, user_id: str, session: Session) -> None:
+        """
+        建立後確認 user 沒有被刪除（只剩墓碑）；已刪除時撤銷這個對話並拋出 AccountDisabledError。
+
+        和 FirestoreUserStore 一樣：墓碑之前建立的對話由刪除流程的最後一輪清掉，之後建立的在這裡撤銷。
+        """
+        snapshot = await self._user(user_id).get(field_paths=["status"])
+        if (snapshot.to_dict() or {}).get("status") != DELETED:
+            return
+        await self._db.recursive_delete(self._conversations().document(session.id))
+        if session.origin:
+            await self._origin(user_id, session.origin).delete()
+        await self._user(user_id).update(
+            {"conversationCount": firestore.DELETE_FIELD, "lastConversationId": firestore.DELETE_FIELD}
+        )
+        raise AccountDisabledError(user_id, DELETED)
 
     async def _create_for_origin(self, user_id, origin, reference, payload, counter, session):
         """
@@ -232,9 +257,29 @@ class FirestoreChatStore:
         return True
 
     async def delete_all_sessions(self, user_id: str) -> None:
-        """刪除該 user 的所有對話（含訊息）；origin 與 cleanup 文件隨 user 文件一起刪除。"""
-        async for doc in self._owned(user_id).stream():
-            await self._db.recursive_delete(doc.reference)
+        """
+        刪除該 user 的所有對話與訊息，包括已被淘汰、訊息還沒清完的對話（cleanup marker）。
+
+        刪完重新查詢確認沒有剩下的對話與訊息，最多重試 DELETE_ATTEMPTS 次，仍有殘留就拋出
+        DeletionIncompleteError。origin 與 cleanup 文件隨 user 文件一起刪除。
+        """
+        seen: set[str] = set()
+        for attempt in range(DELETE_ATTEMPTS + 1):
+            owned = [doc.id async for doc in self._owned(user_id).stream()]
+            seen.update(owned)
+            seen.update([doc.id async for doc in self._cleanup(user_id).stream()])
+            leftovers = set(owned)
+            for session_id in seen - leftovers:
+                if await self._messages(session_id).limit(1).get():
+                    leftovers.add(session_id)
+            if not leftovers:
+                return
+            if attempt == DELETE_ATTEMPTS:
+                break
+            for session_id in leftovers:
+                # 文件已不存在時也會刪除底下的 messages
+                await self._db.recursive_delete(self._conversations().document(session_id))
+        raise DeletionIncompleteError(user_id)
 
     async def _drain_cleanup(self, user_id: str) -> None:
         """

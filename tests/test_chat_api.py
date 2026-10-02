@@ -337,6 +337,43 @@ def test_agent_error_is_reported_not_persisted(client, runner):
     assert [m["role"] for m in messages_of(client, session_id).json()] == ["user"]
 
 
+def test_retry_reuses_the_stored_user_message(client, runner):
+    runner.fail = True
+    session_id = new_session(client)
+    events = parse_sse(send(client, session_id, "hi").text)
+    stored_id = events[0][1]["id"]
+
+    runner.fail = False
+    response = client.post(
+        f"/api/sessions/{session_id}/messages",
+        headers=AUTH,
+        json={"text": "hi", "retry_of": stored_id},
+    )
+    events = parse_sse(response.text)
+    assert events[0] == ("user_message", {"id": stored_id})
+    assert events[-1][0] == "done"
+    # 使用者訊息只存一次，模型也不會收到重複的問題
+    assert [m["role"] for m in messages_of(client, session_id).json()] == ["user", "assistant"]
+    history, text = runner.streams[-1]
+    assert (history, text) == ([], "hi")
+
+
+@pytest.mark.parametrize("retry_of", ["someone-else", None])
+def test_retry_of_a_message_that_already_has_a_reply_is_rejected(client, runner, retry_of):
+    session_id = new_session(client)
+    events = parse_sse(send(client, session_id, "hi").text)
+    calls = len(runner.streams)
+    response = client.post(
+        f"/api/sessions/{session_id}/messages",
+        headers=AUTH,
+        json={"text": "hi", "retry_of": retry_of or events[0][1]["id"]},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "retry_stale"
+    assert len(runner.streams) == calls
+    assert len(messages_of(client, session_id).json()) == 2
+
+
 def test_oversized_agent_output_is_bounded_before_persistence(client, chat_app):
     chat_app.state.settings = make_settings(max_output_chars=12)
     output = "超長回覆" * 20
