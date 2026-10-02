@@ -47,7 +47,9 @@ def begin_external_call(*, web_search: bool = False) -> None:
         return
     state.tainted = True
     if state.tool_calls >= state.max_tool_calls:
-        raise ToolBudgetExceeded("tool call limit for this message reached; answer with what you have")
+        raise ToolBudgetExceeded(
+            "tool call limit for this message reached; answer with what you have"
+        )
     if web_search and state.web_searches >= state.max_web_searches:
         raise ToolBudgetExceeded("web search limit for this message reached")
     state.tool_calls += 1

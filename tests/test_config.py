@@ -123,10 +123,12 @@ def test_secrets_are_not_in_repr():
 
 
 def test_cors_origins_are_parsed_and_normalised():
-    settings = load({
-        **MEMORY,
-        "CORS_ALLOWED_ORIGINS": " https://NTHUSA-chatbot.web.app ,https://nthusa-chatbot.firebaseapp.com,",
-    })
+    settings = load(
+        {
+            **MEMORY,
+            "CORS_ALLOWED_ORIGINS": " https://NTHUSA-chatbot.web.app ,https://nthusa-chatbot.firebaseapp.com,",
+        }
+    )
     assert settings.cors_allowed_origins == (
         "https://nthusa-chatbot.web.app",
         "https://nthusa-chatbot.firebaseapp.com",
@@ -137,7 +139,14 @@ def test_cors_origins_are_parsed_and_normalised():
 
 @pytest.mark.parametrize(
     "value",
-    ["*", "https://a.web.app/", "https://a.web.app/path", "http://evil.example", "null", "https://localhost"],
+    [
+        "*",
+        "https://a.web.app/",
+        "https://a.web.app/path",
+        "http://evil.example",
+        "null",
+        "https://localhost",
+    ],
 )
 def test_unsafe_cors_origins_fail_fast(value):
     with pytest.raises(RuntimeError, match="CORS_ALLOWED_ORIGINS"):

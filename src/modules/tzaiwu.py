@@ -34,9 +34,7 @@ def tzaiwu_space(event):
                     altText="我要借空間！",
                     text="超過預約總時長四分之一或十分鐘內未使用，則自動取消預約，開放其他齋民直接使用空間。",
                     actions=[
-                        URIAction(
-                            label="仁齋空間登記！", uri="https://space-64c57.web.app/"
-                        ),
+                        URIAction(label="仁齋空間登記！", uri="https://space-64c57.web.app/"),
                         URIAction(
                             label="仁齋空間借用狀況",
                             uri="https://calendar.google.com/calendar/embed?src=oa27fmn21hoqd0hvdpg1bqlv1k%40group.calendar.google.com&ctz=Asia%2FTaipei",
@@ -90,12 +88,8 @@ def tzaiwu_space(event):
                     altText="我要借齋丘！",
                     text="請先詳閱借用辦法及借用情況後，在填寫表單喔，感謝！如對借用辦法有任何疑問，歡迎私訊齋丘粉專！",
                     actions=[
-                        URIAction(
-                            label="T-house 借用表單", uri="https://space-64c57.web.app/"
-                        ),
-                        URIAction(
-                            label="T-house 借用狀況", uri="https://lihi1.cc/MdAfJ"
-                        ),
+                        URIAction(label="T-house 借用表單", uri="https://space-64c57.web.app/"),
+                        URIAction(label="T-house 借用狀況", uri="https://lihi1.cc/MdAfJ"),
                     ],
                 ),
             ]

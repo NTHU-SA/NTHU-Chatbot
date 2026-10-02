@@ -73,7 +73,10 @@ def test_policy_version_bump_requires_consent_again(client, chat_app):
 
 
 def test_unknown_consent_type_is_404(client):
-    assert client.post("/api/consents/marketing", headers=AUTH, json={"version": "1"}).status_code == 404
+    assert (
+        client.post("/api/consents/marketing", headers=AUTH, json={"version": "1"}).status_code
+        == 404
+    )
 
 
 # -- delete my data --

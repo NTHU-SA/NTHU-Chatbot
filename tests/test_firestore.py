@@ -266,8 +266,12 @@ async def test_messages_store_metadata_and_respect_limit(db, users, chats):
         latency_ms=1234,
     )
     saved = await chats.add_message(
-        user_id, session.id, "assistant", "done",
-        [ToolCall(name="get_next_buses", args={"route": "main"})], meta,
+        user_id,
+        session.id,
+        "assistant",
+        "done",
+        [ToolCall(name="get_next_buses", args={"route": "main"})],
+        meta,
     )
     messages = await chats.list_messages(user_id, session.id, 3)
     assert [m.content for m in messages] == ["3", "4", "done"]
@@ -469,7 +473,9 @@ async def test_deleting_account_is_refused_until_deletion_finishes(db, users):
 async def test_writes_that_land_after_deletion_undo_themselves(db, users, chats):
     who = identity()
     user_id, _ = await users.resolve_or_create(who)
-    principal = Principal(user_id=user_id, provider="line", display_name="測試者", picture_url="https://x")
+    principal = Principal(
+        user_id=user_id, provider="line", display_name="測試者", picture_url="https://x"
+    )
     await delete_everything(users, chats, user_id)
 
     # 刪除前就開始、刪除後才寫入的請求（例如另一個實例的背景寫入）
@@ -574,7 +580,11 @@ async def test_profile_preferences_memory_and_onboarding(db, users):
     await users.set_onboarding(user_id, "asked")
 
     profile = await users.get_profile(user_id)
-    assert (profile.nickname, profile.department, profile.onboarding) == ("小明", "資訊工程學系", "asked")
+    assert (profile.nickname, profile.department, profile.onboarding) == (
+        "小明",
+        "資訊工程學系",
+        "asked",
+    )
     assert [m.value for m in profile.memories] == ["住清齋", "大二"]
     stored = await doc(db, f"users/{user_id}/preferences/nickname")
     assert stored["source"] == "assistant" and isinstance(stored["updatedAt"], datetime)

@@ -97,14 +97,10 @@ class CommandHandler:
         """初始化模組名稱與前綴的映射關係。"""
         modules_config = self.config.get("modules", {})
         self.module_name_to_prefix = {
-            module: info["prefix"]
-            for module, info in modules_config.items()
-            if "prefix" in info
+            module: info["prefix"] for module, info in modules_config.items() if "prefix" in info
         }
         self.prefix_to_module_name = {
-            info["prefix"]: module
-            for module, info in modules_config.items()
-            if "prefix" in info
+            info["prefix"]: module for module, info in modules_config.items() if "prefix" in info
         }
 
     @staticmethod
@@ -249,9 +245,7 @@ class CommandHandler:
             title=(command.menu_info.title if command.menu_info else command.names[0]),
             text=(command.menu_info.description if command.menu_info else ""),
             actions=actions,
-            thumbnail_image_url=(
-                command.menu_info.image_url if command.menu_info else None
-            ),
+            thumbnail_image_url=(command.menu_info.image_url if command.menu_info else None),
         )
 
     async def auto_generate_default_menu(self, module: str) -> list[TemplateMessage]:

@@ -154,9 +154,7 @@ class Settings:
         """
         chat_store = (os.getenv("CHAT_STORE") or "firestore").strip().lower()
         if chat_store not in CHAT_STORES:
-            raise RuntimeError(
-                "Invalid CHAT_STORE, expected one of: " + ", ".join(CHAT_STORES)
-            )
+            raise RuntimeError("Invalid CHAT_STORE, expected one of: " + ", ".join(CHAT_STORES))
 
         required = [
             "LINE_CHANNEL_SECRET",

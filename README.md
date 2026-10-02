@@ -66,16 +66,21 @@ frontend/                         LIFF 前端與隱私權政策頁
 infra/                            環境建置、監測、前端部署腳本與各環境設定（非機密）
 cloudbuild.yaml                   Cloud Build：建置映像並更新 Cloud Run（兩個環境共用）
 tests/                            pytest（fixture 在 conftest.py，假物件在 fakes.py）
-requirements*.in / *.txt          直接依賴 / uv 產生的含雜湊鎖定檔
+pyproject.toml / uv.lock          依賴（執行期、dev、test group）與工具設定 / uv 產生的鎖定檔
+.pre-commit-config.yaml           isort、Black、Ruff 與 uv.lock 檢查（本機與 CI 共用）
 ```
+
+程式沿用 `src/{app,application,core,infrastructure}` 分層，而不是資訊處開發守則給新專案的 `src/<package>/`：這個 repo 早於守則，搬移會改動所有 import，目前沒有實際好處。
+
+前端 CSS 的顏色、字型、字級、間距與圓角一律使用 `frontend/style.css` `:root` 的變數（深色模式只覆寫顏色變數），不要在規則裡寫死數值。
 
 ## 本機開發
 
-需要 Python 3.12（與 Dockerfile、CI 一致）。以下為 PowerShell 指令：
+需要 [uv](https://docs.astral.sh/uv/)；Python 版本寫在 `.python-version`（3.12，與 `pyproject.toml`、Dockerfile、CI 一致），uv 會自動準備。以下為 PowerShell 指令：
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --require-hashes -r requirements-dev.txt
+uv sync --locked                  # 依 uv.lock 建立 .venv（含 dev 與 test group）
+uv run pre-commit install         # 之後每次 commit 自動跑 isort、Black、Ruff
 Copy-Item .env.template .env      # 填入 LINE、LIFF、LLM 設定；不要覆蓋已有的 .env
 ```
 
@@ -83,14 +88,14 @@ Copy-Item .env.template .env      # 填入 LINE、LIFF、LLM 設定；不要覆�
 
 ```powershell
 gcloud auth application-default login
-.\.venv\Scripts\python.exe main.py        # API 在 http://localhost:5000，健康檢查 /ping
+uv run main.py                    # API 在 http://localhost:5000，健康檢查 /ping
 ```
 
 前端是純靜態檔：
 
 ```powershell
 Copy-Item frontend\config.example.json frontend\config.json   # 填入 LIFF ID 與 API 網址（git-ignored）
-.\.venv\Scripts\python.exe -m http.server 5500 --directory frontend
+uv run python -m http.server 5500 --directory frontend
 ```
 
 並在 `.env` 設 `CORS_ALLOWED_ORIGINS=http://localhost:5500`。在 LINE 裡測試需要公開的 HTTPS 網址：
@@ -232,38 +237,47 @@ ALERT_EMAIL=you@example.com bash infra/monitoring.sh infra/environments/prod.con
 
 ### 依賴管理
 
-直接依賴寫在 `requirements.in`（執行期）與 `requirements-dev.in`（測試 / CI 工具）；`requirements*.txt` 是 [uv](https://docs.astral.sh/uv/) 產生、含雜湊的跨平台鎖定檔，**不要手動編輯**。
+`pyproject.toml` + `uv.lock` 是唯一的依賴來源（不使用 requirements.txt）。`uv.lock` 含每個套件的雜湊，**不要手動編輯**：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install uv   # 只在本機用來產生鎖定檔
-.\.venv\Scripts\uv pip compile requirements.in --universal --generate-hashes --python-version 3.12 -o requirements.txt
-.\.venv\Scripts\uv pip compile requirements-dev.in --universal --generate-hashes --python-version 3.12 -o requirements-dev.txt
-# 要升級某個套件時加上 --upgrade-package <name>
+uv add "<套件>>=x,<y"              # 執行期依賴
+uv add --group dev <套件>           # 開發工具（格式化、lint）
+uv add --group test <套件>          # 只有測試用到的依賴
+uv lock --upgrade-package <套件>    # 升級單一套件
 ```
 
-CI 會重新編譯並比對，鎖定檔與 `.in` 不一致時 PR 會失敗。Dependabot 每週更新 pip 套件、Docker base image 與 GitHub Actions（小版本合併成一個 PR）。
+CI 與 Docker 都用 `uv sync --locked` 安裝：`uv.lock` 與 `pyproject.toml` 不一致就失敗；Docker 只裝執行期依賴（`--no-default-groups`）。Dependabot 每週更新 uv 套件、Docker base image 與 GitHub Actions（小版本合併成一個 PR）。
 
 ### 測試
 
-pytest（`asyncio_mode = "auto"`；共用 fixture 在 `tests/conftest.py`，假物件在 `tests/fakes.py`），設定在 `pyproject.toml`。覆蓋率低於門檻（80%）會失敗。
+pytest（`asyncio_mode = "auto"`；共用 fixture 在 `tests/conftest.py`，假物件在 `tests/fakes.py`），設定在 `pyproject.toml`。覆蓋率低於門檻（85%，資訊處開發守則的預設值）會失敗。
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q --cov
-.\.venv\Scripts\python.exe -m ruff check .
+uv run pytest -q --cov
+uv run pre-commit run --all-files   # isort、Black（格式）、Ruff（只做 lint）、uv.lock 檢查
 ```
 
 單元測試不使用雲端金鑰或付費模型（LLM、LINE 驗證、NTHU API 與 Firestore 皆以假物件或記憶體實作取代）。Firestore 整合測試（`@pytest.mark.firestore`）需要 emulator（Firebase CLI + Java 21+）：
 
 ```powershell
-npx firebase-tools emulators:exec --only firestore --project demo-nthu-chatbot ".venv\Scripts\python.exe -m pytest -q"
+npx firebase-tools emulators:exec --only firestore --project demo-nthu-chatbot "uv run pytest -q --cov"
 ```
 
 本機用 emulator 開發時，另開終端執行 `npx firebase-tools emulators:start --only firestore --project demo-nthu-chatbot`，並設 `GOOGLE_CLOUD_PROJECT=demo-nthu-chatbot`、`FIRESTORE_EMULATOR_HOST=127.0.0.1:8085`。
 
 ### CI
 
-`.github/workflows/ci.yml` 在每個 PR 與每次 push 到 `main` / `dev` 時執行：檢查鎖定檔 → `ruff check` → 在 Firestore emulator 下執行 `pytest --cov`；push 時測試通過後再部署前端。
+`.github/workflows/ci.yml` 在每個 PR 與每次 push 到 `main` / `dev` 時執行：`uv sync --locked` → pre-commit（isort、Black、Ruff、uv.lock）→ 在 Firestore emulator 下執行 `pytest --cov`；另一個 job 建置正式映像並確認 `/ping` 會回應（smoke test）。push 時測試通過後再部署前端。
+SonarQube Cloud 由學生會從 SonarQube 端直接連結 repo，不在 CI 裡另外跑掃描。
 workflow 預設只有 `contents: read`，只有部署 job 能取得 OIDC token；第三方 action 都釘選 commit SHA。
+
+### PR
+
+PR 標題用 `<type>: <description>`，分支用 [conventional branch](https://conventionalbranch.org/)（例如 `fix/retry-duplicates`）。PR 內容依 `.github/pull_request_template.md`：Features / Fixes / Refactors / Internal / Documentations / Notes，沒有的寫 N/A；Validation 只列實際跑過的檢查；介面變更附前後截圖。`CODEOWNERS` 會自動請 maintainer review。
+
+### 版本
+
+`pyproject.toml` 的 `version` 依 [SemVer](https://semver.org/)：修 bug 遞增 PATCH、新功能遞增 MINOR、不相容的變更遞增 MAJOR。
 
 ### Commit messages
 

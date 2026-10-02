@@ -9,8 +9,8 @@ updates:
       actions:
         patterns: ["*"]
 
-  # requirements.in + the uv-compiled requirements*.txt lock files
-  - package-ecosystem: "pip"
+  # pyproject.toml + uv.lock
+  - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "weekly"

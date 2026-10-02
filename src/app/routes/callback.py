@@ -67,9 +67,7 @@ async def handle_callback(request: Request):
     for event in events:
         try:
             user_id = await resolve_user(event, state)
-            if isinstance(event, MessageEvent) and isinstance(
-                event.message, TextMessageContent
-            ):
+            if isinstance(event, MessageEvent) and isinstance(event.message, TextMessageContent):
                 await handle_message(event, state, user_id, writes)
             elif isinstance(event, PostbackEvent):
                 await handle_postback(event, state, user_id, writes)
@@ -96,9 +94,7 @@ async def handle_callback(request: Request):
                     await state.messaging_api.reply_message(
                         ReplyMessageRequest(
                             reply_token=event.reply_token,
-                            messages=[
-                                TextMessage(text="處理訊息時發生錯誤，請稍後再試。")
-                            ],
+                            messages=[TextMessage(text="處理訊息時發生錯誤，請稍後再試。")],
                         )
                     )
                 except (ApiException, ClientError, TimeoutError) as reply_error:

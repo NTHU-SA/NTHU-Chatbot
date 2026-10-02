@@ -1,0 +1,27 @@
+# 本機：uv run pre-commit install（之後每次 commit 自動跑）；CI 跑同一份設定。
+# 全部是 local hook，版本來自 uv.lock，不另外釘一套版本。
+# python -X utf8：Windows 中文環境（cp950）下 isort / Black 才讀得了含 emoji 的檔案。
+repos:
+  - repo: local
+    hooks:
+      - id: isort
+        name: isort
+        entry: uv run --no-sync python -X utf8 -m isort
+        language: system
+        types: [python]
+      - id: black
+        name: black
+        entry: uv run --no-sync python -X utf8 -m black
+        language: system
+        types: [python]
+      - id: ruff
+        name: ruff (lint only)
+        entry: uv run --no-sync ruff check
+        language: system
+        types: [python]
+      - id: uv-lock
+        name: uv.lock matches pyproject.toml
+        entry: uv lock --check
+        language: system
+        files: ^(pyproject\.toml|uv\.lock)$
+        pass_filenames: false

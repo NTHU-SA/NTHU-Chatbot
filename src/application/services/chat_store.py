@@ -56,9 +56,7 @@ class ChatStore(Protocol):
         """刪除該 user 的所有對話與訊息（刪除個人資料時使用）；沒有全部刪除時拋出 DeletionIncompleteError。"""
         ...
 
-    async def list_messages(
-        self, user_id: str, session_id: str, limit: int
-    ) -> list[Message]: ...
+    async def list_messages(self, user_id: str, session_id: str, limit: int) -> list[Message]: ...
 
     async def add_message(
         self,
@@ -79,9 +77,7 @@ class MemoryChatStore:
         self._lock = asyncio.Lock()
 
     async def list_sessions(self, user_id: str) -> list[Session]:
-        return sorted(
-            self._sessions[user_id].values(), key=lambda s: s.updated_at, reverse=True
-        )
+        return sorted(self._sessions[user_id].values(), key=lambda s: s.updated_at, reverse=True)
 
     async def create_session(self, user_id, title, origin=None) -> Session:
         session, _ = await self.get_or_create_session(user_id, title, origin)
@@ -93,9 +89,7 @@ class MemoryChatStore:
         async with self._lock:
             sessions = self._sessions[user_id]
             if origin is not None:
-                existing = next(
-                    (s for s in sessions.values() if s.origin == origin), None
-                )
+                existing = next((s for s in sessions.values() if s.origin == origin), None)
                 if existing is not None:
                     return existing, False
             while len(sessions) >= MAX_SESSIONS_PER_USER:
@@ -127,9 +121,7 @@ class MemoryChatStore:
     async def list_messages(self, user_id, session_id, limit) -> list[Message]:
         return self._messages[(user_id, session_id)][-limit:]
 
-    async def add_message(
-        self, user_id, session_id, role, content, tool_calls=None, meta=None
-    ):
+    async def add_message(self, user_id, session_id, role, content, tool_calls=None, meta=None):
         message = Message(
             id=new_id(),
             role=role,

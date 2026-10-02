@@ -158,9 +158,7 @@ def set_rich_menu():
             except Exception as e:
                 logger.error(e)
             line_bot_api.create_rich_menu_alias(
-                CreateRichMenuAliasRequest(
-                    richMenuAliasId=richmenu_alias, richMenuId=richmenu_id
-                )
+                CreateRichMenuAliasRequest(richMenuAliasId=richmenu_alias, richMenuId=richmenu_id)
             )
 
             if richmenu_alias == "menu-main":

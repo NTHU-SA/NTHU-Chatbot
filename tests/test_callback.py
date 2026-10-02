@@ -47,9 +47,7 @@ def post(webhook_app):
         signature = base64.b64encode(
             hmac.new(b"test-secret", body.encode(), hashlib.sha256).digest()
         ).decode()
-        return client.post(
-            "/callback", content=body, headers={"X-Line-Signature": signature}
-        )
+        return client.post("/callback", content=body, headers={"X-Line-Signature": signature})
 
     send.client = client
     return send
@@ -85,9 +83,7 @@ def replied_messages(app, index=0):
 def test_signature_required_and_validated_before_processing(post, webhook_app):
     assert post.client.post("/callback", json={}).status_code == 400
     assert (
-        post.client.post(
-            "/callback", json={}, headers={"X-Line-Signature": "invalid"}
-        ).status_code
+        post.client.post("/callback", json={}, headers={"X-Line-Signature": "invalid"}).status_code
         == 400
     )
     webhook_app.state.identity_service.resolve_line_user.assert_not_awaited()
@@ -199,9 +195,7 @@ def test_failure_is_sanitized_and_next_event_still_runs(post, webhook_app):
 
 
 def test_loading_failure_does_not_block_command(post, webhook_app):
-    webhook_app.state.messaging_api.show_loading_animation.side_effect = ApiException(
-        status=503
-    )
+    webhook_app.state.messaging_api.show_loading_animation.side_effect = ApiException(status=503)
     with patch(PROCESS_MESSAGE, new=AsyncMock(return_value="Command answer")):
         post([event(text="@公車")])
     webhook_app.state.messaging_api.reply_message.assert_awaited_once()

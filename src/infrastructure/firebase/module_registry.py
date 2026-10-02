@@ -21,8 +21,10 @@ class FirestoreModuleRegistry:
         if cached and cached[0] > now:
             return cached[1]
         try:
-            snapshot = await self._db.collection("modules").document(module_id).get(
-                field_paths=["enabled"]
+            snapshot = (
+                await self._db.collection("modules")
+                .document(module_id)
+                .get(field_paths=["enabled"])
             )
             enabled = (snapshot.to_dict() or {}).get("enabled", True) is not False
         except Exception as error:  # noqa: BLE001 -- 讀不到設定時不擋指令

@@ -68,9 +68,7 @@ async def test_id_token_verified_and_cached(make_verifier):
 
 
 async def test_id_token_rejected_when_line_says_400(make_verifier):
-    verifier = make_verifier(
-        lambda request: httpx.Response(400, json={"error": "invalid_request"})
-    )
+    verifier = make_verifier(lambda request: httpx.Response(400, json={"error": "invalid_request"}))
     with pytest.raises(HTTPException) as error:
         await verifier.verify("bad")
     assert error.value.status_code == 401

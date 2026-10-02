@@ -28,9 +28,7 @@ def _bearer_token(request: Request) -> str:
     return token.strip()
 
 
-async def get_principal(
-    request: Request, token: str = Depends(_bearer_token)
-) -> Principal:
+async def get_principal(request: Request, token: str = Depends(_bearer_token)) -> Principal:
     return await _principal(request, token, allow_deleting=False)
 
 
