@@ -4,12 +4,13 @@
 import { api, readSse } from "./api.js";
 import { requestConsent } from "./consent.js";
 import {
-  autosize, closeSidebar, confirmDialog, el, scrollToBottom, setBusy, setLoading, state,
+  autosize, closeSidebar, confirmDialog, el, scrollToBottom, setBusy, setLoading, showLoading,
+  state,
 } from "./dom.js";
 import { renderMarkdown, updateScrollHints } from "./markdown.js";
 import {
-  appendMessage, appendThought, clearMessages, demoteToProgress, finishTool, hideThinking,
-  memoryNote, renderSuggestions, retireSuggestions, showThinking, toolNode,
+  addCopyButton, appendMessage, appendThought, clearMessages, demoteToProgress, finishTool,
+  hideThinking, memoryNote, renderSuggestions, retireSuggestions, showError, showThinking, toolNode,
 } from "./messages.js";
 
 // --------------------------------------------------------------- sessions
@@ -73,6 +74,7 @@ export async function openSession(id) {
   el.title.textContent = (s && s.title) || "新對話";
   renderSessionList();
   clearMessages();
+  showLoading(true);
   let msgs;
   try {
     msgs = await (await api(`/api/sessions/${encodeURIComponent(id)}/messages?limit=100`)).json();
@@ -81,7 +83,10 @@ export async function openSession(id) {
     if (err.status === 404) return resyncSessions();
     throw err;
   } finally {
-    if (navigation === state.navigation) setLoading(false);
+    if (navigation === state.navigation) {
+      setLoading(false);
+      showLoading(false);
+    }
   }
   if (navigation !== state.navigation) return false;
   for (const m of msgs) appendMessage(m.role, m.content, m.tool_calls || []);
@@ -197,11 +202,11 @@ export async function send(text, isRetry) {
           bubble.classList.remove("streaming");
           bubble.innerHTML = renderMarkdown(acc);
           updateScrollHints(bubble);
+          if (acc) addCopyButton(node, acc);
           break;
         case "error":
           hideThinking(tools);
-          node.classList.add("error");
-          bubble.textContent = data.message;
+          showError(node, data.message, () => send(text));
           break;
       }
       // no auto-scroll while streaming: the view stays where the user left it
@@ -225,13 +230,20 @@ export async function send(text, isRetry) {
       if (!(await resyncSessions())) return;
       return await send(text, true);
     }
-    node.classList.add("error");
     if (err.code === "consent_required") {
-      bubble.textContent = "請先同意隱私權政策，再重新送出一次。";
+      showError(node, "請先同意隱私權政策，再重新送出一次。");
       requestConsent();
       return;
     }
-    bubble.textContent = err.message === "re-login" ? "登入已過期，重新登入中…" : `發生錯誤：${err.message}`;
+    if (err.message === "re-login") {
+      showError(node, "登入已過期，重新登入中…");
+    } else if (err.status === 429) {
+      // Daily quota (server sends a Chinese message) or the per-instance burst limiter.
+      const quota = /額度/.test(err.message);
+      showError(node, quota ? err.message : "訊息傳得有點快，等幾秒再試一次。", quota ? null : () => send(text));
+    } else {
+      showError(node, `發生錯誤：${err.message}`, () => send(text));
+    }
   } finally {
     hideThinking(tools);
     bubble.classList.remove("cursor");

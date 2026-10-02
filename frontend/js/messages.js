@@ -6,6 +6,20 @@ import { escapeHtml, renderMarkdown, updateScrollHints } from "./markdown.js";
 
 const SUGGEST_TOOL = "suggest_replies";
 
+// Friendly names for the tool cards; the raw name stays in the tooltip.
+const TOOL_LABELS = {
+  search_campus: "查校園地點",
+  get_next_buses: "查公車時刻",
+  get_bus_stops: "查公車站牌",
+  search_courses: "查課程",
+  get_announcements: "查公告",
+  find_dining: "查餐廳",
+  get_library_info: "查圖書館",
+  get_newsletters: "查電子報",
+  get_energy_usage: "查用電",
+  web_search: "搜尋清大網站",
+};
+
 const TOOL_ICON =
   '<svg viewBox="0 0 24 24" aria-hidden="true">' +
   '<circle class="ring" cx="12" cy="12" r="9"/>' +
@@ -15,7 +29,7 @@ const TOOL_ICON =
 
 export function clearMessages() {
   for (const n of [...el.messages.children]) {
-    if (n === el.empty) continue;
+    if (n === el.empty || n === el.loading) continue;
     hideThinking(n.querySelector(".tools"));
     n.remove();
   }
@@ -39,8 +53,56 @@ export function appendMessage(role, content, toolCalls) {
     if (tc.name === SUGGEST_TOOL) renderSuggestions(node, (tc.args || {}).options || []);
   }
   updateScrollHints(bubble); // needs layout, so after it is in the DOM
+  if (role === "assistant" && content) addCopyButton(node, content);
   el.empty.hidden = true;
   return node;
+}
+
+function actionsRow(node) {
+  let row = node.querySelector(".msg-actions");
+  if (!row) {
+    row = document.createElement("div");
+    row.className = "msg-actions";
+    node.append(row);
+  }
+  return row;
+}
+
+// Copy the reply's Markdown source (what the user would paste elsewhere).
+export function addCopyButton(node, text) {
+  if (node.querySelector(".copy-btn")) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "msg-action copy-btn";
+  btn.textContent = "複製";
+  btn.setAttribute("aria-label", "複製這則回覆");
+  btn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      btn.textContent = "已複製";
+    } catch (_) {
+      btn.textContent = "無法複製";
+    }
+    setTimeout(() => { btn.textContent = "複製"; }, 1500);
+  });
+  actionsRow(node).append(btn);
+}
+
+// Error bubble with an optional retry action.
+export function showError(node, message, onRetry) {
+  node.classList.add("error");
+  node.querySelector(".bubble").textContent = message;
+  if (!onRetry || node.querySelector(".retry-btn")) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "msg-action retry-btn";
+  btn.textContent = "重試";
+  btn.addEventListener("click", () => {
+    if (state.busy || state.loading) return;
+    btn.remove();
+    onRetry();
+  });
+  actionsRow(node).append(btn);
 }
 
 // Quick-reply chips the model offers when it asks a clarifying question.
@@ -105,7 +167,8 @@ export function toolNode(name, args, done, isStatic) {
   label.textContent = toolLabel(status);
   const nm = document.createElement("span");
   nm.className = "name";
-  nm.textContent = name;
+  nm.textContent = TOOL_LABELS[name] || name;
+  nm.title = name;
   summary.append(icon, label, nm);
   if (done && done.duration_ms != null) {
     const dur = document.createElement("span");

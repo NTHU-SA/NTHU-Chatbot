@@ -27,6 +27,8 @@ export const el = {
   revokeBtn: $("revokeBtn"),
   deleteDataBtn: $("deleteDataBtn"),
   profileBtn: $("profileBtn"),
+  scrollBtn: $("scrollBtn"),
+  loading: $("loadingMsgs"),
   tplMessage: $("tplMessage"),
 };
 
@@ -49,6 +51,18 @@ export const hideOverlay = () => (el.overlay.hidden = true);
 
 export function scrollToBottom() {
   el.messages.scrollTop = el.messages.scrollHeight;
+}
+
+// Placeholder while a session's history loads.
+export function showLoading(on) {
+  el.loading.hidden = !on;
+  if (on) el.empty.hidden = true;
+}
+
+// The view never auto-scrolls while streaming, so offer a way back down.
+export function updateScrollButton() {
+  const fromBottom = el.messages.scrollHeight - el.messages.clientHeight - el.messages.scrollTop;
+  el.scrollBtn.hidden = fromBottom < 120;
 }
 
 export function updateControls() {
