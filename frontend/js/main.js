@@ -8,7 +8,8 @@ import { createSession, loadSessions, openSession, send } from "./chat.js";
 import { deleteAllData, requestConsent, revokeConsent } from "./consent.js";
 import { openProfile } from "./profile.js";
 import {
-  autosize, closeSidebar, el, hideOverlay, openSidebar, showOverlay, state, updateControls,
+  autosize, closeSidebar, el, hideOverlay, openSidebar, scrollToBottom, showOverlay, state,
+  updateControls, updateScrollButton,
 } from "./dom.js";
 import { updateScrollHint, updateScrollHints } from "./markdown.js";
 
@@ -34,6 +35,11 @@ function bindUi() {
     if (e.target.classList && e.target.classList.contains("scroll-x-inner")) updateScrollHint(e.target);
   }, true);
   window.addEventListener("resize", () => updateScrollHints(el.messages));
+  el.messages.addEventListener("scroll", updateScrollButton, { passive: true });
+  new MutationObserver(updateScrollButton).observe(el.messages, { childList: true, subtree: true, characterData: true });
+  el.scrollBtn.addEventListener("click", () => {
+    el.messages.scrollTo({ top: el.messages.scrollHeight, behavior: "smooth" });
+  });
 }
 
 function reportError(err) {

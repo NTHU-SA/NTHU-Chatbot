@@ -32,7 +32,10 @@
     </aside>
     <div id="backdrop" class="backdrop" hidden></div>
 
-    <main id="messages" class="messages" aria-live="polite">
+    <main id="messages" class="messages" aria-live="polite" aria-busy="false">
+      <div id="loadingMsgs" class="loading-msgs" hidden aria-label="載入對話中">
+        <div class="skeleton"></div><div class="skeleton short"></div><div class="skeleton"></div>
+      </div>
       <div id="empty" class="empty">
         <p class="empty-title">汪！想查什麼？ฅ'ω'ฅ</p>
         <div class="chips">
@@ -44,6 +47,7 @@
       </div>
     </main>
 
+    <button id="scrollBtn" class="scroll-btn" type="button" aria-label="回到最新訊息" hidden>↓ 最新</button>
     <form id="composer" class="composer">
       <textarea id="input" rows="1" placeholder="輸入問題…" maxlength="2000" autocomplete="off" enterkeyhint="send"></textarea>
       <button id="sendBtn" class="send-btn" type="submit" aria-label="送出" disabled>➤</button>

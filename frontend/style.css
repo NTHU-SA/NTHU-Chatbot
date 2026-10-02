@@ -310,3 +310,32 @@ body {
 .memory-empty { font-size: 13px; color: var(--muted); margin: 0; }
 .memory-note { font-size: 12px; color: var(--muted); margin-top: 4px; }
 
+/* ---- message actions, loading, scroll ---- */
+.msg-actions { display: flex; gap: 4px; margin-top: 4px; }
+.msg-action {
+  border: 0; background: none; color: var(--muted); font: inherit; font-size: 12px;
+  padding: 2px 6px; border-radius: 6px; cursor: pointer;
+}
+.msg-action:hover, .msg-action:focus-visible { background: var(--tool-bg); color: var(--text); }
+.msg.error .retry-btn { color: var(--tool-err); }
+.loading-msgs { display: flex; flex-direction: column; gap: 10px; padding: 8px 0; }
+.loading-msgs[hidden] { display: none; }
+.skeleton {
+  height: 38px; width: 70%; border-radius: var(--radius);
+  background: linear-gradient(90deg, var(--tool-bg) 25%, var(--line) 50%, var(--tool-bg) 75%);
+  background-size: 200% 100%; animation: shimmer 1.2s ease-in-out infinite;
+}
+.skeleton.short { width: 45%; align-self: flex-end; }
+@keyframes shimmer { to { background-position: -200% 0; } }
+.scroll-btn {
+  position: absolute; right: 16px; bottom: calc(76px + var(--sab)); z-index: 5;
+  border: 1px solid var(--line); background: var(--surface); color: var(--text);
+  border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer;
+  box-shadow: 0 4px 14px rgb(0 0 0 / .15);
+}
+.scroll-btn[hidden] { display: none; }
+
+/* Respect the OS "reduce motion" setting. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
