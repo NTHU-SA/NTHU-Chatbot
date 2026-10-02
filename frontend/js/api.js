@@ -43,6 +43,7 @@ export async function api(path, opts = {}) {
     if (structured) {
       err.code = detail.code;
       err.candidates = detail.candidates;
+      err.version = detail.version;
     }
     throw err;
   }

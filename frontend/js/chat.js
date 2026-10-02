@@ -137,30 +137,49 @@ export async function send(text, isRetry) {
   text = (text || "").trim();
   if (!text || state.busy || state.loading) return;
   if (!state.current && !(await createSession())) return;
+  el.input.value = "";
+  autosize();
+  appendMessage("user", text, []);
+  const node = appendMessage("assistant", "", []);
+  await generate(text, node, { isRetry });
+}
+
+// Retry a reply that failed, in the same bubble. With `retryOf` (the stored user
+// message) the server reuses that message instead of saving the text again.
+function retry(node, text, retryOf) {
+  if (state.busy || state.loading) return;
+  node.classList.remove("error");
+  node.querySelector(".bubble").replaceChildren();
+  const tools = node.querySelector(".tools");
+  tools.replaceChildren();
+  tools.hidden = true;
+  node.querySelector(".msg-actions")?.remove();
+  return generate(text, node, { retryOf });
+}
+
+async function generate(text, node, { isRetry = false, retryOf = null } = {}) {
   const sessionId = state.current;
   const navigation = state.navigation;
   setBusy(true);
   retireSuggestions();
-  el.input.value = "";
-  autosize();
-
-  appendMessage("user", text, []);
-  const node = appendMessage("assistant", "", []);
   const bubble = node.querySelector(".bubble");
   const tools = node.querySelector(".tools");
   bubble.classList.add("cursor", "streaming");
   let acc = "";
   let done = false;
+  let userMessageId = retryOf;
   const isCurrentView = () => state.current === sessionId && state.navigation === navigation;
+  const retryHere = () => retry(node, text, userMessageId);
   showThinking(tools);
   scrollToBottom(); // once, so the sent message and the reply's start are in view
 
   try {
     const res = await api(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
-      body: { text },
+      body: retryOf ? { text, retry_of: retryOf } : { text },
     });
     await readSse(res, (event, data) => {
+      if (event === "user_message") userMessageId = data.id;
       if (event === "done") done = true;
       if (!isCurrentView()) return;
       switch (event) {
@@ -206,7 +225,8 @@ export async function send(text, isRetry) {
           break;
         case "error":
           hideThinking(tools);
-          showError(node, data.message, () => send(text));
+          // The user message is already stored; retrying must not store it again.
+          showError(node, data.message, retryHere);
           break;
       }
       // no auto-scroll while streaming: the view stays where the user left it
@@ -220,19 +240,25 @@ export async function send(text, isRetry) {
       const cur = state.sessions.find((x) => x.id === sessionId);
       if (cur && state.current === sessionId) el.title.textContent = cur.title;
     } else if (s) {
-      s.message_count += 2;
+      s.message_count += retryOf ? 1 : 2;
     }
   } catch (err) {
     if (!isCurrentView()) return;
-    if (err.status === 404 && !isRetry) {
+    if (err.status === 404 && !isRetry && !retryOf) {
       // Stale session (server restarted): resync and resend once.
       setBusy(false);
       if (!(await resyncSessions())) return;
       return await send(text, true);
     }
+    if (err.code === "retry_stale") {
+      // A reply arrived after all (or the session moved on): show what is stored.
+      setBusy(false);
+      await openSession(sessionId);
+      return;
+    }
     if (err.code === "consent_required") {
       showError(node, "請先同意隱私權政策，再重新送出一次。");
-      requestConsent();
+      requestConsent(err.version);
       return;
     }
     if (err.message === "re-login") {
@@ -240,9 +266,9 @@ export async function send(text, isRetry) {
     } else if (err.status === 429) {
       // Daily quota (server sends a Chinese message) or the per-instance burst limiter.
       const quota = /額度/.test(err.message);
-      showError(node, quota ? err.message : "訊息傳得有點快，等幾秒再試一次。", quota ? null : () => send(text));
+      showError(node, quota ? err.message : "訊息傳得有點快，等幾秒再試一次。", quota ? null : retryHere);
     } else {
-      showError(node, `發生錯誤：${err.message}`, () => send(text));
+      showError(node, `發生錯誤：${err.message}`, retryHere);
     }
   } finally {
     hideThinking(tools);

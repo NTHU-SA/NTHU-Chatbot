@@ -5,10 +5,12 @@
 
 import { api, loadConfig } from "./api.js";
 import { createSession, loadSessions, openSession, send } from "./chat.js";
-import { deleteAllData, requestConsent, revokeConsent } from "./consent.js";
+import {
+  deleteAllData, finishDeletion, requestConsent, revokeConsent, setPolicyVersion,
+} from "./consent.js";
 import { openProfile } from "./profile.js";
 import {
-  autosize, closeSidebar, el, hideOverlay, openSidebar, scrollToBottom, showOverlay, state,
+  autosize, closeSidebar, el, hideOverlay, openSidebar, overlayRetryHandler, showOverlay, state,
   updateControls, updateScrollButton,
 } from "./dom.js";
 import { updateScrollHint, updateScrollHints } from "./markdown.js";
@@ -74,6 +76,7 @@ async function boot() {
   showOverlay("連線中…");
   try {
     const cfg = await loadConfig();
+    setPolicyVersion(cfg.privacyPolicyVersion);
     await liff.init({ liffId: cfg.liffId });
     if (!liff.isLoggedIn()) {
       liff.login({ redirectUri: location.href });
@@ -127,11 +130,16 @@ async function boot() {
     }
   } catch (err) {
     if (err.message === "re-login") return;
+    if (err.code === "account_deleting") {
+      // An earlier deletion did not finish; let the user complete it.
+      showOverlay(err.message, true, finishDeletion);
+      return;
+    }
     console.error(err);
     showOverlay(`無法連線：${err.message}`, true);
   }
 }
 
-el.overlayRetry.addEventListener("click", boot);
+el.overlayRetry.addEventListener("click", () => (overlayRetryHandler() || boot)());
 bindUi();
 boot();

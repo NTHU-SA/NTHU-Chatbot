@@ -24,6 +24,7 @@ export const el = {
   confirmOk: $("confirmOk"),
   consent: $("consent"),
   consentAccept: $("consentAccept"),
+  consentStale: $("consentStale"),
   revokeBtn: $("revokeBtn"),
   deleteDataBtn: $("deleteDataBtn"),
   profileBtn: $("profileBtn"),
@@ -41,11 +42,17 @@ export const state = {
   navigation: 0,
 };
 
-export function showOverlay(text, retry) {
+let retryHandler = null;
+
+// `onRetry` replaces what the retry button does (default: restart the page boot).
+export function showOverlay(text, retry, onRetry) {
   el.overlay.hidden = false;
   el.overlayText.textContent = text;
   el.overlayRetry.hidden = !retry;
+  retryHandler = onRetry || null;
 }
+
+export const overlayRetryHandler = () => retryHandler;
 
 export const hideOverlay = () => (el.overlay.hidden = true);
 
@@ -56,6 +63,7 @@ export function scrollToBottom() {
 // Placeholder while a session's history loads.
 export function showLoading(on) {
   el.loading.hidden = !on;
+  el.messages.setAttribute("aria-busy", String(on));
   if (on) el.empty.hidden = true;
 }
 
