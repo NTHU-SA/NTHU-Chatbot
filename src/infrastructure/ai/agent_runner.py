@@ -43,13 +43,13 @@ from openai.types.shared import Reasoning
 from src.application.models.chat import Message, TokenUsage, ToolCall
 from src.core.config import Settings
 from src.infrastructure.ai.personal_tools import (
-    CURRENT,
     PERSONAL_TOOL_OBJECTS,
     PERSONAL_TOOLS,
     ChatContext,
-    mark_external_data,
 )
 from src.infrastructure.ai.prompts import build_instructions
+from src.infrastructure.ai.run_state import RUN, RunState, begin_external_call
+from src.infrastructure.ai.web_search import build_web_search_tool
 
 TOOL_ERROR_PREFIX = "[TOOL_ERROR]"
 SUGGEST_TOOL = "suggest_replies"
@@ -60,17 +60,59 @@ PLACEHOLDER_MARKERS = ("請輸入", "輸入", "其他", "自行", "自訂", "告
 TRUNCATION_NOTE = "\n\n[結果過長已截斷；如需更多請縮小查詢範圍（例如減少 limit 或加 keyword）]"
 MCP_UNAVAILABLE_MESSAGE = "校園資料服務暫時無法連線，本汪晚點再幫你查，請稍後再試。"
 
+# MCP 結果快取秒數（依工具；結果與使用者無關，跨使用者共用）。
+# 公車即時資料不快取；沒有列出的工具也不快取。
+MCP_CACHE_TTL = {
+    "get_announcements": 300,
+    "get_newsletters": 600,
+    "get_library_info": 300,
+    "find_dining": 300,
+    "get_energy_usage": 300,
+    "search_campus": 3600,
+    "get_bus_stops": 3600,
+    "search_courses": 3600,
+}
+MCP_CACHE_MAX_ENTRIES = 256
+
 
 class BoundedMCPServer(MCPServerStreamableHttp):
-    """工具結果在送進模型前先截斷，避免撐爆小模型的 token 預算。"""
+    """
+    校園資料 MCP server 的包裝。
+
+    - 每次呼叫都計入本則訊息的工具上限，並標記本輪已讀取外部資料（個人化寫入工具因此停用）；
+    - 唯讀、與使用者無關的工具結果短暫快取，同樣的查詢不重打 MCP；
+    - 結果在送進模型前先截斷，避免撐爆 token 預算。
+    """
 
     def __init__(self, *args: Any, max_output_chars: int, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._max_output_chars = max_output_chars
+        self._cache: dict[str, tuple[float, Any]] = {}
+
+    def _cache_key(self, tool_name: str, arguments: Any) -> str | None:
+        if tool_name not in MCP_CACHE_TTL:
+            return None
+        return tool_name + ":" + json.dumps(arguments or {}, sort_keys=True, ensure_ascii=False)
 
     async def call_tool(self, tool_name, arguments, meta=None):
-        # 外部資料即將進入對話：本輪之後的個人化寫入工具一律拒絕（防 prompt injection）
-        mark_external_data()
+        # 外部資料即將進入對話（快取命中也算）：計次、標記本輪已污染
+        begin_external_call()
+        key = self._cache_key(tool_name, arguments)
+        now = time.monotonic()
+        if key is not None:
+            cached = self._cache.get(key)
+            if cached and cached[0] > now:
+                return cached[1].model_copy(deep=True)
+        result = await self._call_and_truncate(tool_name, arguments, meta)
+        failed = getattr(result, "is_error", False) or getattr(result, "isError", False)
+        if key is not None and not failed:
+            if len(self._cache) >= MCP_CACHE_MAX_ENTRIES:
+                self._cache = {k: v for k, v in self._cache.items() if v[0] > now}
+            if len(self._cache) < MCP_CACHE_MAX_ENTRIES:
+                self._cache[key] = (now + MCP_CACHE_TTL[tool_name], result.model_copy(deep=True))
+        return result
+
+    async def _call_and_truncate(self, tool_name, arguments, meta):
         result = await super().call_tool(tool_name, arguments, meta)
         budget = self._max_output_chars
         for block in result.content:
@@ -146,11 +188,14 @@ def _usage(result: Any) -> dict[str, int] | None:
     ).model_dump()
 
 
-def _instructions(ctx, _agent) -> str:
+def _instructions(ctx, agent) -> str:
     context = ctx.context if isinstance(getattr(ctx, "context", None), ChatContext) else None
+    web_search = any(getattr(tool, "name", "") == "web_search" for tool in agent.tools)
     if context is None:
-        return build_instructions()
-    return build_instructions(profile=context.profile, onboarding=context.onboarding)
+        return build_instructions(web_search=web_search)
+    return build_instructions(
+        profile=context.profile, onboarding=context.onboarding, web_search=web_search
+    )
 
 
 def _personal_event(output: str) -> AgentEvent | None:
@@ -236,16 +281,34 @@ class AgentRunner:
             max_retry_attempts=1,
         )
         # 思考摘要只有 reasoning 模型走 Responses API 才支援；其他情況不帶參數以免被端點拒絕。
-        model_settings = ModelSettings(max_tokens=settings.max_output_tokens)
+        # parallel_tool_calls：彼此獨立的查詢在同一步一起發出，SDK 會並行執行
+        model_settings = ModelSettings(
+            max_tokens=settings.max_output_tokens, parallel_tool_calls=True
+        )
         if settings.reasoning_summary and settings.openai_use_responses_api:
             model_settings.reasoning = Reasoning(summary="auto")
+
+        tools = [suggest_replies, *PERSONAL_TOOL_OBJECTS]
+        # 網路搜尋需要官方 OpenAI 的 Responses API（web_search 工具）
+        self._web_search = settings.web_search_enabled and settings.openai_use_responses_api
+        if settings.web_search_enabled and not self._web_search:
+            logger.warning("WEB_SEARCH_ENABLED ignored: requires OPENAI_USE_RESPONSES_API=true")
+        if self._web_search:
+            tools.append(
+                build_web_search_tool(
+                    client,
+                    settings.web_search_model or settings.openai_model,
+                    settings.web_search_domains,
+                    _tool_error_message,
+                )
+            )
 
         self._agent = Agent(
             name="狗狗情報員",
             instructions=_instructions,
             model=model,
             model_settings=model_settings,
-            tools=[suggest_replies, *PERSONAL_TOOL_OBJECTS],
+            tools=tools,
             mcp_servers=[self._mcp],
         )
 
@@ -310,7 +373,11 @@ class AgentRunner:
         summary_parts = 0
 
         # 必須在 run_streamed 之前設定：SDK 的背景 task 會複製當下的 context
-        token = CURRENT.set(context)
+        run_state = RunState(
+            max_tool_calls=self._settings.max_tool_calls_per_message,
+            max_web_searches=self._settings.max_web_searches_per_message,
+        )
+        token = RUN.set(run_state)
         try:
             result = Runner.run_streamed(
                 self._agent,
@@ -429,6 +496,12 @@ class AgentRunner:
                 or (interims[-1] if interims else "")
                 or (final if isinstance(final, str) else "")
             )
+            # 只記次數，方便在 Logging 觀察成本；不含任何 ID 或內容
+            logger.info(
+                "Agent run finished: {} tool calls, {} web searches",
+                run_state.tool_calls,
+                run_state.web_searches,
+            )
             yield AgentEvent(
                 "done",
                 {
@@ -460,7 +533,7 @@ class AgentRunner:
             yield AgentEvent("error", {"message": "系統暫時無法回應，請稍後再試。"})
         finally:
             try:
-                CURRENT.reset(token)
+                RUN.reset(token)
             except ValueError:
                 # 產生器在不同的 context 被關閉（例如連線中斷）：該 context 隨請求結束
                 pass

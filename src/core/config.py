@@ -42,6 +42,18 @@ def _policy_version(value: str | None) -> str:
     return version
 
 
+_DOMAIN = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)+$")
+
+
+def _domains(value: str | None) -> tuple[str, ...]:
+    """網路搜尋允許的網域（逗號分隔）；只接受裸網域，子網域自動包含。"""
+    domains = _csv((value or "").lower(), ("nthu.edu.tw",))
+    invalid = [domain for domain in domains if not _DOMAIN.match(domain)]
+    if invalid:
+        raise RuntimeError("Invalid WEB_SEARCH_DOMAINS entry: " + ", ".join(invalid))
+    return domains
+
+
 def parse_cors_origins(value: str | None) -> tuple[str, ...]:
     """
     解析 `CORS_ALLOWED_ORIGINS`（逗號分隔）。
@@ -128,6 +140,13 @@ class Settings:
     max_output_chars: int = 8000
     daily_message_limit: int = 100
     max_agent_turns: int = 8
+    # 每則訊息最多幾次外部工具呼叫（MCP + 網路搜尋）
+    max_tool_calls_per_message: int = 6
+    # 網路搜尋（只在官方 OpenAI Responses API 下可用；限定網域）
+    web_search_enabled: bool = False
+    web_search_model: str | None = None
+    web_search_domains: tuple[str, ...] = ("nthu.edu.tw",)
+    max_web_searches_per_message: int = 2
     tool_result_preview_chars: int = 500
 
     @property
@@ -185,5 +204,10 @@ class Settings:
             max_output_chars=_int("MAX_OUTPUT_CHARS", 8000),
             daily_message_limit=_int("DAILY_MESSAGE_LIMIT", 100, minimum=0),
             max_agent_turns=_int("MAX_AGENT_TURNS", 8),
+            max_tool_calls_per_message=_int("MAX_TOOL_CALLS_PER_MESSAGE", 6),
+            web_search_enabled=_bool(os.getenv("WEB_SEARCH_ENABLED"), False),
+            web_search_model=os.getenv("WEB_SEARCH_MODEL") or None,
+            web_search_domains=_domains(os.getenv("WEB_SEARCH_DOMAINS")),
+            max_web_searches_per_message=_int("MAX_WEB_SEARCHES_PER_MESSAGE", 2),
             tool_result_preview_chars=_int("TOOL_RESULT_PREVIEW_CHARS", 500, minimum=0),
         )
