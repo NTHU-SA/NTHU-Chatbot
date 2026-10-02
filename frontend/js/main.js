@@ -6,6 +6,7 @@
 import { api, loadConfig } from "./api.js";
 import { createSession, loadSessions, openSession, send } from "./chat.js";
 import { deleteAllData, requestConsent, revokeConsent } from "./consent.js";
+import { openProfile } from "./profile.js";
 import {
   autosize, closeSidebar, el, hideOverlay, openSidebar, showOverlay, state, updateControls,
 } from "./dom.js";
@@ -17,6 +18,7 @@ function bindUi() {
   el.backdrop.addEventListener("click", closeSidebar);
   el.newBtn.addEventListener("click", () => createSession());
   el.revokeBtn.addEventListener("click", () => revokeConsent().catch(reportError));
+  el.profileBtn.addEventListener("click", () => openProfile().catch(reportError));
   el.deleteDataBtn.addEventListener("click", () => deleteAllData().catch(reportError));
   el.composer.addEventListener("submit", (e) => { e.preventDefault(); send(el.input.value); });
   el.input.addEventListener("input", () => { autosize(); updateControls(); });
@@ -91,7 +93,14 @@ async function boot() {
 
     // AI chat needs consent to the current privacy policy (the backend enforces it too).
     hideOverlay();
-    if (!me.consent.accepted) await requestConsent(me.consent.version);
+    if (!me.consent.accepted) {
+      await requestConsent(me.consent.version);
+      // First run: optionally ask for a nickname and department (skippable, asked once).
+      const profile = await (await api("/api/profile")).json();
+      if (profile.onboarding == null && !profile.nickname && !profile.department) {
+        await openProfile({ onboarding: true });
+      }
+    }
 
     await loadSessions();
     const params = new URLSearchParams(location.search);

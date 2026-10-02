@@ -40,7 +40,10 @@ export async function api(path, opts = {}) {
     const message = structured ? detail.message || detail.code : Array.isArray(detail) ? "輸入格式有誤" : detail;
     const err = new Error(message);
     err.status = res.status;
-    if (structured) err.code = detail.code;
+    if (structured) {
+      err.code = detail.code;
+      err.candidates = detail.candidates;
+    }
     throw err;
   }
   return res;

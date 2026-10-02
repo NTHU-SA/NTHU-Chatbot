@@ -67,6 +67,20 @@ export function renderSuggestions(node, options) {
   }
 }
 
+const MEMORY_LABEL = { nickname: "稱呼", department: "系所", memory: "" };
+
+// One-line note under a reply when the assistant saved or forgot something.
+export function memoryNote(node, data) {
+  const items = (data.items || []).map((i) => (MEMORY_LABEL[i.kind] ? `${MEMORY_LABEL[i.kind]}「${i.value}」` : `「${i.value}」`));
+  if (!items.length) return;
+  const note = document.createElement("div");
+  note.className = "memory-note";
+  note.textContent = data.action === "forgotten"
+    ? `🗑 已忘記：${items.join("、")}`
+    : `📝 已記住：${items.join("、")}（可在側欄「我的資料」修改）`;
+  node.append(note);
+}
+
 // Any new message (typed or tapped) retires the quick-reply chips still on screen.
 export function retireSuggestions() {
   for (const box of el.messages.querySelectorAll(".suggestions:not(.used)")) box.classList.add("used");
