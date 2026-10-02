@@ -1,5 +1,5 @@
 # Line Bot
-line-bot-sdk>=3.17,<4
+line-bot-sdk>=3.26.0,<4
 # Logging
 loguru
 # Server
