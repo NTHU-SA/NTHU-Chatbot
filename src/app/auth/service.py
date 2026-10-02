@@ -6,6 +6,9 @@ import time
 from collections import OrderedDict
 
 from src.application.models.identity import (
+    ACTIVE,
+    DELETED,
+    DELETING,
     AccountDisabledError,
     Principal,
     VerifiedIdentity,
@@ -32,24 +35,39 @@ class IdentityService:
         self._status: dict[str, tuple[float, str]] = {}
         self._max_cache = max_cache
 
-    async def resolve(self, identity: VerifiedIdentity) -> Principal:
-        key = lookup_key(identity.provider, identity.provider_user_id)
-        now = time.monotonic()
-        cached = self._mapping.get(key)
-        if cached and cached[0] > now and await self._check_status(cached[1], now):
-            user_id = cached[1]
-            self._mapping.move_to_end(key)
-        else:
-            # resolve_or_create 本身會檢查狀態並在停用時拋出例外
-            user_id, _ = await self._store.resolve_or_create(identity)
-            self._remember(key, user_id, now)
-            self._status[user_id] = (now + STATUS_TTL_SECONDS, "active")
+    async def resolve(
+        self, identity: VerifiedIdentity, *, allow_deleting: bool = False
+    ) -> Principal:
+        """
+        外部身分 → Principal。帳號被封鎖或刪除中時拋出 AccountDisabledError；
+
+        `allow_deleting=True` 只給刪除 API 使用：刪除中途失敗時，使用者仍能再呼叫一次刪除。
+        """
+        try:
+            user_id = await self._resolve_user_id(identity)
+        except AccountDisabledError as error:
+            if not (allow_deleting and error.status == DELETING):
+                raise
+            user_id = error.args[0]
         return Principal(
             user_id=user_id,
             provider=identity.provider,
             display_name=identity.display_name,
             picture_url=identity.picture_url,
         )
+
+    async def _resolve_user_id(self, identity: VerifiedIdentity) -> str:
+        key = lookup_key(identity.provider, identity.provider_user_id)
+        now = time.monotonic()
+        cached = self._mapping.get(key)
+        if cached and cached[0] > now and await self._check_status(cached[1], now):
+            self._mapping.move_to_end(key)
+            return cached[1]
+        # resolve_or_create 本身會檢查狀態並在停用時拋出例外
+        user_id, _ = await self._store.resolve_or_create(identity)
+        self._remember(key, user_id, now)
+        self._status[user_id] = (now + STATUS_TTL_SECONDS, ACTIVE)
+        return user_id
 
     async def resolve_line_user(self, line_user_id: str) -> str:
         """LINE webhook 的 userId（已由簽章驗證）→ 內部 user id。"""
@@ -72,7 +90,7 @@ class IdentityService:
         """
         快取的對應是否仍可用。
 
-        被封鎖或刪除中 → 拋出 AccountDisabledError；user 已被完全刪除（文件不存在）→ 回傳 False，
+        被封鎖或刪除中 → 拋出 AccountDisabledError；user 已刪除（墓碑或文件不存在）→ 回傳 False，
         呼叫端改走 store 重新解析，同一個外部身分會得到全新的 user。
         """
         cached = self._status.get(user_id)
@@ -80,12 +98,12 @@ class IdentityService:
             status = cached[1]
         else:
             status = await self._store.get_status(user_id)
-            if status is None:
+            if status in (None, DELETED):
                 self._status.pop(user_id, None)
                 return False
             self._status[user_id] = (now + STATUS_TTL_SECONDS, status)
-        if status != "active":
-            raise AccountDisabledError(user_id)
+        if status != ACTIVE:
+            raise AccountDisabledError(user_id, status)
         return True
 
     def _remember(self, key: str, user_id: str, now: float) -> None:

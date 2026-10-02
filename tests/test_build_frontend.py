@@ -7,6 +7,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "infra"))
 import build_frontend  # noqa: E402
 
+from src.core.privacy import PRIVACY_POLICY_VERSION  # noqa: E402
+
 CONF = """
 PROJECT_ID=demo-project
 LIFF_ID=1234567890-abcdefgh
@@ -26,10 +28,28 @@ def built(tmp_path, monkeypatch):
 
 def test_config_json_holds_only_public_values(built):
     config = json.loads((built / "public" / "config.json").read_text(encoding="utf-8"))
-    assert config == {"liffId": "1234567890-abcdefgh", "apiBase": "https://api-demo.a.run.app"}
+    assert config == {
+        "liffId": "1234567890-abcdefgh",
+        "apiBase": "https://api-demo.a.run.app",
+        "privacyPolicyVersion": PRIVACY_POLICY_VERSION,
+    }
     assert "must-not-leak" not in (built / "public" / "config.json").read_text(encoding="utf-8")
     assert (built / "public" / "js" / "main.js").exists()
     assert not (built / "public" / "config.example.json").exists()
+
+
+def test_privacy_page_shows_the_backend_policy_version(built, monkeypatch):
+    page = built / "public" / "privacy.html"
+    assert f"<span data-policy-version>{PRIVACY_POLICY_VERSION}</span>" in page.read_text(encoding="utf-8")
+    build_frontend.stamp_policy_version(page, "7")
+    assert "<span data-policy-version>7</span>" in page.read_text(encoding="utf-8")
+
+
+def test_privacy_page_without_version_marker_fails_the_build(tmp_path):
+    page = tmp_path / "privacy.html"
+    page.write_text("<p>版本 1</p>", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        build_frontend.stamp_policy_version(page, "1")
 
 
 def test_hosting_headers_lock_connections_to_this_api(built):

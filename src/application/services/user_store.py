@@ -16,6 +16,9 @@ from collections import defaultdict
 from typing import Any, Protocol
 
 from src.application.models.identity import (
+    ACTIVE,
+    DELETED,
+    DELETING,
     AccountDisabledError,
     IdentityConflictError,
     LastIdentityError,
@@ -40,7 +43,8 @@ class UserStore(Protocol):
         """
         外部身分 → 內部 user id；沒有就建立 user、identity 與 lookup（同一個交易）。
 
-        回傳 (user_id, created)。帳號被封鎖或刪除時拋出 AccountDisabledError。
+        回傳 (user_id, created)。帳號被封鎖或刪除中時拋出 AccountDisabledError（帶 status）；
+        已刪除（墓碑）的 user 視為不存在，建立全新的 user。
         """
         ...
 
@@ -94,6 +98,12 @@ class UserStore(Protocol):
 
     async def delete_preference(self, user_id: str, key: str) -> None: ...
 
+    async def set_preferences(
+        self, user_id: str, values: dict[str, str | None], source: str
+    ) -> None:
+        """一次寫入多項偏好（值為 None 代表清除），全部成功或全部不變。"""
+        ...
+
     async def add_memory(
         self, user_id: str, value: str, source_conversation_id: str | None = None
     ) -> MemoryItem:
@@ -104,11 +114,16 @@ class UserStore(Protocol):
 
     async def set_onboarding(self, user_id: str, state: str) -> None: ...
 
+    async def begin_deletion(self, user_id: str) -> None:
+        """標記 status=deleting：之後只能再呼叫刪除（失敗時可以重試）。"""
+        ...
+
     async def delete_user(self, user_id: str) -> None:
         """
-        刪除這個 user 的所有資料：外部身分對應、所有子集合與 user 文件。
+        刪除這個 user 的所有資料：子集合、外部身分與 lookup；user 文件換成不含個資的墓碑。
 
-        先刪 lookup：之後同一個 LINE 帳號再登入會得到全新的 user。對話由 ChatStore 另外刪除。
+        之後同一個 LINE 帳號再登入會得到全新的 user。對話由 ChatStore 另外刪除。
+        沒有全部刪除時拋出 DeletionIncompleteError，帳號維持 deleting。
         """
         ...
 
@@ -137,13 +152,15 @@ class MemoryUserStore:
         self._lock = asyncio.Lock()
 
     def _check_active(self, user_id: str) -> None:
-        if self.users.get(user_id, {}).get("status", "active") != "active":
-            raise AccountDisabledError(user_id)
+        status = self.users.get(user_id, {}).get("status", ACTIVE)
+        if status != ACTIVE:
+            raise AccountDisabledError(user_id, status)
 
     async def resolve_or_create(self, identity: VerifiedIdentity) -> tuple[str, bool]:
         key = lookup_key(identity.provider, identity.provider_user_id)
         async with self._lock:
-            if key in self.lookup and self.lookup[key] in self.users:
+            owner = self.users.get(self.lookup.get(key, ""))
+            if owner is not None and owner.get("status") != DELETED:
                 user_id = self.lookup[key]
                 self._check_active(user_id)
                 return user_id, False
@@ -269,6 +286,13 @@ class MemoryUserStore:
     async def delete_preference(self, user_id, key) -> None:
         self.preferences[user_id].pop(key, None)
 
+    async def set_preferences(self, user_id, values, source) -> None:
+        for key, value in values.items():
+            if value is None:
+                await self.delete_preference(user_id, key)
+            else:
+                await self.set_preference(user_id, key, value, source)
+
     async def add_memory(self, user_id, value, source_conversation_id=None) -> MemoryItem:
         async with self._lock:
             if len(self.memories[user_id]) >= MAX_MEMORIES:
@@ -283,6 +307,9 @@ class MemoryUserStore:
     async def set_onboarding(self, user_id, state) -> None:
         self.module_states[user_id].setdefault(ONBOARDING_MODULE, {})["state"] = state
 
+    async def begin_deletion(self, user_id: str) -> None:
+        self.users.setdefault(user_id, {})["status"] = DELETING
+
     async def delete_user(self, user_id: str) -> None:
         async with self._lock:
             for record in self.identities.pop(user_id, {}).values():
@@ -293,4 +320,4 @@ class MemoryUserStore:
                 store.pop(user_id, None)
             for key in [k for k in self._usage if k[0] == user_id]:
                 del self._usage[key]
-            self.users.pop(user_id, None)
+            self.users[user_id] = {"status": DELETED}

@@ -128,6 +128,24 @@ async def list_messages(
     return await store.list_messages(user.user_id, session_id, min(max(limit, 1), 200))
 
 
+def _retried_message(history: list[Message], retry_of: str | None, text: str) -> Message | None:
+    """
+    重試時沿用已存的使用者訊息，不再存一次（否則歷史與模型輸入都會重複）。
+
+    只有它仍是這個對話的最後一則、而且內容相同時才沿用；之後已經有回覆（或別的訊息）就回 409，
+    前端應重新載入對話。每次重試仍會呼叫模型，所以照常計入每日額度。
+    """
+    if retry_of is None:
+        return None
+    last = history[-1] if history else None
+    if last is None or last.id != retry_of or last.role != "user" or last.content != text:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            {"code": "retry_stale", "message": "對話已經更新，請重新載入。"},
+        )
+    return last
+
+
 @router.post("/sessions/{session_id}/messages")
 async def send_message(
     session_id: str,
@@ -153,6 +171,15 @@ async def send_message(
     session = await _owned_session(store, user, session_id)
     # 訊息會交給 LLM 處理：必須先同意目前版本的隱私權政策
     await require_consent(request, user)
+
+    # 先讀歷史與使用者資料，再寫入這次的使用者訊息。
+    history, profile = await asyncio.gather(
+        store.list_messages(user.user_id, session_id, settings.history_window + 1),
+        users.get_profile(user.user_id),
+    )
+    retried = _retried_message(history, body.retry_of, text)
+    history = history[:-1] if retried else history[-settings.history_window :]
+
     if not await users.consume_daily_quota(user.user_id, settings.daily_message_limit):
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS, "今日對話額度已用完，明天再來吧。"
@@ -161,12 +188,6 @@ async def send_message(
     # 最近活動時間與 LLM 回覆並行寫入，串流結束前收尾
     writes = BackgroundWrites()
     writes.spawn(users.touch_activity(user.user_id), "touch_activity")
-
-    # 先讀歷史與使用者資料，再寫入這次的使用者訊息。
-    history, profile = await asyncio.gather(
-        store.list_messages(user.user_id, session_id, settings.history_window),
-        users.get_profile(user.user_id),
-    )
     # 第一次聊天、也還沒提供稱呼與系所：這一輪回答最後主動問一次，之後不再問
     onboarding = profile.onboarding is None and not (profile.nickname or profile.department)
     if onboarding:
@@ -179,7 +200,10 @@ async def send_message(
         profile=profile,
         onboarding=onboarding,
     )
-    user_message = await store.add_message(user.user_id, session_id, "user", text)
+    if retried:
+        user_message = retried
+    else:
+        user_message = await store.add_message(user.user_id, session_id, "user", text)
     if session.message_count == 0 and session.title == DEFAULT_TITLE:
         await store.rename_session(user.user_id, session_id, text[:30])
 

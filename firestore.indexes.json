@@ -23,6 +23,7 @@
     {"collectionGroup": "messages", "fieldPath": "tokenUsage", "indexes": []},
     {"collectionGroup": "identities", "fieldPath": "metadata", "indexes": []},
     {"collectionGroup": "usage", "fieldPath": "expiresAt", "ttl": true, "indexes": []},
-    {"collectionGroup": "auditLog", "fieldPath": "expiresAt", "ttl": true, "indexes": []}
+    {"collectionGroup": "auditLog", "fieldPath": "expiresAt", "ttl": true, "indexes": []},
+    {"collectionGroup": "users", "fieldPath": "expiresAt", "ttl": true, "indexes": []}
   ]
 }

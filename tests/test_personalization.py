@@ -108,10 +108,13 @@ async def test_save_profile_stores_cleaned_nickname_and_official_department(cont
 
 
 async def test_ambiguous_department_returns_candidates_without_saving(context):
-    result = await invoke(save_profile, context, department="資訊")
+    result = await invoke(save_profile, context, nickname="小明", department="資訊")
     assert result["status"] == "ambiguous"
     assert "資訊工程學系" in result["candidates"]
-    assert (await context.users.get_profile("usr_test")).department is None
+    # 稱呼也不會先被存進去：等使用者選好系所再一起存
+    profile = await context.users.get_profile("usr_test")
+    assert (profile.nickname, profile.department) == (None, None)
+    assert context.profile.nickname is None
 
 
 async def test_write_tools_are_blocked_after_external_data(context):
@@ -225,10 +228,13 @@ def test_profile_api_round_trip(client):
 
 
 def test_profile_api_rejects_unknown_or_ambiguous_departments(client):
-    ambiguous = client.patch("/api/profile", headers=AUTH, json={"department": "資訊"})
+    client.patch("/api/profile", headers=AUTH, json={"nickname": "阿華"})
+    ambiguous = client.patch("/api/profile", headers=AUTH, json={"nickname": "小明", "department": "資訊"})
     assert ambiguous.status_code == 422
     assert ambiguous.json()["detail"]["code"] == "department_ambiguous"
     assert "資訊工程學系" in ambiguous.json()["detail"]["candidates"]
+    # 422 時什麼都沒改（不會只改了稱呼）
+    assert client.get("/api/profile", headers=AUTH).json()["nickname"] == "阿華"
     unknown = client.patch("/api/profile", headers=AUTH, json={"department": "魔法學系"})
     assert unknown.json()["detail"]["code"] == "department_not_found"
 

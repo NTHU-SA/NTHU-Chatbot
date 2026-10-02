@@ -154,6 +154,28 @@ async def test_blocked_user_is_rejected_even_when_mapping_is_cached(identities, 
         await identities.resolve(LINE_A)
 
 
+async def test_deleting_account_is_refused_except_for_the_delete_api(identities, users):
+    principal = await identities.resolve(LINE_A)
+    await users.begin_deletion(principal.user_id)
+    identities.forget_user(principal.user_id)
+    with pytest.raises(AccountDisabledError) as raised:
+        await identities.resolve(LINE_A)
+    assert raised.value.status == "deleting"
+    again = await identities.resolve(LINE_A, allow_deleting=True)
+    assert again.user_id == principal.user_id
+
+
+async def test_deleted_account_resolves_to_a_new_user_even_from_a_stale_cache(users):
+    other_instance = IdentityService(users)
+    principal = await other_instance.resolve(LINE_A)
+    await users.begin_deletion(principal.user_id)
+    await users.delete_user(principal.user_id)
+    other_instance._status.clear()  # 對應還在快取裡，狀態快取過期
+    fresh = await other_instance.resolve(LINE_A)
+    assert fresh.user_id != principal.user_id
+    assert users.users[principal.user_id] == {"status": "deleted"}
+
+
 def test_lookup_key_hides_the_external_id():
     key = lookup_key("line", "Uaaaa")
     assert key == lookup_key("line", "Uaaaa")

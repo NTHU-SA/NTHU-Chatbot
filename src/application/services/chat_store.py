@@ -53,7 +53,7 @@ class ChatStore(Protocol):
     async def delete_session(self, user_id: str, session_id: str) -> None: ...
 
     async def delete_all_sessions(self, user_id: str) -> None:
-        """刪除該 user 的所有對話與訊息（刪除個人資料時使用）。"""
+        """刪除該 user 的所有對話與訊息（刪除個人資料時使用）；沒有全部刪除時拋出 DeletionIncompleteError。"""
         ...
 
     async def list_messages(

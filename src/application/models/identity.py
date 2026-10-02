@@ -50,8 +50,29 @@ class Principal:
     picture_url: str | None = None
 
 
+# users/{uid}.status
+# - active：正常
+# - blocked：管理者封鎖
+# - deleting：使用者要求刪除、資料清除中（只允許再次呼叫刪除，讓失敗時可以重試）
+# - deleted：資料已清除，只留下不含個資的墓碑（TTL 過期後自動消失）；同一個外部身分再登入會是全新的 user
+ACTIVE = "active"
+BLOCKED = "blocked"
+DELETING = "deleting"
+DELETED = "deleted"
+# 這些狀態下寫入的個人資料必須撤銷（見 FirestoreUserStore.delete_user）
+GONE_STATUSES = (DELETING, DELETED)
+
+
 class AccountDisabledError(Exception):
-    """帳號被封鎖或已刪除。"""
+    """帳號被封鎖或刪除中。"""
+
+    def __init__(self, user_id: str, status: str | None = None) -> None:
+        super().__init__(user_id)
+        self.status = status
+
+
+class DeletionIncompleteError(Exception):
+    """資料沒有全部刪除（Firestore 個別刪除重試用盡）；帳號維持 deleting，可以再呼叫一次刪除。"""
 
 
 class IdentityConflictError(Exception):

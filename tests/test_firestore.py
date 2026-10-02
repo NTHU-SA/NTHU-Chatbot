@@ -16,6 +16,7 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from src.application.models.chat import MessageMeta, TokenUsage, ToolCall
 from src.application.models.identity import (
     AccountDisabledError,
+    DeletionIncompleteError,
     IdentityConflictError,
     LastIdentityError,
     Principal,
@@ -415,15 +416,17 @@ async def test_delete_user_leaves_nothing_behind(db, users, chats):
     await users.set_consent(user_id, "privacy_policy", "1", True, "LIFF")
     await users.consume_daily_quota(user_id, 10)
     await users.record_module_use(user_id, "bus")
+    await users.set_preference(user_id, "nickname", "小明", "user")
+    await users.add_memory(user_id, "住清齋")
     session, _ = await chats.get_or_create_session(user_id, "x", "ev-1")
     await chats.add_message(user_id, session.id, "user", "我的秘密")
 
-    await chats.delete_all_sessions(user_id)
-    await users.delete_user(user_id)
+    await delete_everything(users, chats, user_id)
 
-    assert await doc(db, f"users/{user_id}") is None
-    for sub in ("identities", "consents", "auditLog", "usage", "moduleStates", "conversationOrigins"):
-        assert [d async for d in db.collection(f"users/{user_id}/{sub}").stream()] == [], sub
+    tombstone = await doc(db, f"users/{user_id}")
+    assert set(tombstone) == {"status", "deletedAt", "expiresAt"}  # 不含任何個資
+    assert tombstone["status"] == "deleted"
+    assert [c async for c in db.document(f"users/{user_id}").collections()] == []
     assert await doc(db, f"identityLookup/{lookup_key('line', who.provider_user_id)}") is None
     assert await owned_ids(db, user_id) == set()
     assert [m async for m in db.collection(f"conversations/{session.id}/messages").stream()] == []
@@ -442,6 +445,119 @@ async def test_stale_lookup_after_interrupted_deletion_creates_a_new_user(db, us
     assert created and again != user_id
     lookup = await doc(db, f"identityLookup/{lookup_key('line', who.provider_user_id)}")
     assert lookup["userId"] == again
+
+
+async def delete_everything(users, chats, user_id):
+    """和 DELETE /api/me 相同的順序。"""
+    await users.begin_deletion(user_id)
+    await chats.delete_all_sessions(user_id)
+    await users.delete_user(user_id)
+    await chats.delete_all_sessions(user_id)
+
+
+@pytest.mark.firestore
+async def test_deleting_account_is_refused_until_deletion_finishes(db, users):
+    who = identity()
+    user_id, _ = await users.resolve_or_create(who)
+    await users.begin_deletion(user_id)
+    with pytest.raises(AccountDisabledError) as raised:
+        await users.resolve_or_create(who)
+    assert (raised.value.args[0], raised.value.status) == (user_id, "deleting")
+
+
+@pytest.mark.firestore
+async def test_writes_that_land_after_deletion_undo_themselves(db, users, chats):
+    who = identity()
+    user_id, _ = await users.resolve_or_create(who)
+    principal = Principal(user_id=user_id, provider="line", display_name="測試者", picture_url="https://x")
+    await delete_everything(users, chats, user_id)
+
+    # 刪除前就開始、刪除後才寫入的請求（例如另一個實例的背景寫入）
+    await users.touch_activity(user_id)
+    await users.record_login(principal, {"liff": {"os": "ios"}})
+    await users.update_identity_metadata(user_id, "line", {"followed": True})
+    await users.record_module_use(user_id, "bus")
+    assert not await users.consume_daily_quota(user_id, 10)
+    await users.set_consent(user_id, "privacy_policy", "1", True, "LIFF")
+    await users.set_preference(user_id, "nickname", "小明", "assistant")
+    await users.set_preferences(user_id, {"department": "資訊工程學系"}, "user")
+    await users.set_onboarding(user_id, "asked")
+    with pytest.raises(AccountDisabledError):
+        await users.add_memory(user_id, "住清齋")
+    with pytest.raises(AccountDisabledError):
+        await chats.get_or_create_session(user_id, "late", "ev-late")
+
+    tombstone = await doc(db, f"users/{user_id}")
+    assert set(tombstone) == {"status", "deletedAt", "expiresAt"}
+    assert [c.id async for c in db.document(f"users/{user_id}").collections()] == []
+    assert await owned_ids(db, user_id) == set()
+
+
+@pytest.mark.firestore
+async def test_writes_during_deletion_are_removed_by_the_final_pass(db, users, chats):
+    user_id, _ = await users.resolve_or_create(identity())
+    await users.begin_deletion(user_id)
+    await chats.delete_all_sessions(user_id)
+    # 狀態還是 deleting 時寫入：留給刪除流程的最後一輪清除
+    await users.set_preference(user_id, "nickname", "小明", "assistant")
+    session, _ = await chats.get_or_create_session(user_id, "mid-deletion")
+    await users.delete_user(user_id)
+    await chats.delete_all_sessions(user_id)
+    assert [c.id async for c in db.document(f"users/{user_id}").collections()] == []
+    assert await doc(db, f"conversations/{session.id}") is None
+
+
+@pytest.mark.firestore
+async def test_deletion_that_leaves_documents_reports_incomplete(db, users, chats, monkeypatch):
+    who = identity()
+    user_id, _ = await users.resolve_or_create(who)
+    await users.set_preference(user_id, "nickname", "小明", "user")
+    session, _ = await chats.get_or_create_session(user_id, "x")
+    await users.begin_deletion(user_id)
+    # BulkWriter 個別刪除的重試用盡時不會拋出例外：模擬「呼叫成功但什麼都沒刪」
+    monkeypatch.setattr(db, "recursive_delete", AsyncMock(return_value=0))
+    with pytest.raises(DeletionIncompleteError):
+        await chats.delete_all_sessions(user_id)
+    with pytest.raises(DeletionIncompleteError):
+        await users.delete_user(user_id)
+    # 帳號維持 deleting、外部身分對應也還在：使用者可以再按一次刪除
+    assert await users.get_status(user_id) == "deleting"
+    assert await doc(db, f"identityLookup/{lookup_key('line', who.provider_user_id)}") is not None
+    assert await doc(db, f"conversations/{session.id}") is not None
+
+
+@pytest.mark.firestore
+async def test_delete_all_sessions_also_clears_evicted_conversations_messages(db, chats):
+    user_id = f"usr_{uuid4().hex}"
+    session, _ = await chats.get_or_create_session(user_id, "evicted")
+    await chats.add_message(user_id, session.id, "user", "舊訊息")
+    # 淘汰只刪對話文件並留下 cleanup marker，訊息稍後才清
+    assert await chats._delete(user_id, session.id)
+    assert [m async for m in db.collection(f"conversations/{session.id}/messages").stream()]
+    await chats.delete_all_sessions(user_id)
+    assert [m async for m in db.collection(f"conversations/{session.id}/messages").stream()] == []
+
+
+@pytest.mark.firestore
+async def test_concurrent_remember_never_exceeds_the_limit(db, users):
+    from src.application.models.profile import MAX_MEMORIES, MemoryLimitError
+
+    user_id = await new_user(users)
+    clients = [firestore.AsyncClient(project=PROJECT) for _ in range(5)]
+    try:
+        stores = [FirestoreUserStore(client) for client in clients]
+        results = await asyncio.gather(
+            *(stores[i % 5].add_memory(user_id, f"fact {i}") for i in range(MAX_MEMORIES + 10)),
+            return_exceptions=True,
+        )
+    finally:
+        for client in clients:
+            client.close()
+    saved = [r for r in results if not isinstance(r, BaseException)]
+    assert len(saved) == MAX_MEMORIES
+    assert all(isinstance(r, MemoryLimitError) for r in results if isinstance(r, BaseException))
+    stored = [d async for d in db.collection(f"users/{user_id}/memory").stream()]
+    assert len(stored) == MAX_MEMORIES
 
 
 # personalisation
@@ -476,6 +592,7 @@ async def test_profile_preferences_memory_and_onboarding(db, users):
     with pytest.raises(MemoryLimitError):
         await users.add_memory(user_id, "too many")
 
+    await users.begin_deletion(user_id)
     await users.delete_user(user_id)
     for sub in ("preferences", "memory"):
         assert [d async for d in db.collection(f"users/{user_id}/{sub}").stream()] == []
