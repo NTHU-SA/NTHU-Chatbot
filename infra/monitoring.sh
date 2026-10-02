@@ -2,14 +2,17 @@
 # 建立監測與告警：/ping uptime check（同時讓實例保溫）、email 通知、三個告警政策。可重複執行。
 #
 # 用法（email 只從環境變數讀，不寫進 repo）：
-#   ALERT_EMAIL=you@example.com bash infra/monitoring.sh infra/environments/prod.conf
+#   bash infra/monitoring.sh infra/environments/prod.conf                            # 只建 uptime check
+#   ALERT_EMAIL=you@example.com bash infra/monitoring.sh infra/environments/prod.conf  # 再加上告警
 set -euo pipefail
+# Git Bash（Windows）會把 --path=/ping 改寫成檔案路徑；只排除這個參數（Linux 上此變數無作用）
+export MSYS2_ARG_CONV_EXCL="--path="
 export CLOUDSDK_CORE_DISABLE_PROMPTS=1
 
-ENV_FILE="${1:?usage: ALERT_EMAIL=... bash infra/monitoring.sh infra/environments/<name>.conf}"
+ENV_FILE="${1:?usage: [ALERT_EMAIL=...] bash infra/monitoring.sh infra/environments/<name>.conf}"
 # shellcheck source=/dev/null
 source "$ENV_FILE"
-: "${PROJECT_ID:?}" "${REGION:?}" "${SERVICE:?}" "${ALERT_EMAIL:?set ALERT_EMAIL}"
+: "${PROJECT_ID:?}" "${REGION:?}" "${SERVICE:?}"
 PYTHON="${PYTHON:-python}"
 UPTIME_PERIOD_MINUTES="${UPTIME_PERIOD_MINUTES:-5}"
 # 5 分鐘內超過幾個 5xx 就告警
@@ -17,6 +20,28 @@ ERROR_5XX_THRESHOLD="${ERROR_5XX_THRESHOLD:-5}"
 G=(gcloud --project="$PROJECT_ID" --quiet)
 
 step() { printf '\n==> %s\n' "$*"; }
+
+step "Uptime check：GET /ping，每 ${UPTIME_PERIOD_MINUTES} 分鐘（同時避免實例閒置被回收）"
+url="$("${G[@]}" run services describe "$SERVICE" --region="$REGION" --format='value(status.url)')"
+host="${url#https://}"
+check_name="${SERVICE}-ping"
+# list-configs 不支援以 displayName 篩選：列出全部後自己比對
+check_id="$("${G[@]}" monitoring uptime list-configs --format='value(name,displayName)' \
+  | tr -d '\r' | awk -v want="$check_name" '$2 == want { print $1; exit }')"
+if [[ -z "$check_id" ]]; then
+  check_id="$("${G[@]}" monitoring uptime create "$check_name" \
+    --resource-type=uptime-url --resource-labels="host=${host},project_id=${PROJECT_ID}" \
+    --protocol=https --path=/ping --period="$UPTIME_PERIOD_MINUTES" --timeout=10 \
+    --matcher-content=pong --matcher-type=contains-string --format='value(name)')"
+fi
+check_id="${check_id##*/}"
+echo "$check_id"
+
+if [[ -z "${ALERT_EMAIL:-}" ]]; then
+  step "完成（只建 uptime check）"
+  echo "沒有設定 ALERT_EMAIL，略過通知管道與告警；決定好告警對象後再帶 ALERT_EMAIL 重跑即可。"
+  exit 0
+fi
 
 step "Email 通知管道"
 channel="$("${G[@]}" beta monitoring channels list \
@@ -27,21 +52,6 @@ if [[ -z "$channel" ]]; then
     --format='value(name)')"
 fi
 echo "$channel"
-
-step "Uptime check：GET /ping，每 ${UPTIME_PERIOD_MINUTES} 分鐘（同時避免實例閒置被回收）"
-url="$("${G[@]}" run services describe "$SERVICE" --region="$REGION" --format='value(status.url)')"
-host="${url#https://}"
-check_name="${SERVICE}-ping"
-check_id="$("${G[@]}" monitoring uptime list-configs --filter="displayName=\"${check_name}\"" \
-  --format='value(name)' --limit=1)"
-if [[ -z "$check_id" ]]; then
-  check_id="$("${G[@]}" monitoring uptime create "$check_name" \
-    --resource-type=uptime-url --resource-labels="host=${host},project_id=${PROJECT_ID}" \
-    --protocol=https --path=/ping --period="$UPTIME_PERIOD_MINUTES" --timeout=10 \
-    --matcher-content=pong --matcher-type=contains-string --format='value(name)')"
-fi
-check_id="${check_id##*/}"
-echo "$check_id"
 
 step "Log-based metric：${SERVICE} 的 ERROR 以上 log"
 metric="app_errors_${SERVICE//-/_}"
