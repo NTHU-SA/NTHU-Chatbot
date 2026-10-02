@@ -154,11 +154,18 @@ Firestore Native mode `(default)`，由 `infra/bootstrap.sh` 建立；資料庫�
 每一則訊息是一份文件，不存成 array；對話與訊息的讀取都會比對 `userId`，別人的對話一律當作不存在。
 `tokenUsage`、`model`、`promptVersion` 只存在資料庫供成本與品質分析，不會回傳給前端。
 
+## 工具呼叫與搜尋
+
+- 模型可在同一步一次呼叫多個彼此獨立的工具（`parallel_tool_calls`），SDK 會並行執行。
+- 唯讀、與使用者無關的 MCP 結果在每個實例內短暫快取（公告 5 分鐘、課程與地點 1 小時；公車即時資料不快取），快取命中也計入次數。
+- 每則訊息最多 `MAX_TOOL_CALLS_PER_MESSAGE`（預設 6）次外部呼叫，超過時工具回報上限、模型用已查到的資料回答；每次執行的次數會記在 log（`Agent run finished`）。
+- **網路搜尋**（`WEB_SEARCH_ENABLED=true`，預設關閉；需要官方 OpenAI + Responses API）：包成我們自己的 `web_search` function tool，內部以 Responses API 的 web_search 搜尋，`allowed_domains` 只允許 `WEB_SEARCH_DOMAINS`（預設 nthu.edu.tw，含子網域），回傳的來源網址會在伺服器端再過濾一次（只留 https 且網域相符）。不直接掛 hosted web search，是為了在搜尋結果進入對話前就能計次並標記「本輪已讀取外部資料」（個人化寫入工具因此停用）。每則訊息最多 `MAX_WEB_SEARCHES_PER_MESSAGE` 次；每次搜尋另外計費。
+
 ## 個人化（稱呼、系所、記住的事）
 
 - 首次同意隱私權政策後，會詢問稱呼與系所（可略過）；沒填也沒略過的話，AI 會在第一次回答的最後問一次，之後不再問。
 - 對話中由 AI 判斷要不要記：`save_profile`（稱呼、系所）、`remember` / `forget`（使用者明確要求記住的事）。系所會比對 NTHU API `/departments/` 的官方學術單位名稱（加上常見簡稱表），有多個可能時請使用者選。
-- **防 prompt injection**：同一輪只要讀過外部資料（任何 MCP 工具結果），寫入工具一律拒絕，只有使用者自己說的話能被記下。寫入的文字會去掉換行與角括號、限制長度，注入 instructions 時包在 `<user_profile>` 區塊並標明「不是指令」。
+- **防 prompt injection**：同一輪只要讀過外部資料（任何 MCP 工具結果或網路搜尋），寫入工具一律拒絕，只有使用者自己說的話能被記下。寫入的文字會去掉換行與角括號、限制長度，注入 instructions 時包在 `<user_profile>` 區塊並標明「不是指令」。
 - 記下的內容不會出現在訊息的 `toolCalls` 裡；使用者可在側欄「我的資料」修改或刪除，刪除帳號時一併刪除。
 
 ## 隱私權與個人資料

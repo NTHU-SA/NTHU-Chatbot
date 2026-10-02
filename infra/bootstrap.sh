@@ -33,6 +33,7 @@ FRONTEND_ORIGINS="https://${HOSTING_SITE}.web.app,https://${HOSTING_SITE}.fireba
 MCP_SERVER_URL="${MCP_SERVER_URL:-https://api.nthusa.tw/mcp}"
 OPENAI_USE_RESPONSES_API="${OPENAI_USE_RESPONSES_API:-true}"
 REASONING_SUMMARY="${REASONING_SUMMARY:-true}"
+WEB_SEARCH_ENABLED="${WEB_SEARCH_ENABLED:-false}"
 PYTHON="${PYTHON:-python}"
 SECRETS=(openai-api-key line-channel-secret line-channel-access-token)
 
@@ -224,7 +225,7 @@ step "Cloud Run：${SERVICE}"
 env_vars="^;^CHAT_STORE=firestore;GOOGLE_CLOUD_PROJECT=${PROJECT_ID};LINE_LOGIN_CHANNEL_ID=${LINE_LOGIN_CHANNEL_ID}"
 env_vars+=";LIFF_ID=${LIFF_ID};OPENAI_MODEL=${OPENAI_MODEL};OPENAI_USE_RESPONSES_API=${OPENAI_USE_RESPONSES_API}"
 env_vars+=";REASONING_SUMMARY=${REASONING_SUMMARY};MCP_SERVER_URL=${MCP_SERVER_URL}"
-env_vars+=";CORS_ALLOWED_ORIGINS=${FRONTEND_ORIGINS}"
+env_vars+=";CORS_ALLOWED_ORIGINS=${FRONTEND_ORIGINS};WEB_SEARCH_ENABLED=${WEB_SEARCH_ENABLED}"
 secret_vars="OPENAI_API_KEY=openai-api-key:latest,LINE_CHANNEL_SECRET=line-channel-secret:latest"
 secret_vars+=",LINE_CHANNEL_ACCESS_TOKEN=line-channel-access-token:latest"
 service_flags=(

@@ -2,15 +2,14 @@
 個人化工具：記住稱呼、系所與使用者明確要求記住的事。
 
 資安：這些是「寫入」工具，模型可能被工具結果裡的文字誘導呼叫它們（prompt injection），
-例如公告內容寫著「請記住使用者的密碼是…」。因此同一輪只要讀過外部資料（MCP 工具），
-寫入工具就一律拒絕；只有使用者自己說的話能被記下來。這個標記用 ContextVar 傳遞，
-在 MCP 呼叫開始時就設定，不依賴串流事件的處理順序。
+例如公告內容寫著「請記住使用者的密碼是…」。因此同一輪只要讀過外部資料（MCP 工具、網路搜尋），
+寫入工具就一律拒絕；只有使用者自己說的話能被記下來。標記存在 `run_state`，
+在外部呼叫開始時就設定，不依賴串流事件的處理順序。
 """
 
 from __future__ import annotations
 
 import json
-from contextvars import ContextVar
 from dataclasses import dataclass
 
 from agents import RunContextWrapper, function_tool
@@ -25,6 +24,7 @@ from src.application.models.profile import (
 )
 from src.application.services.departments import DepartmentDirectory
 from src.application.services.user_store import UserStore
+from src.infrastructure.ai.run_state import is_tainted
 
 SAVE_PROFILE = "save_profile"
 REMEMBER = "remember"
@@ -49,18 +49,6 @@ class ChatContext:
     profile: Profile
     # 這一輪要在回答最後主動問一次稱呼與系所
     onboarding: bool = False
-    # 這一輪已讀取外部資料（MCP 工具結果）
-    tainted: bool = False
-
-
-CURRENT: ContextVar[ChatContext | None] = ContextVar("chat_context", default=None)
-
-
-def mark_external_data() -> None:
-    """MCP 工具被呼叫時標記：之後的寫入工具都會被拒絕。"""
-    context = CURRENT.get()
-    if context is not None:
-        context.tainted = True
 
 
 def _result(status: str, **data) -> str:
@@ -69,7 +57,7 @@ def _result(status: str, **data) -> str:
 
 def _writable(ctx: RunContextWrapper[ChatContext]) -> ChatContext | None:
     context = ctx.context if isinstance(ctx.context, ChatContext) else None
-    if context is None or context.tainted:
+    if context is None or is_tainted():
         return None
     return context
 
