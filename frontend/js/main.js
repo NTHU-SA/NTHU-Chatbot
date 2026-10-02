@@ -5,6 +5,7 @@
 
 import { api, loadConfig } from "./api.js";
 import { createSession, loadSessions, openSession, send } from "./chat.js";
+import { deleteAllData, requestConsent, revokeConsent } from "./consent.js";
 import {
   autosize, closeSidebar, el, hideOverlay, openSidebar, showOverlay, state, updateControls,
 } from "./dom.js";
@@ -15,6 +16,8 @@ function bindUi() {
   el.closeSidebar.addEventListener("click", closeSidebar);
   el.backdrop.addEventListener("click", closeSidebar);
   el.newBtn.addEventListener("click", () => createSession());
+  el.revokeBtn.addEventListener("click", () => revokeConsent().catch(reportError));
+  el.deleteDataBtn.addEventListener("click", () => deleteAllData().catch(reportError));
   el.composer.addEventListener("submit", (e) => { e.preventDefault(); send(el.input.value); });
   el.input.addEventListener("input", () => { autosize(); updateControls(); });
   el.input.addEventListener("keydown", (e) => {
@@ -29,6 +32,12 @@ function bindUi() {
     if (e.target.classList && e.target.classList.contains("scroll-x-inner")) updateScrollHint(e.target);
   }, true);
   window.addEventListener("resize", () => updateScrollHints(el.messages));
+}
+
+function reportError(err) {
+  if (err.message === "re-login") return;
+  console.error(err);
+  showOverlay(`發生錯誤：${err.message}`, true);
 }
 
 // Environment info for the backend's records only (never used for auth).
@@ -79,6 +88,10 @@ async function boot() {
       el.userBox.append(img);
     }
     el.userBox.append(document.createTextNode(me.display_name || "LINE 使用者"));
+
+    // AI chat needs consent to the current privacy policy (the backend enforces it too).
+    hideOverlay();
+    if (!me.consent.accepted) await requestConsent(me.consent.version);
 
     await loadSessions();
     const params = new URLSearchParams(location.search);

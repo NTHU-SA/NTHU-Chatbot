@@ -22,6 +22,11 @@
       </div>
       <ul id="sessionList" class="session-list"></ul>
       <p class="sidebar-note">最多保留 50 則對話；新增對話時，最久未更新的對話會被自動刪除。</p>
+      <div class="sidebar-section" aria-label="隱私權與資料">
+        <a class="side-link" href="./privacy.html" target="_blank" rel="noopener">隱私權政策</a>
+        <button id="revokeBtn" class="side-link" type="button">撤回同意</button>
+        <button id="deleteDataBtn" class="side-link danger" type="button">刪除我的所有資料</button>
+      </div>
       <div id="userBox" class="user-box"></div>
     </aside>
     <div id="backdrop" class="backdrop" hidden></div>
@@ -52,12 +57,27 @@
     </div>
   </div>
 
+  <div id="consent" class="overlay consent" hidden>
+    <section class="consent-card" role="dialog" aria-modal="true" aria-labelledby="consentTitle">
+      <h2 id="consentTitle">開始前，請先看看本汪怎麼處理你的資料</h2>
+      <ul class="consent-points">
+        <li>你的提問會送到 <strong>OpenAI（美國）</strong>產生回答，並查詢清大校園資料服務。</li>
+        <li>對話紀錄存在 <strong>Google Cloud（東京）</strong>，只有你看得到；每人最多保留 50 則對話。</li>
+        <li>我們只保存 LINE 顯示名稱、頭像與使用紀錄，不會拿來做廣告或分享給其他人。</li>
+        <li>你可以隨時在側欄撤回同意，或刪除你的所有資料。</li>
+      </ul>
+      <p><a href="./privacy.html" target="_blank" rel="noopener">閱讀完整隱私權政策</a></p>
+      <button id="consentAccept" class="btn" type="button">我已閱讀並同意</button>
+      <p class="consent-note">不同意的話，仍可以在 LINE 聊天室使用 @ 指令（例如 @公車）。</p>
+    </section>
+  </div>
+
   <dialog id="confirmDlg" class="dialog">
     <form method="dialog">
       <p id="confirmText">確定要刪除這個對話嗎？</p>
       <div class="dialog-actions">
         <button value="cancel" class="btn ghost" type="submit">取消</button>
-        <button value="ok" class="btn danger" type="submit">刪除</button>
+        <button id="confirmOk" value="ok" class="btn danger" type="submit">刪除</button>
       </div>
     </form>
   </dialog>

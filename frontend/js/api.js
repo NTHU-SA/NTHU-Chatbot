@@ -35,8 +35,12 @@ export async function api(path, opts = {}) {
   if (!res.ok) {
     let detail = res.statusText;
     try { detail = (await res.json()).detail || detail; } catch (_) { /* ignore */ }
-    const err = new Error(detail);
+    // Structured errors look like {code, message}, e.g. {code: "consent_required"}.
+    const structured = detail && typeof detail === "object" && !Array.isArray(detail);
+    const message = structured ? detail.message || detail.code : Array.isArray(detail) ? "輸入格式有誤" : detail;
+    const err = new Error(message);
     err.status = res.status;
+    if (structured) err.code = detail.code;
     throw err;
   }
   return res;
