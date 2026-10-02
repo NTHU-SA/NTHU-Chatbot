@@ -319,9 +319,8 @@ class CommandHandler:
                     key, value = pair.split("=", 1)
                     params[key.strip()] = value.strip()
                 elif pair:
-                    logger.warning(
-                        f"參數格式錯誤，缺少等號: '{pair}'，將被忽略。完整指令: '{message}'"
-                    )
+                    # 不記錄參數與指令內容（隱私權政策：@ 指令只記錄使用的功能）
+                    logger.warning("參數格式錯誤（缺少等號），已忽略")
         else:
             command_name = command_string.strip()
 
@@ -349,7 +348,8 @@ class CommandHandler:
             raise ModuleNotFoundError(module)
 
         command_event = CommandEvent(user_id=user_id, text=text, params=params or {})
-        logger.info(f"執行命令: {text}({module}/{command_name})，參數: {params}")
+        # 只記錄模組名稱：指令名稱與參數都是使用者輸入的文字，不寫進 log
+        logger.info("執行命令: {}", module)
 
         if not command_name:
             if module_config.default_menu:
@@ -386,16 +386,17 @@ class CommandHandler:
                 module, prefix, command_name, user_id, message, params
             )
         except ModuleNotFoundError as e:
-            logger.warning(f"處理訊息失敗: {e}")
+            # 例外訊息含使用者輸入的指令文字：只記錄類型
+            logger.warning("處理訊息失敗: {}", type(e).__name__)
             return "模組未找到，請確認指令是否正確。"
         except CommandNotFoundError as e:
-            logger.warning(f"處理訊息失敗: {e}")
+            logger.warning("處理訊息失敗: {}", type(e).__name__)
             return f"找不到指令【{e.prefix}/{e.command_name}】，請確認指令是否正確。"
         except CommandHandlerError as e:
-            logger.warning(f"處理訊息失敗: {e}")
+            logger.warning("處理訊息失敗: {}", type(e).__name__)
             return "指令處理錯誤，請稍後再試。"
         except Exception as e:
-            logger.exception(f"處理訊息時發生未預期錯誤: {e}")
+            logger.error("處理訊息時發生未預期錯誤: {}", type(e).__name__)
             return "處理訊息時發生錯誤，請稍後再試。"
 
 

@@ -3,6 +3,7 @@ Firestore 使用者與外部身分儲存。
 
 資料結構（欄位名稱依 firebase.spec）：
   identityLookup/{sha256(provider:id)}      userId / provider / createdAt
+  quotaCarryover/{sha256(provider:id)}      day / count / expiresAt（TTL）：刪除帳號時保留當日用量，防止重建帳號繞過上限
   users/{uid}                               status / displayName / pictureUrl / createdAt / updatedAt /
                                             lastActiveAt / lastConversationId / lastModuleId /
                                             lastModuleUsedAt / conversationCount
@@ -60,6 +61,8 @@ USAGE_RETENTION = timedelta(days=8)
 AUDIT_RETENTION = timedelta(days=365)
 # 墓碑要比 IdentityService 的對應快取（10 分鐘）與單次請求的時限活得久
 TOMBSTONE_RETENTION = timedelta(days=1)
+# 刪除帳號後，當日 AI 用量以雜湊後的外部身分保留到隔天（不含任何其他資料）
+CARRYOVER_RETENTION = timedelta(days=2)
 # BulkWriter 個別刪除的重試用盡時不會拋出例外，所以刪完要再列一次，必要時重刪
 DELETE_ATTEMPTS = 3
 
@@ -79,6 +82,12 @@ class FirestoreUserStore:
         return self._db.collection("identityLookup").document(
             lookup_key(provider, provider_user_id)
         )
+
+    def _carryover(self, key: str):
+        return self._db.collection("quotaCarryover").document(key)
+
+    def _usage(self, user_id: str, day: str):
+        return self._user(user_id).collection("usage").document(day)
 
     def _audit(self, user_id: str):
         return self._user(user_id).collection("auditLog").document(new_id())
@@ -163,6 +172,15 @@ class FirestoreUserStore:
             },
         )
         batch.create(self._identity(user_id, identity.provider), self._identity_payload(identity))
+        # 同一個外部身分今天刪除過帳號：沿用當天已用的額度
+        carried = await self._carryover(lookup.id).get()
+        today = now_utc()
+        data = carried.to_dict() or {}
+        if carried.exists and data.get("day") == today.strftime("%Y-%m-%d"):
+            batch.create(
+                self._usage(user_id, data["day"]),
+                {"count": int(data.get("count", 0)), "expiresAt": today + USAGE_RETENTION},
+            )
         await batch.commit()
         return user_id, True
 
@@ -476,6 +494,7 @@ class FirestoreUserStore:
         任何一步沒清乾淨就拋出 DeletionIncompleteError。
         """
         user = self._user(user_id)
+        await self._carry_over_quota(user_id)
         await self._wipe(user, keep=("identities",))
         await self._delete_identities(user_id)
         await user.set(
@@ -486,6 +505,30 @@ class FirestoreUserStore:
             }
         )
         await self._wipe(user)
+
+    async def _carry_over_quota(self, user_id: str) -> None:
+        """
+        把當日 AI 用量記到 `quotaCarryover/{lookup key}`，同一個外部身分重建帳號時沿用。
+
+        否則「刪除資料 → 重新同意」就能無限重置每日額度。只存雜湊後的身分、日期與次數，
+        TTL 兩天後自動刪除；重試刪除時取較大值，不會因為第一次已清掉 usage 而歸零。
+        """
+        day = now_utc().strftime("%Y-%m-%d")
+        usage = await self._usage(user_id, day).get(field_paths=["count"])
+        count = int((usage.to_dict() or {}).get("count", 0)) if usage.exists else 0
+        if count <= 0:
+            return
+        async for doc in self._user(user_id).collection("identities").stream():
+            data = doc.to_dict() or {}
+            if not (data.get("provider") and data.get("providerUserId")):
+                continue
+            reference = self._carryover(lookup_key(data["provider"], data["providerUserId"]))
+            existing = (await reference.get()).to_dict() or {}
+            if existing.get("day") == day and int(existing.get("count", 0)) >= count:
+                continue
+            await reference.set(
+                {"day": day, "count": count, "expiresAt": now_utc() + CARRYOVER_RETENTION}
+            )
 
     async def _delete_identities(self, user_id: str) -> None:
         batch = self._db.batch()

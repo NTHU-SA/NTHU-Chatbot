@@ -81,7 +81,8 @@ jobs:
   # GCP only trusts this repository on the branch configured in infra/environments/*.conf.
   # Skipped until the repo variables printed by infra/bootstrap.sh are set.
   deploy-frontend:
-    needs: test
+    # 前端與 API 一起變動：測試與容器 smoke test 都通過才部署
+    needs: [test, smoke]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10

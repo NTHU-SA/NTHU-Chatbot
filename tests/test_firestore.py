@@ -545,6 +545,51 @@ async def test_delete_all_sessions_also_clears_evicted_conversations_messages(db
 
 
 @pytest.mark.firestore
+async def test_quota_survives_account_deletion_and_recreation(db, users, chats):
+    who = identity()
+    user_id, _ = await users.resolve_or_create(who)
+    for _ in range(3):
+        assert await users.consume_daily_quota(user_id, 3)
+    await delete_everything(users, chats, user_id)
+    again, created = await users.resolve_or_create(who)
+    assert created and again != user_id
+    assert not await users.consume_daily_quota(again, 3)  # 今天的 3 次沿用
+    carried = await doc(db, f"quotaCarryover/{lookup_key('line', who.provider_user_id)}")
+    assert set(carried) == {"day", "count", "expiresAt"}  # 只有日期與次數
+
+
+@pytest.mark.firestore
+async def test_session_delete_retries_when_a_reply_lands_concurrently(db, chats, monkeypatch):
+    user_id = f"usr_{uuid4().hex}"
+    session, _ = await chats.get_or_create_session(user_id, "busy")
+    real_delete = chats._delete
+    calls = []
+
+    async def first_attempt_loses(uid, sid):
+        calls.append(sid)
+        if len(calls) == 1:
+            # 串流中的回覆剛好寫入，前置條件失敗
+            await chats.add_message(uid, sid, "assistant", "late reply")
+            return False
+        return await real_delete(uid, sid)
+
+    monkeypatch.setattr(chats, "_delete", first_attempt_loses)
+    await chats.delete_session(user_id, session.id)
+    assert len(calls) == 2
+    assert await chats.get_session(user_id, session.id) is None
+
+
+@pytest.mark.firestore
+async def test_session_delete_gives_up_with_an_error_instead_of_pretending(db, chats, monkeypatch):
+    user_id = f"usr_{uuid4().hex}"
+    session, _ = await chats.get_or_create_session(user_id, "always busy")
+    monkeypatch.setattr(chats, "_delete", AsyncMock(return_value=False))
+    with pytest.raises(DeletionIncompleteError):
+        await chats.delete_session(user_id, session.id)
+    assert await chats.get_session(user_id, session.id) is not None
+
+
+@pytest.mark.firestore
 async def test_concurrent_remember_never_exceeds_the_limit(db, users):
     from src.application.models.profile import MAX_MEMORIES, MemoryLimitError
 

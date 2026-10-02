@@ -77,32 +77,39 @@ export async function openProfile({ onboarding = false } = {}) {
 
   return new Promise((resolve) => {
     let settled = false;
+    let saved = false;
     const cleanup = () => {
       if (settled) return;
       settled = true;
       form.removeEventListener("submit", onSubmit);
-      dlg.removeEventListener("cancel", cleanup);
-      dlg.removeEventListener("close", cleanup);
+      dlg.removeEventListener("close", onClose);
       resolve();
+    };
+    // Any way out of the first-run dialog other than 儲存 (Escape, or the browser
+    // closing it) counts as 略過, so it is recorded and not shown again.
+    const onClose = () => {
+      if (onboarding && !saved) {
+        api("/api/profile", { method: "PATCH", body: { skip_onboarding: true } }).catch(() => {});
+      }
+      cleanup();
     };
     const onSubmit = async (e) => {
       const action = e.submitter && e.submitter.value;
-      if (action !== "save" && action !== "skip") { cleanup(); return; } // close
+      if (action !== "save" && action !== "skip") return; // 關閉: the dialog closes itself
       e.preventDefault();
       const body = action === "skip"
         ? { skip_onboarding: true }
         : { nickname: nickname.value.trim(), department: department.value.trim() };
       try {
         await api("/api/profile", { method: "PATCH", body });
+        saved = true;
         dlg.close();
-        cleanup();
       } catch (err) {
         showError(err.message, err.candidates || []);
       }
     };
     form.addEventListener("submit", onSubmit);
-    dlg.addEventListener("cancel", cleanup); // Escape
-    dlg.addEventListener("close", cleanup);
+    dlg.addEventListener("close", onClose);
     dlg.showModal();
   });
 }

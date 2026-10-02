@@ -392,6 +392,43 @@ def test_daily_quota_enforced(client):
     assert send(client, session_id, "x").status_code == 429
 
 
+def test_deleting_the_account_does_not_reset_the_daily_quota(client):
+    session_id = new_session(client)
+    for _ in range(3):
+        assert send(client, session_id, "x").status_code == 200
+    assert client.delete("/api/me", headers=AUTH).status_code == 204
+    # 同一個 LINE 帳號重建：要重新同意，但今天的額度沿用
+    client._policy_accepted = False
+    accept_policy(client)
+    assert send(client, new_session(client), "x").status_code == 429
+
+
+def test_memory_store_drops_message_metadata_with_the_messages(client, chat_app):
+    store = chat_app.state.store
+    first = new_session(client)
+    send(client, first, "x")
+    assert store.meta
+    client.delete(f"/api/sessions/{first}", headers=AUTH)
+    assert store.meta == {}
+    send(client, new_session(client), "x")
+    client.delete("/api/me", headers=AUTH)
+    assert store.meta == {}
+
+
+def test_session_that_keeps_changing_reports_a_conflict(client, chat_app, monkeypatch):
+    from src.application.models.identity import DeletionIncompleteError
+
+    session_id = new_session(client)
+
+    async def busy(user_id, sid):
+        raise DeletionIncompleteError(user_id)
+
+    monkeypatch.setattr(chat_app.state.store, "delete_session", busy)
+    response = client.delete(f"/api/sessions/{session_id}", headers=AUTH)
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "delete_conflict"
+
+
 def test_message_too_long(client, chat_app):
     session_id = new_session(client)
     limit = chat_app.state.settings.max_message_chars

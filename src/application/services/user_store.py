@@ -147,6 +147,8 @@ class MemoryUserStore:
         self.preferences: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
         self.memories: dict[str, dict[str, MemoryItem]] = defaultdict(dict)
         self._usage: dict[tuple[str, str], int] = defaultdict(int)
+        # lookup key → (day, count)：刪除帳號後保留當日用量（同 Firestore 的 quotaCarryover）
+        self.quota_carryover: dict[str, tuple[str, int]] = {}
         self._lock = asyncio.Lock()
 
     def _check_active(self, user_id: str) -> None:
@@ -178,6 +180,9 @@ class MemoryUserStore:
                 "linkedAt": now,
                 "metadata": {},
             }
+            day, count = self.quota_carryover.get(key, ("", 0))
+            if day == now.strftime("%Y-%m-%d"):
+                self._usage[(user_id, day)] = count
             return user_id, True
 
     async def get_status(self, user_id: str) -> str | None:
@@ -310,8 +315,13 @@ class MemoryUserStore:
 
     async def delete_user(self, user_id: str) -> None:
         async with self._lock:
+            day = now_utc().strftime("%Y-%m-%d")
+            used = self._usage.get((user_id, day), 0)
             for record in self.identities.pop(user_id, {}).values():
-                self.lookup.pop(lookup_key(record["provider"], record["providerUserId"]), None)
+                key = lookup_key(record["provider"], record["providerUserId"])
+                if used:
+                    self.quota_carryover[key] = (day, used)
+                self.lookup.pop(key, None)
             for store in (
                 self.audit,
                 self.module_states,

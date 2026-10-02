@@ -159,6 +159,7 @@ Firestore Native mode `(default)`，由 `infra/bootstrap.sh` 建立；區域建�
 | 路徑 | 資料 |
 | --- | --- |
 | `identityLookup/{sha256(provider:id)}` | `userId`、`provider`、`createdAt` |
+| `quotaCarryover/{sha256(provider:id)}` | 刪除帳號時保留當日 AI 用量：`day`、`count`、`expiresAt`（TTL 2 天）。同一個外部身分當天重建帳號時沿用，避免以刪除帳號重置每日上限 |
 | `users/{uid}` | `status`（active / blocked / deleting / deleted；deleted 只剩不含個資的墓碑與 `expiresAt` TTL）、`displayName`、`pictureUrl`、`createdAt`、`updatedAt`、`lastActiveAt`、`lastConversationId`、`lastModuleId`、`lastModuleUsedAt`、`conversationCount` |
 | `users/{uid}/identities/{provider}` | `providerUserId`、`linkedAt`、`lastLoginAt`、`metadata`（LINE：`followed`、`liff`{os、appVersion、language、contextType、friendshipStatus}；前端自報，不參與授權；不收 contextId） |
 | `users/{uid}/consents/{type}_v{version}` | 同意紀錄：`status`（accepted / revoked）、`acceptedAt`、`revokedAt`、`source`；每個版本一份，不覆蓋 |
