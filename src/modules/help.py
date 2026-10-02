@@ -3,8 +3,8 @@ import os
 from src.app.handlers.command_handler import command_handler
 from templates.messages import help_message
 
-# 不列在說明裡的模組：開發測試用、以及說明本身
-HIDDEN_MODULES = {"dev", "help", "menu"}
+# 不列在說明裡的模組：說明本身與選單
+HIDDEN_MODULES = {"help", "menu"}
 
 
 def visible_prefixes() -> list[str]:

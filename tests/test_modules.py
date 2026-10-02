@@ -241,3 +241,11 @@ def test_menu_module_points_at_real_modules():
         data = registered.menu_info.actions[0].data
         prefix = data[1:].split("/")[0]
         assert prefix in command_handler.prefix_to_module_name, data
+
+
+def test_developer_test_module_is_not_exposed():
+    """開發測試用的指令（會 sleep 佔住 worker）不能在正式環境被任何人觸發。"""
+    from src.app.handlers.command_handler import command_handler
+
+    assert "dev" not in command_handler.modules
+    assert "開發者" not in command_handler.prefix_to_module_name
