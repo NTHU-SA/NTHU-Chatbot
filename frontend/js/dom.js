@@ -21,6 +21,11 @@ export const el = {
   overlayText: $("overlayText"),
   overlayRetry: $("overlayRetry"),
   confirmDlg: $("confirmDlg"),
+  confirmOk: $("confirmOk"),
+  consent: $("consent"),
+  consentAccept: $("consentAccept"),
+  revokeBtn: $("revokeBtn"),
+  deleteDataBtn: $("deleteDataBtn"),
   tplMessage: $("tplMessage"),
 };
 
@@ -66,12 +71,32 @@ export function autosize() {
   el.input.style.height = Math.min(el.input.scrollHeight, 140) + "px";
 }
 
-export function confirmDialog(text) {
+// Resolves true only when the OK button is pressed. The form's submit event fires
+// synchronously with the pressed button; "close" alone is not reliable (Chrome
+// defers it while the page is hidden), so whichever signal comes first wins.
+export function confirmDialog(text, okLabel = "刪除") {
   return new Promise((resolve) => {
+    const dlg = el.confirmDlg;
+    const form = dlg.querySelector("form");
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      form.removeEventListener("submit", onSubmit);
+      dlg.removeEventListener("cancel", onCancel);
+      dlg.removeEventListener("close", onClose);
+      resolve(ok);
+    };
+    const onSubmit = (e) => finish(Boolean(e.submitter) && e.submitter.value === "ok");
+    const onCancel = () => finish(false);
+    const onClose = () => finish(dlg.returnValue === "ok");
     $("confirmText").textContent = text;
-    el.confirmDlg.returnValue = "cancel";
-    el.confirmDlg.addEventListener("close", () => resolve(el.confirmDlg.returnValue === "ok"), { once: true });
-    el.confirmDlg.showModal();
+    el.confirmOk.textContent = okLabel;
+    dlg.returnValue = "cancel";
+    form.addEventListener("submit", onSubmit);
+    dlg.addEventListener("cancel", onCancel);
+    dlg.addEventListener("close", onClose);
+    dlg.showModal();
   });
 }
 

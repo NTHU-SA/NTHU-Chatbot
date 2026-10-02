@@ -36,10 +36,9 @@ class IdentityService:
         key = lookup_key(identity.provider, identity.provider_user_id)
         now = time.monotonic()
         cached = self._mapping.get(key)
-        if cached and cached[0] > now:
+        if cached and cached[0] > now and await self._check_status(cached[1], now):
             user_id = cached[1]
             self._mapping.move_to_end(key)
-            await self._check_status(user_id, now)
         else:
             # resolve_or_create 本身會檢查狀態並在停用時拋出例外
             user_id, _ = await self._store.resolve_or_create(identity)
@@ -63,15 +62,31 @@ class IdentityService:
         """解除連結後清掉本實例的快取。"""
         self._mapping.pop(lookup_key(identity.provider, identity.provider_user_id), None)
 
-    async def _check_status(self, user_id: str, now: float) -> None:
+    def forget_user(self, user_id: str) -> None:
+        """刪除資料後清掉本實例指向這個 user 的所有快取。"""
+        for key in [k for k, (_, uid) in self._mapping.items() if uid == user_id]:
+            del self._mapping[key]
+        self._status.pop(user_id, None)
+
+    async def _check_status(self, user_id: str, now: float) -> bool:
+        """
+        快取的對應是否仍可用。
+
+        被封鎖或刪除中 → 拋出 AccountDisabledError；user 已被完全刪除（文件不存在）→ 回傳 False，
+        呼叫端改走 store 重新解析，同一個外部身分會得到全新的 user。
+        """
         cached = self._status.get(user_id)
         if cached and cached[0] > now:
             status = cached[1]
         else:
-            status = await self._store.get_status(user_id) or "deleted"
+            status = await self._store.get_status(user_id)
+            if status is None:
+                self._status.pop(user_id, None)
+                return False
             self._status[user_id] = (now + STATUS_TTL_SECONDS, status)
         if status != "active":
             raise AccountDisabledError(user_id)
+        return True
 
     def _remember(self, key: str, user_id: str, now: float) -> None:
         self._mapping[key] = (now + MAPPING_TTL_SECONDS, user_id)

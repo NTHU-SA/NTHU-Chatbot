@@ -21,6 +21,7 @@ from src.application.models.identity import (
     LastIdentityError,
     Principal,
     VerifiedIdentity,
+    consent_doc_id,
     lookup_key,
     new_user_id,
 )
@@ -66,6 +67,24 @@ class UserStore(Protocol):
         """計入今日一則 LLM 訊息；超過上限時回傳 False。"""
         ...
 
+    async def has_consent(self, user_id: str, consent_type: str, version: str) -> bool:
+        """該版本是否為「已同意」且未撤回。"""
+        ...
+
+    async def set_consent(
+        self, user_id: str, consent_type: str, version: str, accepted: bool, source: str
+    ) -> None:
+        """同意或撤回某一版本；每個版本一份文件，不覆蓋其他版本，並寫稽核紀錄。"""
+        ...
+
+    async def delete_user(self, user_id: str) -> None:
+        """
+        刪除這個 user 的所有資料：外部身分對應、所有子集合與 user 文件。
+
+        先刪 lookup：之後同一個 LINE 帳號再登入會得到全新的 user。對話由 ChatStore 另外刪除。
+        """
+        ...
+
 
 def _merge(base: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
     merged = dict(base)
@@ -84,6 +103,7 @@ class MemoryUserStore:
         self.lookup: dict[str, str] = {}
         self.audit: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self.module_states: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+        self.consents: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
         self._usage: dict[tuple[str, str], int] = defaultdict(int)
         self._lock = asyncio.Lock()
 
@@ -94,7 +114,7 @@ class MemoryUserStore:
     async def resolve_or_create(self, identity: VerifiedIdentity) -> tuple[str, bool]:
         key = lookup_key(identity.provider, identity.provider_user_id)
         async with self._lock:
-            if key in self.lookup:
+            if key in self.lookup and self.lookup[key] in self.users:
                 user_id = self.lookup[key]
                 self._check_active(user_id)
                 return user_id, False
@@ -188,3 +208,28 @@ class MemoryUserStore:
                 return False
             self._usage[key] += 1
             return True
+
+    async def has_consent(self, user_id, consent_type, version) -> bool:
+        record = self.consents[user_id].get(consent_doc_id(consent_type, version))
+        return bool(record) and record["status"] == "accepted"
+
+    async def set_consent(self, user_id, consent_type, version, accepted, source) -> None:
+        doc_id = consent_doc_id(consent_type, version)
+        record = self.consents[user_id].setdefault(
+            doc_id, {"type": consent_type, "version": version}
+        )
+        record.update(status="accepted" if accepted else "revoked", source=source)
+        record["acceptedAt" if accepted else "revokedAt"] = now_utc()
+        self.audit[user_id].append(
+            {"action": "consent" if accepted else "revoke", "document": doc_id}
+        )
+
+    async def delete_user(self, user_id: str) -> None:
+        async with self._lock:
+            for record in self.identities.pop(user_id, {}).values():
+                self.lookup.pop(lookup_key(record["provider"], record["providerUserId"]), None)
+            for store in (self.audit, self.module_states, self.consents):
+                store.pop(user_id, None)
+            for key in [k for k in self._usage if k[0] == user_id]:
+                del self._usage[key]
+            self.users.pop(user_id, None)

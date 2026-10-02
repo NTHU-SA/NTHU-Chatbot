@@ -32,6 +32,16 @@ _ORIGIN = re.compile(
 )
 
 
+_POLICY_VERSION = re.compile(r"^[0-9A-Za-z.-]{1,20}$")
+
+
+def _policy_version(value: str | None) -> str:
+    version = (value or "1").strip()
+    if not _POLICY_VERSION.match(version):
+        raise RuntimeError("Invalid PRIVACY_POLICY_VERSION")
+    return version
+
+
 def parse_cors_origins(value: str | None) -> tuple[str, ...]:
     """
     解析 `CORS_ALLOWED_ORIGINS`（逗號分隔）。
@@ -104,6 +114,8 @@ class Settings:
     mcp_timeout_seconds: float = 30.0
     # LIFF 前端（Firebase Hosting）的網域；API 只允許這些網域跨站呼叫
     cors_allowed_origins: tuple[str, ...] = ()
+    # 隱私權政策版本；改版時遞增，使用者需重新同意才能使用 AI 對話
+    privacy_policy_version: str = "1"
     # 儲存
     chat_store: str = "firestore"
     google_cloud_project: str | None = None
@@ -162,6 +174,7 @@ class Settings:
             mcp_allowed_tools=_csv(os.getenv("MCP_ALLOWED_TOOLS"), DEFAULT_MCP_TOOLS),
             mcp_timeout_seconds=_float("MCP_TIMEOUT_SECONDS", 30.0),
             cors_allowed_origins=parse_cors_origins(os.getenv("CORS_ALLOWED_ORIGINS")),
+            privacy_policy_version=_policy_version(os.getenv("PRIVACY_POLICY_VERSION")),
             chat_store=chat_store,
             google_cloud_project=os.getenv("GOOGLE_CLOUD_PROJECT") or None,
             history_window=_int("HISTORY_WINDOW", 10),

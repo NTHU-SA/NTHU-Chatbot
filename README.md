@@ -142,6 +142,7 @@ Firestore Native mode `(default)`，由 `infra/bootstrap.sh` 建立；資料庫�
 | `users/{uid}/auditLog/{id}` | `action`（link / unlink …）、`provider`、`at`、`expiresAt`（TTL 365 天） |
 | `users/{uid}/moduleStates/{moduleId}` | `@` 指令模組的 `lastUsedAt`、`usageCount` |
 | `users/{uid}/usage/{YYYY-MM-DD}` | 每日 LLM 訊息計數 `count`、`expiresAt`（TTL 8 天） |
+| `users/{uid}/consents/{type}_v{version}` | 隱私權政策同意紀錄：`status`（accepted / revoked）、`acceptedAt`、`revokedAt`、`source`；每個版本一份，不覆蓋 |
 | `users/{uid}/conversationOrigins/{sha256(origin)}` | LINE 泡泡 → `conversationId`（同一顆按鈕永遠開同一個對話，刪除後重建） |
 | `users/{uid}/conversationCleanup/{cid}` | 已刪除、訊息尚未清完的對話（中斷後下次繼續清） |
 | `conversations/{cid}` | `userId`、`channel`、`status`、`title`、`startedAt`、`lastMessageAt`、`messageCount`、`metadata.origin`；每人最多 50 個，超過時刪除最久未更新的 |
@@ -150,6 +151,14 @@ Firestore Native mode `(default)`，由 `infra/bootstrap.sh` 建立；資料庫�
 
 每一則訊息是一份文件，不存成 array；對話與訊息的讀取都會比對 `userId`，別人的對話一律當作不存在。
 `tokenUsage`、`model`、`promptVersion` 只存在資料庫供成本與品質分析，不會回傳給前端。
+
+## 隱私權與個人資料
+
+- 隱私權政策在 `frontend/privacy.html`（**草稿，需學生會審閱定稿並填入聯絡方式**），依個資法第 8 條列出蒐集者、目的、資料類別、期間/地區/對象（含 OpenAI 美國）、當事人權利與不提供的影響。
+- 第一次開啟 LIFF 頁面會顯示同意畫面；**後端強制**：未同意目前版本時，送出訊息回 `403 {"code": "consent_required"}`，內容不會送到 LLM。`@` 指令不經過 AI，不需要同意。
+- 政策改版時遞增 `PRIVACY_POLICY_VERSION`（預設 `1`），所有人下次使用 AI 對話前要重新同意；舊版本的同意紀錄保留。
+- 使用者可在側欄**撤回同意**（之後無法使用 AI 對話，資料保留）或**刪除我的所有資料**（`DELETE /api/me`：對話、訊息、同意紀錄、使用紀錄、外部身分對應與帳號本身全部刪除；之後同一個 LINE 帳號會是全新的使用者）。
+- 政策寫明「維運存取會被記錄」：prod 上線前要開啟 Firestore 的 Data Access 稽核 log。
 
 Firestore 規則拒絕所有用戶端直接存取；後端透過服務帳號 IAM 存取，不依賴 Firebase Auth。
 規則、複合索引、大型欄位的索引豁免與 TTL 都由 `infra/bootstrap.sh` 依 `firestore.rules`、`firestore.indexes.json` 套用。

@@ -31,7 +31,17 @@ def internal_id(chat_app) -> str:
     return users.lookup[lookup_key("line", TEST_IDENTITY.provider_user_id)]
 
 
+def accept_policy(client, headers=AUTH):
+    """每個 client 只同意一次：避免大量建立對話的測試撞上限流。"""
+    if getattr(client, "_policy_accepted", False):
+        return
+    response = client.post("/api/consents/privacy_policy", headers=headers, json={"version": "1"})
+    assert response.status_code == 200
+    client._policy_accepted = True
+
+
 def new_session(client) -> str:
+    accept_policy(client)
     response = client.post("/api/sessions", headers=AUTH, json={})
     assert response.status_code == 201
     return response.json()["id"]
@@ -79,7 +89,7 @@ def test_unknown_auth_provider_is_rejected(client):
 
 def test_me_exposes_no_identifiers(client, chat_app):
     body = client.get("/api/me", headers=AUTH).json()
-    assert set(body) == {"display_name", "picture_url", "liff_id"}
+    assert set(body) == {"display_name", "picture_url", "liff_id", "consent"}
     assert TEST_IDENTITY.provider_user_id not in str(body)
     assert internal_id(chat_app) not in str(body)
 

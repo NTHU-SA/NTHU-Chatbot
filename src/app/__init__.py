@@ -77,7 +77,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     from .middleware import add_cors, security_headers
-    from .routes import base, callback, chat
+    from .routes import account, base, callback, chat
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.middleware("http")(security_headers)
@@ -85,5 +85,6 @@ def create_app() -> FastAPI:
     add_cors(app, parse_cors_origins(os.getenv("CORS_ALLOWED_ORIGINS")))
     app.include_router(base.router)
     app.include_router(callback.router)
+    app.include_router(account.router)
     app.include_router(chat.router)
     return app

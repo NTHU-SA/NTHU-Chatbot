@@ -1,0 +1,16 @@
+/* Privacy policy page (reuses the colour tokens from style.css). */
+body { overflow: auto; height: auto; }
+.policy {
+  max-width: 720px; margin: 0 auto; padding: 24px 16px calc(32px + var(--sab));
+  line-height: 1.7; font-size: 15px; color: var(--text);
+}
+.policy h1 { font-size: 22px; margin: 8px 0 4px; }
+.policy h2 { font-size: 17px; margin: 24px 0 8px; }
+.policy ul { padding-left: 22px; }
+.policy li { margin: 4px 0; }
+.policy code { background: var(--tool-bg); padding: 1px 4px; border-radius: 4px; }
+.policy-meta { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+.policy-draft {
+  background: var(--tool-bg); border-left: 4px solid var(--brand); padding: 8px 12px;
+  border-radius: 6px; font-size: 13px; color: var(--muted);
+}

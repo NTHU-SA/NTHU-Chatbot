@@ -2,6 +2,7 @@
 // with the streamed (SSE) reply.
 
 import { api, readSse } from "./api.js";
+import { requestConsent } from "./consent.js";
 import {
   autosize, closeSidebar, confirmDialog, el, scrollToBottom, setBusy, setLoading, state,
 } from "./dom.js";
@@ -222,6 +223,11 @@ export async function send(text, isRetry) {
       return await send(text, true);
     }
     node.classList.add("error");
+    if (err.code === "consent_required") {
+      bubble.textContent = "請先同意隱私權政策，再重新送出一次。";
+      requestConsent();
+      return;
+    }
     bubble.textContent = err.message === "re-login" ? "登入已過期，重新登入中…" : `發生錯誤：${err.message}`;
   } finally {
     hideThinking(tools);
