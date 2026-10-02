@@ -11,7 +11,6 @@ from src.core.privacy import PRIVACY_POLICY_VERSION  # noqa: E402
 
 CONF = """
 PROJECT_ID=demo-project
-LIFF_ID=1234567890-abcdefgh
 API_ORIGIN=https://api-demo.a.run.app
 HOSTING_SITE=demo-site
 LINE_CHANNEL_SECRET=must-not-leak
@@ -20,6 +19,8 @@ LINE_CHANNEL_SECRET=must-not-leak
 
 @pytest.fixture
 def built(tmp_path, monkeypatch):
+    # LINE 的 ID 不寫在 repo：由環境變數注入（CI 用 repo variable LIFF_ID_<ENV>）
+    monkeypatch.setenv("LIFF_ID", "1234567890-abcdefgh")
     conf = tmp_path / "demo.conf"
     conf.write_text(CONF, encoding="utf-8")
     monkeypatch.setattr(build_frontend, "ROOT", tmp_path)
@@ -52,6 +53,19 @@ def test_privacy_page_without_version_marker_fails_the_build(tmp_path):
     page.write_text("<p>版本 1</p>", encoding="utf-8")
     with pytest.raises(SystemExit):
         build_frontend.stamp_policy_version(page, "1")
+
+
+@pytest.mark.parametrize("value", [None, "", "not a liff id", "123-abc; rm -rf"])
+def test_missing_or_malformed_liff_id_fails_the_build(tmp_path, monkeypatch, value):
+    conf = tmp_path / "demo.conf"
+    conf.write_text(CONF, encoding="utf-8")
+    monkeypatch.setattr(build_frontend, "ROOT", tmp_path)
+    if value is None:
+        monkeypatch.delenv("LIFF_ID", raising=False)
+    else:
+        monkeypatch.setenv("LIFF_ID", value)
+    with pytest.raises(SystemExit):
+        build_frontend.build(conf)
 
 
 def test_hosting_headers_lock_connections_to_this_api(built):
