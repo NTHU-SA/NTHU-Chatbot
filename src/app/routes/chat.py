@@ -1,4 +1,4 @@
-"""LIFF 對話 API。除了 `/api/config`，每個端點都需要驗證過的登入 token。"""
+"""LIFF 對話 API。每個端點都需要驗證過的登入 token；前端設定改由 Hosting 的 config.json 提供。"""
 
 from __future__ import annotations
 
@@ -63,12 +63,6 @@ async def _owned_session(store: ChatStore, user: Principal, session_id: str) -> 
     if session is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "session not found")
     return session
-
-
-@router.get("/config")
-async def config(request: Request):
-    """LIFF 頁面登入前需要的公開設定，不含任何機密。"""
-    return {"liff_id": _settings(request).liff_id}
 
 
 async def _me(

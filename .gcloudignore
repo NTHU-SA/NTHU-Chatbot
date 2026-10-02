@@ -21,3 +21,5 @@ tests
 .coverage
 coverage.xml
 htmlcov
+frontend
+build
