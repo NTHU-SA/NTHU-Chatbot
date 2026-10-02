@@ -24,7 +24,7 @@ from src.application.models.chat import (
     TokenUsage,
     ToolCall,
 )
-from src.application.models.identity import Principal
+from src.application.models.identity import DeletionIncompleteError, Principal
 from src.application.services.chat_store import ChatStore
 from src.application.services.user_store import UserStore
 from src.core.config import Settings
@@ -111,7 +111,13 @@ async def delete_session(
 ):
     store = _store(request)
     await _owned_session(store, user, session_id)
-    await store.delete_session(user.user_id, session_id)
+    try:
+        await store.delete_session(user.user_id, session_id)
+    except DeletionIncompleteError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            {"code": "delete_conflict", "message": "對話正在更新，請稍後再刪除一次。"},
+        ) from None
 
 
 @router.get("/sessions/{session_id}/messages", response_model=list[Message])

@@ -226,7 +226,19 @@ class FirestoreChatStore:
         await self._conversations().document(session_id).update({"title": title})
 
     async def delete_session(self, user_id: str, session_id: str) -> None:
-        await self._delete(user_id, session_id)
+        """
+        刪除對話；`_delete` 的前置條件失敗（例如串流中的回覆剛好寫入）時重讀再試。
+
+        對話已不存在就算完成；重試用盡仍刪不掉時拋出 DeletionIncompleteError，
+        不讓 API 回 204 卻留下對話。
+        """
+        for _ in range(DELETE_ATTEMPTS):
+            if await self._delete(user_id, session_id):
+                break
+            if await self.get_session(user_id, session_id) is None:
+                break
+        else:
+            raise DeletionIncompleteError(user_id)
         await self._drain_cleanup(user_id)
 
     async def _delete(self, user_id: str, session_id: str) -> bool:

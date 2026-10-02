@@ -50,7 +50,9 @@ class ChatStore(Protocol):
 
     async def rename_session(self, user_id: str, session_id: str, title: str) -> None: ...
 
-    async def delete_session(self, user_id: str, session_id: str) -> None: ...
+    async def delete_session(self, user_id: str, session_id: str) -> None:
+        """刪除對話與訊息；和其他寫入一直衝突而刪不掉時拋出 DeletionIncompleteError。"""
+        ...
 
     async def delete_all_sessions(self, user_id: str) -> None:
         """刪除該 user 的所有對話與訊息（刪除個人資料時使用）；沒有全部刪除時拋出 DeletionIncompleteError。"""
@@ -95,7 +97,7 @@ class MemoryChatStore:
             while len(sessions) >= MAX_SESSIONS_PER_USER:
                 oldest = min(sessions.values(), key=lambda s: s.updated_at)
                 sessions.pop(oldest.id)
-                self._messages.pop((user_id, oldest.id), None)
+                self._drop_messages(user_id, oldest.id)
             now = now_utc()
             session = Session(
                 id=new_id(), title=title, created_at=now, updated_at=now, origin=origin
@@ -110,13 +112,18 @@ class MemoryChatStore:
         session = self._sessions[user_id][session_id]
         self._sessions[user_id][session_id] = session.model_copy(update={"title": title})
 
+    def _drop_messages(self, user_id: str, session_id: str) -> None:
+        """刪除對話的訊息與它們的 metadata（淘汰、刪除單一對話、刪除全部資料共用）。"""
+        for message in self._messages.pop((user_id, session_id), []):
+            self.meta.pop(message.id, None)
+
     async def delete_session(self, user_id: str, session_id: str) -> None:
         self._sessions[user_id].pop(session_id, None)
-        self._messages.pop((user_id, session_id), None)
+        self._drop_messages(user_id, session_id)
 
     async def delete_all_sessions(self, user_id: str) -> None:
         for session_id in list(self._sessions.pop(user_id, {})):
-            self._messages.pop((user_id, session_id), None)
+            self._drop_messages(user_id, session_id)
 
     async def list_messages(self, user_id, session_id, limit) -> list[Message]:
         return self._messages[(user_id, session_id)][-limit:]

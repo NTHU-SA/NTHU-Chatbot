@@ -251,3 +251,21 @@ def test_developer_test_module_is_not_exposed():
 
     assert "dev" not in command_handler.modules
     assert "開發者" not in command_handler.prefix_to_module_name
+
+
+async def test_commands_are_logged_without_user_text():
+    """隱私權政策承諾 @ 指令只記錄使用的功能：指令文字、參數與錯誤細節都不能進 log。"""
+    from loguru import logger
+
+    from src.app.handlers.command_handler import command_handler
+
+    lines: list[str] = []
+    sink = logger.add(lines.append, level="DEBUG", format="{message}")
+    try:
+        await command_handler.process_message("@公車 我的秘密行程 地點=宿舍 孤兒參數", "usr_x")
+        await command_handler.process_message("@不存在的秘密模組 查詢", "usr_x")
+    finally:
+        logger.remove(sink)
+    logged = "".join(lines)
+    for secret in ("秘密", "宿舍", "孤兒參數"):
+        assert secret not in logged
