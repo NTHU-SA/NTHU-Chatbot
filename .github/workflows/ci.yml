@@ -67,7 +67,11 @@ jobs:
 
       - name: Start container and wait for /ping
         run: |
-          docker run -d --name app -p 8080:8080             -e CHAT_STORE=memory             -e LINE_CHANNEL_SECRET=ci -e LINE_CHANNEL_ACCESS_TOKEN=ci             -e LINE_LOGIN_CHANNEL_ID=ci -e LIFF_ID=ci -e OPENAI_API_KEY=ci             nthu-chatbot:ci
+          docker run -d --name app -p 8080:8080 \
+            -e CHAT_STORE=memory \
+            -e LINE_CHANNEL_SECRET=ci -e LINE_CHANNEL_ACCESS_TOKEN=ci \
+            -e LINE_LOGIN_CHANNEL_ID=ci -e LIFF_ID=ci -e OPENAI_API_KEY=ci \
+            nthu-chatbot:ci
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8080/ping | grep -q pong; then
               echo "started"; exit 0
@@ -94,11 +98,13 @@ jobs:
       TARGET: ${{ github.ref == 'refs/heads/main' && 'prod' || 'staging' }}
       WIF_PROVIDER: ${{ github.ref == 'refs/heads/main' && vars.GCP_WIF_PROVIDER_PROD || vars.GCP_WIF_PROVIDER_STAGING }}
       HOSTING_SA: ${{ github.ref == 'refs/heads/main' && vars.GCP_HOSTING_SA_PROD || vars.GCP_HOSTING_SA_STAGING }}
+      # LINE 的 ID 不在 repo：從 repo variable 注入（公開值，不是 secret）
+      LIFF_ID: ${{ github.ref == 'refs/heads/main' && vars.LIFF_ID_PROD || vars.LIFF_ID_STAGING }}
     steps:
       - name: Check deployment is configured
         id: configured
         run: |
-          if [ -n "$WIF_PROVIDER" ] && [ -n "$HOSTING_SA" ]; then
+          if [ -n "$WIF_PROVIDER" ] && [ -n "$HOSTING_SA" ] && [ -n "$LIFF_ID" ]; then
             echo "ok=true" >> "$GITHUB_OUTPUT"
           else
             echo "::notice::Frontend deploy for $TARGET is not configured yet (repo variables missing)."

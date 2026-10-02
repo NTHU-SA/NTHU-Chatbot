@@ -4,6 +4,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from linebot.v3.messaging import (
     ApiClient,
+    ApiException,
     Configuration,
     CreateRichMenuAliasRequest,
     MessageAction,
@@ -155,8 +156,10 @@ def set_rich_menu():
             # 需要先有圖片和 Rich Menu 才能設定 Alias
             try:
                 line_bot_api.delete_rich_menu_alias(richmenu_alias)
-            except Exception as e:
-                logger.error(e)
+            except ApiException as e:
+                # 第一次部署時 alias 還不存在（404），不是錯誤
+                if e.status != 404:
+                    raise
             line_bot_api.create_rich_menu_alias(
                 CreateRichMenuAliasRequest(richMenuAliasId=richmenu_alias, richMenuId=richmenu_id)
             )
