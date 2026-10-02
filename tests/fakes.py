@@ -7,12 +7,15 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from src.app.security import LineUser
+from src.application.models.identity import VerifiedIdentity
 from src.core.config import Settings
 from src.infrastructure.ai.agent_runner import AgentEvent
 
 TEST_LIFF_ID = "1234567890-abcdefgh"
-TEST_USER = LineUser(user_id="U0123456789abcdef", display_name="測試者", picture_url=None)
+TEST_IDENTITY = VerifiedIdentity(
+    provider="line", provider_user_id="U0123456789abcdef", display_name="測試者"
+)
+OTHER_IDENTITY = VerifiedIdentity(provider="line", provider_user_id="U0000000000other")
 AUTH = {"Authorization": "Bearer good-token"}
 
 
@@ -29,11 +32,15 @@ def make_settings(**overrides: Any) -> Settings:
     return Settings(**values)
 
 
-class FakeVerifier:
-    def __init__(self):
-        self.valid = {"good-token": TEST_USER}
+class FakeAuthenticator:
+    """假的 LINE authenticator：只認得 `valid` 裡的 token。"""
 
-    async def verify(self, token: str) -> LineUser:
+    provider = "line"
+
+    def __init__(self):
+        self.valid = {"good-token": TEST_IDENTITY, "other-token": OTHER_IDENTITY}
+
+    async def verify(self, token: str) -> VerifiedIdentity:
         if token in self.valid:
             return self.valid[token]
         raise HTTPException(401, "invalid id_token")

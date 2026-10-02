@@ -16,6 +16,24 @@ class ToolCall(BaseModel):
     ok: bool = True
 
 
+class TokenUsage(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_tokens: int = 0
+    requests: int = 0
+
+
+class MessageMeta(BaseModel):
+    """
+    assistant 訊息的執行資訊，只存進資料庫供成本與品質分析，不回傳給前端。
+    """
+
+    model: str | None = None
+    prompt_version: str | None = None
+    token_usage: TokenUsage | None = None
+    latency_ms: int | None = None
+
+
 class Message(BaseModel):
     id: str
     role: Literal["user", "assistant"]
@@ -48,7 +66,8 @@ class SendMessageRequest(BaseModel):
 
 
 class MeResponse(BaseModel):
-    user_id: str
+    """不回傳任何 ID（內部或外部）；前端只需要顯示用資料。"""
+
     display_name: str | None
     picture_url: str | None
     liff_id: str

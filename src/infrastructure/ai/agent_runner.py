@@ -11,7 +11,7 @@
   tool_call_start {call_id, name, args}
   tool_call_end   {call_id, name, ok, duration_ms, result_preview}
   token           {delta}
-  done            {content, tool_calls}
+  done            {content, tool_calls, usage}   usage 只給後端存檔，不送前端
   error           {message}
 """
 
@@ -39,7 +39,7 @@ from loguru import logger
 from openai import APIStatusError, AsyncOpenAI
 from openai.types.shared import Reasoning
 
-from src.application.models.chat import Message, ToolCall
+from src.application.models.chat import Message, TokenUsage, ToolCall
 from src.core.config import Settings
 from src.infrastructure.ai.prompts import build_instructions
 
@@ -120,6 +120,20 @@ def _parse_args(raw: str | None) -> dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {"value": parsed}
     except json.JSONDecodeError:
         return {"raw": raw[:500]}
+
+
+def _usage(result: Any) -> dict[str, int] | None:
+    """SDK 累計的 token 用量（含 reasoning tokens）；取不到時回傳 None。"""
+    usage = getattr(getattr(result, "context_wrapper", None), "usage", None)
+    if usage is None:
+        return None
+    details = getattr(usage, "output_tokens_details", None)
+    return TokenUsage(
+        input_tokens=getattr(usage, "input_tokens", 0) or 0,
+        output_tokens=getattr(usage, "output_tokens", 0) or 0,
+        reasoning_tokens=getattr(details, "reasoning_tokens", 0) or 0,
+        requests=getattr(usage, "requests", 0) or 0,
+    ).model_dump()
 
 
 def _instructions(_ctx, _agent) -> str:
@@ -377,6 +391,7 @@ class AgentRunner:
                 {
                     "content": content[: self._settings.max_output_chars],
                     "tool_calls": [tc.model_dump() for tc in tool_calls],
+                    "usage": _usage(result),
                 },
             )
 

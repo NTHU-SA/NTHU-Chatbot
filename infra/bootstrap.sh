@@ -73,15 +73,36 @@ if ! curl -fsS -X POST "$release_url" -H "Authorization: Bearer ${token}" -H "x-
 fi
 echo "已發布 ${ruleset}"
 
-step "Firestore 單欄位索引豁免（firestore.indexes.json 的 fieldOverrides）"
-"$PYTHON" - <<'PY' | tr -d '\r' | while read -r group field; do
+step "Firestore 索引與 TTL（firestore.indexes.json）"
+# 複合索引：已存在時 gcloud 會回錯誤，視為成功
+"$PYTHON" - <<'PY' | tr -d '\r' | while read -r group fields; do
+import json, pathlib
+for index in json.loads(pathlib.Path("firestore.indexes.json").read_text())["indexes"]:
+    spec = " ".join(
+        f"--field-config=field-path={f['fieldPath']},order={f['order'].lower()}"
+        for f in index["fields"]
+    )
+    print(index["collectionGroup"], spec)
+PY
+  # shellcheck disable=SC2086
+  if "${G[@]}" firestore indexes composite create --collection-group="$group" \
+       --query-scope=collection $fields --async >/dev/null 2>&1; then
+    echo "  建立中：${group} ${fields}"
+  else
+    echo "  已存在：${group} ${fields}"
+  fi
+done
+# 單欄位：大型欄位不建索引；expiresAt 開啟 TTL 自動刪除
+"$PYTHON" - <<'PY' | tr -d '\r' | while read -r group field ttl; do
 import json, pathlib
 for o in json.loads(pathlib.Path("firestore.indexes.json").read_text())["fieldOverrides"]:
-    if not o.get("indexes"):
-        print(o["collectionGroup"], o["fieldPath"])
+    print(o["collectionGroup"], o["fieldPath"], "ttl" if o.get("ttl") else "-")
 PY
   "${G[@]}" firestore indexes fields update "$field" --collection-group="$group" --disable-indexes >/dev/null
-  echo "  ${group}.${field}"
+  if [[ "$ttl" == "ttl" ]]; then
+    "${G[@]}" firestore fields ttls update "$field" --collection-group="$group" --enable-ttl --async >/dev/null
+  fi
+  echo "  ${group}.${field} ${ttl}"
 done
 
 step "Artifact Registry：${AR_REPOSITORY}（保留最新 3 個、刪除 7 天前）"

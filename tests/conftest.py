@@ -8,9 +8,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.app import create_app
-from src.app.security import RateLimiter
+from src.app.auth.rate_limit import RateLimiter
+from src.app.auth.service import IdentityService
 from src.application.services.chat_store import MemoryChatStore
-from tests.fakes import FakeRunner, FakeVerifier, make_settings
+from src.application.services.module_registry import StaticModuleRegistry
+from src.application.services.user_store import MemoryUserStore
+from tests.fakes import FakeAuthenticator, FakeRunner, make_settings
 
 
 def pytest_collection_modifyitems(config, items):
@@ -38,7 +41,10 @@ def chat_app(runner):
     app = create_app()
     app.state.settings = make_settings(daily_message_limit=3)
     app.state.store = MemoryChatStore()
-    app.state.token_verifier = FakeVerifier()
+    app.state.user_store = MemoryUserStore()
+    app.state.identity_service = IdentityService(app.state.user_store)
+    app.state.module_registry = StaticModuleRegistry()
+    app.state.authenticators = {"line": FakeAuthenticator()}
     app.state.rate_limiter = RateLimiter(rate_per_minute=600, burst=100)
     app.state.agent_runner = runner
     return app
