@@ -1,5 +1,5 @@
-import asyncio
 import importlib
+import inspect
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -353,7 +353,7 @@ class CommandHandler:
 
         if not command_name:
             if module_config.default_menu:
-                if asyncio.iscoroutinefunction(module_config.default_menu):
+                if inspect.iscoroutinefunction(module_config.default_menu):
                     return await module_config.default_menu(command_event)
                 else:
                     return module_config.default_menu(command_event)
@@ -363,13 +363,13 @@ class CommandHandler:
 
         command = module_config.commands.get(command_name)
         if command:
-            if asyncio.iscoroutinefunction(command.function):
+            if inspect.iscoroutinefunction(command.function):
                 return await command.function(command_event)
             else:
                 return command.function(command_event)
         else:
             if module_config.default_reply:
-                if asyncio.iscoroutinefunction(module_config.default_reply):
+                if inspect.iscoroutinefunction(module_config.default_reply):
                     return await module_config.default_reply(command_event)
                 else:
                     return module_config.default_reply(command_event)

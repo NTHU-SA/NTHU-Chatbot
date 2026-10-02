@@ -1,5 +1,5 @@
-import asyncio
 import copy
+import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -232,7 +232,7 @@ def test_tzaiwu_announcement_is_registered_once_with_menu():
 
     registered = command_handler.modules["tzaiwu"].commands["書院公告"]
     assert registered.menu_info is not None
-    assert asyncio.iscoroutinefunction(registered.function)
+    assert inspect.iscoroutinefunction(registered.function)
 
 
 def test_menu_module_points_at_real_modules():
