@@ -336,10 +336,11 @@ async def test_existing_legacy_origin_does_not_evict_at_capacity(emulator):
 
 @pytest.mark.firestore
 @pytest.mark.xfail(
-    strict=True,
+    strict=False,
     reason=(
-        "既有問題：get_or_create_session 在交易內讀取全部對話，滿額時 4 個並行交易"
-        "互搶 user 文件鎖，emulator 上 5 次重試皆 lock timeout。新資料結構重寫時修正。"
+        "既有問題（flaky）：get_or_create_session 在交易內讀取全部對話，"
+        "滿額時 4 個並行交易互搶 user 文件鎖，在 emulator 上時常 5 次重試皆 lock timeout。"
+        "新資料結構重寫時修正並移除此標記。"
     ),
 )
 async def test_concurrent_creates_atomically_evict_and_insert(emulator):
