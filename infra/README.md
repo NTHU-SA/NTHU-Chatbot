@@ -1,16 +1,26 @@
 # 環境建置（staging / prod）
 
-兩個環境放在**不同的 GCP 專案**，IAM、Secret、Firestore 和帳單都完全分開；在 staging 誤操作不會影響正式資料。
+兩個環境放在**同一個 GCP 專案**（`nthusa-chatbot`），但所有資源都分開命名，權限也只授予自己那一份：
 
 | | staging | prod |
 |---|---|---|
 | 設定檔 | `infra/environments/staging.conf` | `infra/environments/prod.conf` |
-| GCP 專案 | `nthusa-chatbot` | 另開（填進 `prod.conf`） |
+| GCP 專案 | `nthusa-chatbot` | `nthusa-chatbot`（同一個） |
+| Firestore 資料庫 | `(default)` | `prod` |
+| Secret | `openai-api-key`、`line-channel-secret`、`line-channel-access-token` | 同名加 `-prod` |
+| Service accounts | `nthu-chatbot`、`nthu-chatbot-deployer`、`nthu-chatbot-hosting` | `nthu-chatbot-prod`、`nthu-chatbot-prod-deployer`、`nthu-chatbot-prod-hosting` |
+| WIF pool（GitHub Actions 部署前端） | `github-actions`（只信任 `refs/heads/dev`） | `github-actions-prod`（只信任 `refs/heads/main`） |
 | 部署來源 | `NTHU-SA/NTHU-Chatbot` 的 `dev` | `NTHU-SA/NTHU-Chatbot` 的 `main` |
 | Cloud Run | `nthu-chatbot-staging` | `nthu-chatbot` |
 | LINE | 測試用 Provider 的頻道 | 正式 Provider（Messaging API 與 LINE Login 必須在**同一個 Provider**） |
 | Firestore 刪除保護 | 關 | 開 |
-| LIFF 前端 | `nthusa-chatbot.web.app`（Firebase Hosting） | `<HOSTING_SITE>.web.app` |
+| LIFF 前端 | `nthusa-chatbot.web.app`（Firebase Hosting） | `nthusa-chatbot-prod.web.app` |
+
+權限隔離：
+- 執行期 SA 的 `roles/datastore.user` 帶 IAM condition，只能存取自己的 Firestore 資料庫；Secret 逐一授權。
+- 部署 SA 的 `roles/run.developer` 只授予自己的 Cloud Run 服務（不是整個專案），只能代理自己的執行期 SA。
+- WIF 每個環境一個 pool：principalSet 是以 pool 為範圍，共用 pool 時 `dev` 的 token 也能代理 prod 的 SA。
+- 仍共用的部分：帳單、專案層級的 Owner / Editor、Artifact Registry repo（映像依服務分開路徑），以及 Hosting 部署 SA 的 `firebasehosting.admin`（專案層級，靠 branch protection 與 WIF 的 ref 限制保護）。正式資料的存取請只給少數維運帳號。
 
 兩個環境共用 repo 根目錄的 `cloudbuild.yaml`，差別只在 trigger 的 substitutions。
 前端由 CI（`.github/workflows/ci.yml` 的 `deploy-frontend`）部署到 Firebase Hosting；`infra/build_frontend.py` 依環境設定檔產生 `config.json`（只有公開的 LIFF ID 與 API 網址）和 CSP（`connect-src` 只允許該環境的 API）。
@@ -23,7 +33,7 @@ LINE 的 ID 和金鑰都依環境注入，repo 裡的設定檔不含任何 LINE 
 |---|---|---|
 | `LINE_LOGIN_CHANNEL_ID`、`LIFF_ID`（後端） | 該環境 Cloud Run 的環境變數 | 第一次建立或更換頻道時：`LINE_LOGIN_CHANNEL_ID=... LIFF_ID=... bash infra/bootstrap.sh infra/environments/<env>.conf`；之後重跑 bootstrap 不帶這兩個變數會沿用服務上的值 |
 | `LIFF_ID`（前端 `config.json`） | GitHub repo variable `LIFF_ID_STAGING` / `LIFF_ID_PROD` | `gh variable set LIFF_ID_<ENV> -R NTHU-SA/NTHU-Chatbot --body <LIFF ID>`；沒設定時 CI 跳過前端部署。手動部署（`deploy_frontend.sh`）沒給 `LIFF_ID` 時讀 Cloud Run 上的值 |
-| channel secret、access token | 該環境專案的 Secret Manager | 用 stdin 加入（見下方「加入 Secret 值」） |
+| channel secret、access token | Secret Manager（prod 的名稱加 `-prod`） | 用 stdin 加入（見下方「加入 Secret 值」） |
 
 更換頻道時後端與前端要一起換，否則 LIFF 的 id_token 會因 channel ID 不符被拒絕。
 
@@ -71,12 +81,14 @@ Windows 上如果 `python` 不是正確的直譯器，可以加 `PYTHON=.venv/Sc
 值只從 stdin 進 Secret Manager，不會出現在指令列、shell history 或檔案裡：
 
 ```bash
-read -rsp "openai-api-key: " v && printf %s "$v" | gcloud secrets versions add openai-api-key --project=<PROJECT_ID> --data-file=- ; unset v
-read -rsp "line-channel-secret: " v && printf %s "$v" | gcloud secrets versions add line-channel-secret --project=<PROJECT_ID> --data-file=- ; unset v
-read -rsp "line-channel-access-token: " v && printf %s "$v" | gcloud secrets versions add line-channel-access-token --project=<PROJECT_ID> --data-file=- ; unset v
+# SUFFIX：staging 留空，prod 用 -prod
+SUFFIX=-prod
+read -rsp "openai-api-key: " v && printf %s "$v" | gcloud secrets versions add openai-api-key$SUFFIX --project=nthusa-chatbot --data-file=- ; unset v
+read -rsp "line-channel-secret: " v && printf %s "$v" | gcloud secrets versions add line-channel-secret$SUFFIX --project=nthusa-chatbot --data-file=- ; unset v
+read -rsp "line-channel-access-token: " v && printf %s "$v" | gcloud secrets versions add line-channel-access-token$SUFFIX --project=nthusa-chatbot --data-file=- ; unset v
 ```
 
-這幾行要在**自己的終端機**執行（需要互動輸入）。輪替金鑰時加新版本，再把舊版本 disable：
+這幾行要在**自己的終端機**執行（需要互動輸入）。Git Bash 請用 **Shift+Insert** 或右鍵貼上：Ctrl+V 只會輸入一個看不見的控制字元。輪替金鑰時加新版本，再把舊版本 disable：
 
 ```bash
 gcloud secrets versions disable <舊版本號> --secret=<name> --project=<PROJECT_ID>
@@ -84,14 +96,14 @@ gcloud secrets versions disable <舊版本號> --secret=<name> --project=<PROJEC
 
 ## 建立 prod
 
-1. 建立 GCP 專案並連結帳單帳戶（Console → 建立專案），把專案 ID 填進 `infra/environments/prod.conf`。
+1. `prod.conf` 已填好（與 staging 同一個專案，資源分開命名）。
 2. 在 LINE Developers 的**正式 Provider** 建立 Messaging API 與 LINE Login channel；LINE Login 底下建立 LIFF app。記下 channel ID 與 LIFF ID（不寫進 repo，見「LINE 頻道設定」）。
-3. Console → Cloud Build → Repositories：連結 `NTHU-SA/NTHU-Chatbot`（需要 org 管理者同意安裝 Cloud Build GitHub App）。
+3. Cloud Build 已連結 `NTHU-SA/NTHU-Chatbot`（staging 用的同一個連結）。
 4. `LINE_LOGIN_CHANNEL_ID=<正式 Login channel ID> LIFF_ID=<正式 LIFF ID> bash infra/bootstrap.sh infra/environments/prod.conf`：第一次會停在 Secret 沒有值的那一步。
 5. 依上一節加入三個 Secret 值，再跑一次 bootstrap（同樣帶上兩個 LINE ID）。
 6. `ALERT_EMAIL=... bash infra/monitoring.sh infra/environments/prod.conf`，並把外部 ping 服務指向 prod 的 `/ping`
-7. 把 bootstrap 印出的服務網址填進 `prod.conf` 的 `API_ORIGIN`，`HOSTING_SITE` 填網站 ID；在 GitHub repo 設定印出的兩個 variables（`..._PROD`），以及 `LIFF_ID_PROD`。
-8. LINE Developers：Webhook URL 設為 `<服務網址>/callback`、開啟 Use webhook；LIFF Endpoint URL 設為 `https://<HOSTING_SITE>.web.app/`。
+7. 確認 bootstrap 印出的服務網址與 `prod.conf` 的 `API_ORIGIN` 相同；在 GitHub repo 設定印出的兩個 variables（`..._PROD`），以及 `LIFF_ID_PROD`。
+8. LINE Developers：Webhook URL 設為 `<服務網址>/callback`、開啟 Use webhook；LIFF Endpoint URL 設為 `https://nthusa-chatbot-prod.web.app/`；用正式 bot 的 token 部署 rich menu（`uv run python -m scripts.rich_menu`）。
 9. 把 `main` 合併一次，觸發 API 與前端的第一次部署，再用 `/ping` 和 LINE 實測。
 
 ## 把 staging 校正到同一套設定
