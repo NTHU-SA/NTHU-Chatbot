@@ -109,7 +109,7 @@ Copy-Item frontend\config.example.json frontend\config.json   # 填入 LIFF ID �
 | LLM | `OPENAI_MODEL`、`OPENAI_BASE_URL`（選填，任何 OpenAI 相容端點）、`OPENAI_USE_RESPONSES_API`、`REASONING_SUMMARY`、`MAX_OUTPUT_TOKENS`、`MAX_OUTPUT_CHARS` |
 | MCP | `MCP_SERVER_URL`、`MCP_ALLOWED_TOOLS`（逗號分隔）、`MCP_TIMEOUT_SECONDS` |
 | 工具與搜尋 | `MAX_TOOL_CALLS_PER_MESSAGE`、`WEB_SEARCH_ENABLED`、`WEB_SEARCH_MODEL`、`WEB_SEARCH_DOMAINS`、`MAX_WEB_SEARCHES_PER_MESSAGE` |
-| 隱私權 | `PRIVACY_POLICY_VERSION`（改版時遞增） |
+| 隱私權 | 政策版本寫在 `src/core/privacy.py`（不是環境變數；改版時連同 `frontend/privacy.html` 一起改） |
 | 儲存 | `CHAT_STORE`（`firestore` / `memory`）、`GOOGLE_CLOUD_PROJECT` |
 | 限制 | `HISTORY_WINDOW`、`HISTORY_MESSAGE_CHARS`、`MAX_TOOL_OUTPUT_CHARS`、`MAX_MESSAGE_CHARS`、`DAILY_MESSAGE_LIMIT`、`MAX_AGENT_TURNS`、`TOOL_RESULT_PREVIEW_CHARS` |
 
@@ -154,11 +154,11 @@ Firestore Native mode `(default)`，由 `infra/bootstrap.sh` 建立；區域建�
 | 路徑 | 資料 |
 | --- | --- |
 | `identityLookup/{sha256(provider:id)}` | `userId`、`provider`、`createdAt` |
-| `users/{uid}` | `status`（active / blocked / deleted）、`displayName`、`pictureUrl`、`createdAt`、`updatedAt`、`lastActiveAt`、`lastConversationId`、`lastModuleId`、`lastModuleUsedAt`、`conversationCount` |
+| `users/{uid}` | `status`（active / blocked / deleting / deleted；deleted 只剩不含個資的墓碑與 `expiresAt` TTL）、`displayName`、`pictureUrl`、`createdAt`、`updatedAt`、`lastActiveAt`、`lastConversationId`、`lastModuleId`、`lastModuleUsedAt`、`conversationCount` |
 | `users/{uid}/identities/{provider}` | `providerUserId`、`linkedAt`、`lastLoginAt`、`metadata`（LINE：`followed`、`liff`{os、appVersion、language、contextType、friendshipStatus}；前端自報，不參與授權；不收 contextId） |
 | `users/{uid}/consents/{type}_v{version}` | 同意紀錄：`status`（accepted / revoked）、`acceptedAt`、`revokedAt`、`source`；每個版本一份，不覆蓋 |
 | `users/{uid}/preferences/{nickname\|department}` | `value`、`source`（user：設定頁；assistant：對話中由 AI 記下）、`updatedAt` |
-| `users/{uid}/memory/{id}` | 使用者要求記住的事：`value`（≤100 字）、`sourceConversationId`、`createdAt`；每人最多 20 則 |
+| `users/{uid}/memory/{m00…m19}` | 使用者要求記住的事：`value`（≤100 字）、`sourceConversationId`、`createdAt`；每則占一個固定格子，以 `create()` 搶空格，並行也不會超過 20 則 |
 | `users/{uid}/moduleStates/{moduleId}` | `@` 指令的 `lastUsedAt`、`usageCount`；`onboarding` 記錄首次使用是否已問過稱呼與系所 |
 | `users/{uid}/usage/{YYYY-MM-DD}` | 每日 LLM 訊息計數 `count`、`expiresAt`（TTL 8 天） |
 | `users/{uid}/auditLog/{id}` | 連結、解除、同意、撤回：`action`、`at`、`expiresAt`（TTL 365 天） |
@@ -187,8 +187,10 @@ Firestore Native mode `(default)`，由 `infra/bootstrap.sh` 建立；區域建�
 ### 隱私權
 
 - 隱私權政策在 `frontend/privacy.html`（**草稿，需學生會審閱定稿並填入聯絡方式**），依個資法第 8 條列出蒐集者、目的、資料類別、期間 / 地區 / 對象（含 OpenAI 美國）、當事人權利與不提供的影響。
-- **後端強制同意**：未同意目前版本時，送出訊息回 `403 {"code": "consent_required"}`，內容不會送到 LLM；`@` 指令不經過 AI，不需要同意。改版時遞增 `PRIVACY_POLICY_VERSION`，舊版本的紀錄保留。
+- **後端強制同意**：未同意目前版本時，送出訊息回 `403 {"code": "consent_required", "version": …}`，內容不會送到 LLM；`@` 指令不經過 AI，不需要同意。
+- **政策版本只有一個來源**：`src/core/privacy.py`。後端以它決定要同意哪一版；`infra/build_frontend.py` 把同一個值寫進 `privacy.html` 的版本與 `config.json`。前端送出同意時帶的是畫面上顯示的版本，前後端尚未同步部署時後端回 409，前端請使用者稍後再開，不會記錄成沒看過的版本。改版時修改政策內容並遞增版本，舊版本的紀錄保留。
 - 使用者可在側欄**撤回同意**（之後無法使用 AI 對話，資料保留）或**刪除我的所有資料**（`DELETE /api/me`：對話、訊息、個人化資料、同意與使用紀錄、外部身分對應與帳號本身全部刪除；之後同一個 LINE 帳號是全新的使用者）。
+- **刪除流程**：先把帳號標成 `deleting`（其他請求一律 403，只能再呼叫刪除）→ 刪除對話與 user 資料，每一步重新查詢確認清空 → user 文件換成不含個資的墓碑（`status=deleted`，`expiresAt` TTL 1 天）→ 再清一次。墓碑之後才完成的寫入會讀到 `deleted` 並撤銷自己，所以刪除與進行中的請求同時發生也不會留下資料。沒刪乾淨時回 `503 deletion_incomplete`，帳號維持 `deleting`，使用者重新開啟頁面會看到「完成刪除」的按鈕。
 - LLM 供應商會收到最近 `HISTORY_WINDOW` 則對話與使用者資料區塊；MCP 只收到模型產生的查詢參數。Agents SDK 的 tracing 已停用。
 
 ### 資安重點
