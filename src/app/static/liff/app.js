@@ -109,7 +109,10 @@
 
   // -------------------------------------------------------------------- api
   async function api(path, opts = {}) {
-    const headers = Object.assign({ Authorization: `Bearer ${state.idToken}` }, opts.headers || {});
+    // X-Auth-Provider tells the backend which authenticator verifies the token.
+    const headers = Object.assign(
+      { Authorization: `Bearer ${state.idToken}`, "X-Auth-Provider": "line" },
+      opts.headers || {});
     if (opts.body && typeof opts.body !== "string") {
       headers["Content-Type"] = "application/json";
       opts = Object.assign({}, opts, { body: JSON.stringify(opts.body) });
@@ -617,6 +620,28 @@
   }
 
   // ----------------------------------------------------------------- boot
+  // Environment info for the backend's records only (never used for auth).
+  // The context id (possibly a group id) is deliberately not sent.
+  async function clientInfo() {
+    const info = {};
+    try {
+      const os = liff.getOS();
+      if (["ios", "android", "web"].includes(os)) info.os = os;
+      const version = liff.getLineVersion();
+      if (version) info.line_version = String(version).slice(0, 32);
+      const language = liff.getAppLanguage ? liff.getAppLanguage() : liff.getLanguage();
+      if (language) info.language = String(language).slice(0, 16);
+      const context = liff.getContext();
+      // Must match the backend whitelist, otherwise /api/me rejects the request.
+      const types = ["utou", "group", "room", "external", "none", "square_chat"];
+      if (context && types.includes(context.type)) info.context_type = context.type;
+    } catch (_) { /* best effort */ }
+    try {
+      info.friendship = (await liff.getFriendship()).friendFlag;
+    } catch (_) { /* requires the LIFF app to be linked to the bot */ }
+    return info;
+  }
+
   async function boot() {
     showOverlay("連線中…");
     try {
@@ -634,7 +659,7 @@
         return;
       }
 
-      const me = await (await api("/api/me")).json();
+      const me = await (await api("/api/me", { method: "POST", body: await clientInfo() })).json();
       el.userBox.innerHTML = "";
       if (me.picture_url) {
         const img = document.createElement("img");
@@ -642,7 +667,7 @@
         img.alt = "";
         el.userBox.append(img);
       }
-      el.userBox.append(document.createTextNode(me.display_name || me.user_id.slice(0, 8)));
+      el.userBox.append(document.createTextNode(me.display_name || "LINE 使用者"));
 
       await loadSessions();
       const params = new URLSearchParams(location.search);

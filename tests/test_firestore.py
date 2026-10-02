@@ -1,151 +1,41 @@
+"""
+Firestore 實作的測試。
+
+大部分需要 Firestore emulator（`@pytest.mark.firestore`）；沒有 emulator 時只跑以 mock 驗證清理流程的測試。
+"""
+
 import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 import pytest
-from google.api_core.exceptions import Aborted
-from google.auth.credentials import AnonymousCredentials
 from google.cloud import firestore
+from google.cloud.firestore_v1.base_query import FieldFilter
 
-from src.application.models.chat import ToolCall
+from src.application.models.chat import MessageMeta, TokenUsage, ToolCall
+from src.application.models.identity import (
+    AccountDisabledError,
+    IdentityConflictError,
+    LastIdentityError,
+    Principal,
+    VerifiedIdentity,
+    lookup_key,
+)
 from src.application.services.chat_store import MAX_SESSIONS_PER_USER
 from src.infrastructure.firebase.chat_store import FirestoreChatStore
+from src.infrastructure.firebase.module_registry import FirestoreModuleRegistry
+from src.infrastructure.firebase.user_store import FirestoreUserStore
 
 PROJECT = "demo-nthu-chatbot"
 MAX_SESSIONS_PATH = "src.infrastructure.firebase.chat_store.MAX_SESSIONS_PER_USER"
 
 
-# -- 不需要 emulator：以 mock 驗證交易與清理流程 --
-async def test_retry_reads_before_writes_and_cleans_only_committed_victims():
-    client = firestore.AsyncClient(project=PROJECT, credentials=AnonymousCredentials())
-    store = FirestoreChatStore(client)
-    user = client.collection("users").document("user")
-    sessions = user.collection("sessions")
-    markers = user.collection("session_cleanup")
-    marker_ref = markers.document("committed-victim")
-    marker = Mock(id=marker_ref.id, reference=marker_ref)
-    messages = sessions.document("committed-victim").collection("messages")
-    transaction = client.transaction()
-    now = datetime.now(UTC)
-    victims = [
-        Mock(
-            id=name,
-            reference=sessions.document(name),
-            to_dict=Mock(return_value={"title": name, "updated_at": now}),
-        )
-        for name in ("aborted-victim", "committed-victim")
-    ]
-    attempt = 0
-
-    async def begin(retry_id=None):
-        nonlocal attempt
-        attempt += 1
-        transaction._id = f"attempt-{attempt}".encode()
-
-    async def read_user(**kwargs):
-        assert kwargs["transaction"] is transaction
-        assert transaction._write_pbs == []
-
-    async def stream(**kwargs):
-        assert kwargs["transaction"] is transaction
-        assert transaction._write_pbs == []
-        yield victims[attempt - 1]
-
-    async def stream_markers():
-        yield marker
-
-    cleanup_query = Mock(stream=Mock(side_effect=stream_markers))
-    try:
-        with (
-            patch(MAX_SESSIONS_PATH, 1),
-            patch.object(store, "_user", return_value=user),
-            patch.object(store, "_sessions", return_value=sessions),
-            patch.object(store, "_session_cleanup", return_value=markers),
-            patch.object(store, "_messages", return_value=messages),
-            patch.object(user, "get", side_effect=read_user) as get_user,
-            patch.object(sessions, "stream", side_effect=stream),
-            patch.object(
-                markers, "order_by", return_value=Mock(limit=Mock(return_value=cleanup_query))
-            ),
-            patch.object(messages, "limit", return_value=Mock(get=AsyncMock(return_value=[]))),
-            patch.object(marker_ref, "delete", new_callable=AsyncMock) as delete_marker,
-            patch.object(client, "transaction", return_value=transaction),
-            patch.object(transaction, "_begin", side_effect=begin),
-            patch.object(transaction, "_commit", side_effect=[Aborted("retry"), None]) as commit,
-            patch.object(client, "recursive_delete", new_callable=AsyncMock) as cleanup,
-        ):
-            session, created = await store.get_or_create_session("user", "new", "origin")
-    finally:
-        client.close()
-    assert created
-    assert session.origin == "origin"
-    assert get_user.await_count == 2
-    assert commit.await_count == 2
-    cleanup.assert_awaited_once_with(victims[1].reference.collection("messages"))
-    delete_marker.assert_awaited_once()
-    writes = transaction._write_pbs
-    assert len(writes) == 4
-    assert writes[0].update.name == user._document_path
-    assert writes[1].delete == victims[1].reference._document_path
-    assert writes[2].update.name == marker_ref._document_path
-    assert writes[3].update.name == sessions.document(session.id)._document_path
-
-
-async def test_failed_cleanup_is_retried_when_existing_origin_is_reopened():
-    client = Mock()
-    client.recursive_delete = AsyncMock(side_effect=[RuntimeError("private"), None])
-    store = FirestoreChatStore(client)
-    session = Mock(
-        id="existing-session",
-        to_dict=Mock(return_value={"title": "kept", "origin": "origin"}),
-    )
-    marker = Mock(id="evicted-session")
-    marker.reference.delete = AsyncMock()
-    messages = Mock()
-    messages.limit.return_value.get = AsyncMock(return_value=[])
-    transaction = Mock()
-
-    async def stream_sessions(**kwargs):
-        yield session
-
-    async def stream_markers():
-        yield marker
-
-    client.transaction.return_value = transaction
-    user = Mock(get=AsyncMock())
-    sessions = Mock(stream=Mock(side_effect=stream_sessions))
-    markers = Mock()
-    markers.order_by.return_value.limit.return_value.stream.side_effect = stream_markers
-    with (
-        patch(
-            "src.infrastructure.firebase.chat_store.firestore.async_transactional",
-            side_effect=lambda callback: callback,
-        ),
-        patch("src.infrastructure.firebase.chat_store.logger") as log,
-        patch.object(store, "_user", return_value=user),
-        patch.object(store, "_sessions", return_value=sessions),
-        patch.object(store, "_session_cleanup", return_value=markers),
-        patch.object(store, "_messages", return_value=messages),
-    ):
-        first, created = await store.get_or_create_session("user", "ignored", "origin")
-        assert not created
-        assert first.id == session.id
-        marker.reference.delete.assert_not_awaited()
-        log.warning.assert_called_once_with("Session cleanup deferred: {}", "RuntimeError")
-        reopened, created = await store.get_or_create_session("user", "ignored", "origin")
-    assert not created
-    assert reopened.id == first.id
-    assert client.recursive_delete.await_count == 2
-    marker.reference.delete.assert_awaited_once()
-    transaction.set.assert_not_called()
-    transaction.delete.assert_not_called()
-
-
+# -- 不需要 emulator --
 async def test_incomplete_bulk_cleanup_retains_marker():
     client = Mock(recursive_delete=AsyncMock())
     store = FirestoreChatStore(client)
-    marker = Mock(id="evicted-session")
+    marker = Mock(id="evicted")
     marker.reference.delete = AsyncMock()
     messages = Mock()
     messages.limit.return_value.get = AsyncMock(return_value=[Mock()])
@@ -156,284 +46,344 @@ async def test_incomplete_bulk_cleanup_retains_marker():
 
     markers.order_by.return_value.limit.return_value.stream.side_effect = stream_markers
     with (
-        patch.object(store, "_session_cleanup", return_value=markers),
+        patch.object(store, "_cleanup", return_value=markers),
         patch.object(store, "_messages", return_value=messages),
     ):
-        await store._drain_session_cleanup("user")
+        await store._drain_cleanup("usr_test")
     marker.reference.delete.assert_not_awaited()
     client.recursive_delete.assert_awaited_once_with(messages)
 
 
+async def test_cleanup_failure_is_logged_by_type_only():
+    client = Mock(recursive_delete=AsyncMock(side_effect=RuntimeError("private detail")))
+    store = FirestoreChatStore(client)
+    marker = Mock(id="evicted")
+    marker.reference.delete = AsyncMock()
+    markers = Mock()
+
+    async def stream_markers():
+        yield marker
+
+    markers.order_by.return_value.limit.return_value.stream.side_effect = stream_markers
+    with (
+        patch.object(store, "_cleanup", return_value=markers),
+        patch("src.infrastructure.firebase.chat_store.logger") as log,
+    ):
+        await store._drain_cleanup("usr_test")
+    marker.reference.delete.assert_not_awaited()
+    log.warning.assert_called_once_with("Conversation cleanup deferred: {}", "RuntimeError")
+
+
 # -- 需要 Firestore emulator --
 @pytest.fixture
-async def emulator():
-    """emulator 上的 client、store 與兩個隨機使用者；結束時刪除測試資料。"""
+async def db():
     client = firestore.AsyncClient(project=PROJECT)
-    env = Mock(
-        client=client,
-        store=FirestoreChatStore(client),
-        user_id="test-" + uuid4().hex,
-        other_id="test-" + uuid4().hex,
-    )
-    yield env
-    for user_id in (env.user_id, env.other_id):
-        await client.recursive_delete(client.collection("users").document(user_id))
+    yield client
     client.close()
 
 
-async def user_doc(env, user_id=None) -> dict:
-    snapshot = await env.client.collection("users").document(user_id or env.user_id).get()
-    return snapshot.to_dict() or {}
+@pytest.fixture
+def users(db):
+    return FirestoreUserStore(db)
 
 
-async def raw_session_ids(env) -> set[str]:
-    sessions = env.client.collection("users").document(env.user_id).collection("sessions")
-    return {doc.id async for doc in sessions.stream()}
+@pytest.fixture
+def chats(db):
+    return FirestoreChatStore(db)
 
 
-async def concurrent_creates(env, origins):
-    clients = [firestore.AsyncClient(project=PROJECT) for _ in origins]
+def identity(provider="line", display_name="測試者") -> VerifiedIdentity:
+    """每個測試用隨機的外部 ID，避免互相干擾。"""
+    return VerifiedIdentity(
+        provider=provider, provider_user_id="U" + uuid4().hex, display_name=display_name
+    )
+
+
+async def new_user(users) -> str:
+    user_id, _ = await users.resolve_or_create(identity())
+    return user_id
+
+
+async def owned_ids(db, user_id) -> set[str]:
+    query = db.collection("conversations").where(filter=FieldFilter("userId", "==", user_id))
+    return {doc.id async for doc in query.stream()}
+
+
+async def doc(db, path) -> dict | None:
+    snapshot = await db.document(path).get()
+    return snapshot.to_dict() if snapshot.exists else None
+
+
+# users / identities
+@pytest.mark.firestore
+async def test_first_contact_writes_user_identity_and_hashed_lookup(db, users):
+    who = identity()
+    user_id, created = await users.resolve_or_create(who)
+    assert created
+    assert user_id.startswith("usr_")
+
+    lookup = await doc(db, f"identityLookup/{lookup_key('line', who.provider_user_id)}")
+    assert lookup["userId"] == user_id
+    assert who.provider_user_id not in str(lookup)  # 原始外部 ID 不存在 lookup
+    user = await doc(db, f"users/{user_id}")
+    assert user["status"] == "active"
+    assert user["displayName"] == "測試者"
+    assert user["conversationCount"] == 0
+    line = await doc(db, f"users/{user_id}/identities/line")
+    assert line["providerUserId"] == who.provider_user_id
+
+    again, created = await users.resolve_or_create(who)
+    assert (again, created) == (user_id, False)
+
+
+@pytest.mark.firestore
+async def test_concurrent_first_contact_across_clients_creates_one_user(users):
+    who = identity()
+    clients = [firestore.AsyncClient(project=PROJECT) for _ in range(5)]
     try:
-        return await asyncio.gather(
-            *(
-                FirestoreChatStore(client).get_or_create_session(
-                    env.user_id, "concurrent", origin
-                )
-                for client, origin in zip(clients, origins, strict=True)
-            )
+        results = await asyncio.gather(
+            *(FirestoreUserStore(c).resolve_or_create(who) for c in clients)
         )
     finally:
-        for client in clients:
-            client.close()
-
-
-async def seed_sessions(env, *, updated_at, with_messages=False, with_origin=False):
-    """直接寫入滿額的舊對話，模擬已存在的資料。"""
-    reference = env.client.collection("users").document(env.user_id)
-    batch = env.client.batch()
-    for index in range(MAX_SESSIONS_PER_USER):
-        session = reference.collection("sessions").document(f"legacy-{index}")
-        payload = {
-            "title": "legacy",
-            "created_at": updated_at,
-            "updated_at": updated_at + timedelta(seconds=index),
-            "message_count": 1 if with_messages else 0,
-        }
-        if with_origin:
-            payload["origin"] = f"legacy-origin-{index}"
-        batch.set(session, payload)
-        if with_messages:
-            batch.set(
-                session.collection("messages").document("message"),
-                {"role": "user", "content": "old", "created_at": updated_at},
-            )
-    await batch.commit()
-    return reference
+        for c in clients:
+            c.close()
+    assert len({user_id for user_id, _ in results}) == 1
+    assert sum(created for _, created in results) == 1
 
 
 @pytest.mark.firestore
-async def test_touch_user_merges_without_clobbering(emulator):
-    store = emulator.store
-    await store.touch_user(emulator.user_id, followed=True)
-    await store.touch_user(emulator.user_id, display_name="小明")
-    await store.touch_user(emulator.user_id)
-    data = await user_doc(emulator)
-    assert data["followed"]
-    assert data["display_name"] == "小明"
-    assert isinstance(data["last_seen_at"], datetime)
-    assert isinstance(data["created_at"], datetime)
-    await store.touch_user(emulator.user_id, followed=False)
-    assert not (await user_doc(emulator))["followed"]
+async def test_blocked_user_cannot_resolve(db, users):
+    who = identity()
+    user_id, _ = await users.resolve_or_create(who)
+    await db.document(f"users/{user_id}").update({"status": "blocked"})
+    with pytest.raises(AccountDisabledError):
+        await users.resolve_or_create(who)
+    assert await users.get_status(user_id) == "blocked"
 
 
 @pytest.mark.firestore
-async def test_session_lifecycle_and_ordering(emulator):
-    store, uid = emulator.store, emulator.user_id
-    first = await store.create_session(uid, "第一")
-    second = await store.create_session(uid, "第二")
-    assert [s.id for s in await store.list_sessions(uid)] == [second.id, first.id]
+async def test_linking_rules(db, users):
+    alice = await new_user(users)
+    bob = await new_user(users)
+    google = identity(provider="google")
 
-    await store.add_message(uid, first.id, "user", "hi")
-    assert [s.id for s in await store.list_sessions(uid)] == [first.id, second.id]
-    assert (await store.get_session(uid, first.id)).message_count == 1
+    await users.link_identity(alice, google)
+    assert (await users.resolve_or_create(google))[0] == alice
+    with pytest.raises(IdentityConflictError):
+        await users.link_identity(bob, google)  # 已屬於 alice
+    with pytest.raises(IdentityConflictError):
+        await users.link_identity(alice, identity())  # alice 已有 line 身分
 
-    await store.rename_session(uid, first.id, "改名")
-    assert (await store.get_session(uid, first.id)).title == "改名"
-
-    await store.delete_session(uid, first.id)
-    assert await store.get_session(uid, first.id) is None
-    assert await store.list_messages(uid, first.id, 10) == []
+    await users.unlink_identity(alice, "google")
+    with pytest.raises(LastIdentityError):
+        await users.unlink_identity(alice, "line")
+    assert await doc(db, f"identityLookup/{lookup_key('google', google.provider_user_id)}") is None
+    audit = [d.to_dict() async for d in db.collection(f"users/{alice}/auditLog").stream()]
+    assert sorted(entry["action"] for entry in audit) == ["link", "unlink"]
+    assert all(isinstance(entry["expiresAt"], datetime) for entry in audit)
 
 
 @pytest.mark.firestore
-async def test_messages_order_limit_and_tool_calls(emulator):
-    store, uid = emulator.store, emulator.user_id
-    session = await store.create_session(uid, "chat")
+async def test_login_activity_and_module_use(db, users):
+    user_id = await new_user(users)
+    principal = Principal(user_id=user_id, provider="line", display_name="新名字")
+    await users.record_login(principal, {"liff": {"os": "ios", "contextType": "utou"}})
+    await users.update_identity_metadata(user_id, "line", {"followed": True})
+    await users.record_module_use(user_id, "bus")
+    await users.record_module_use(user_id, "bus")
+    await users.touch_activity(user_id)
+
+    user = await doc(db, f"users/{user_id}")
+    assert user["displayName"] == "新名字"
+    assert user["lastModuleId"] == "bus"
+    assert isinstance(user["lastActiveAt"], datetime)
+    line = await doc(db, f"users/{user_id}/identities/line")
+    assert line["metadata"]["liff"] == {"os": "ios", "contextType": "utou"}
+    assert line["metadata"]["followed"] is True
+    assert line["metadata"]["displayName"] == "新名字"
+    state = await doc(db, f"users/{user_id}/moduleStates/bus")
+    assert state["usageCount"] == 2
+
+
+@pytest.mark.firestore
+async def test_daily_quota_boundary_and_ttl(db, users):
+    alice = await new_user(users)
+    bob = await new_user(users)
+    assert [await users.consume_daily_quota(alice, 2) for _ in range(3)] == [True, True, False]
+    assert await users.consume_daily_quota(bob, 2)
+    usage = [d.to_dict() async for d in db.collection(f"users/{alice}/usage").stream()]
+    assert usage[0]["count"] == 3
+    assert usage[0]["expiresAt"] > datetime.now(UTC) + timedelta(days=7)
+
+
+@pytest.mark.firestore
+async def test_module_registry_reads_enabled_flag(db):
+    registry = FirestoreModuleRegistry(db)
+    module = "test-" + uuid4().hex
+    assert await registry.is_enabled(module)  # 文件不存在：預設啟用
+    await db.document(f"modules/{module}").set({"enabled": False})
+    assert await registry.is_enabled(module)  # 60 秒快取
+    registry._cache.clear()
+    assert not await registry.is_enabled(module)
+
+
+# conversations / messages
+@pytest.mark.firestore
+async def test_conversation_lifecycle_ordering_and_count(db, users, chats):
+    user_id = await new_user(users)
+    first = await chats.create_session(user_id, "第一")
+    second = await chats.create_session(user_id, "第二")
+    assert [s.id for s in await chats.list_sessions(user_id)] == [second.id, first.id]
+
+    await chats.add_message(user_id, first.id, "user", "hi")
+    assert [s.id for s in await chats.list_sessions(user_id)] == [first.id, second.id]
+    assert (await chats.get_session(user_id, first.id)).message_count == 1
+
+    await chats.rename_session(user_id, first.id, "改名")
+    assert (await chats.get_session(user_id, first.id)).title == "改名"
+    conversation = await doc(db, f"conversations/{first.id}")
+    assert conversation["userId"] == user_id
+    assert conversation["channel"] == "liff"
+    assert (await doc(db, f"users/{user_id}"))["conversationCount"] == 2
+
+    await chats.delete_session(user_id, first.id)
+    assert await chats.get_session(user_id, first.id) is None
+    assert [m async for m in db.collection(f"conversations/{first.id}/messages").stream()] == []
+    assert (await doc(db, f"users/{user_id}"))["conversationCount"] == 1
+
+
+@pytest.mark.firestore
+async def test_messages_store_metadata_and_respect_limit(db, users, chats):
+    user_id = await new_user(users)
+    session = await chats.create_session(user_id, "chat")
     for index in range(5):
-        await store.add_message(uid, session.id, "user", str(index))
-    await store.add_message(
-        uid,
-        session.id,
-        "assistant",
-        "done",
-        [ToolCall(name="get_next_buses", args={"route": "main"}, ok=True)],
+        await chats.add_message(user_id, session.id, "user", str(index))
+    meta = MessageMeta(
+        model="test-model",
+        prompt_version="v-test",
+        token_usage=TokenUsage(input_tokens=10, output_tokens=5, reasoning_tokens=2, requests=1),
+        latency_ms=1234,
     )
-    messages = await store.list_messages(uid, session.id, 3)
+    saved = await chats.add_message(
+        user_id, session.id, "assistant", "done",
+        [ToolCall(name="get_next_buses", args={"route": "main"})], meta,
+    )
+    messages = await chats.list_messages(user_id, session.id, 3)
     assert [m.content for m in messages] == ["3", "4", "done"]
     assert messages[-1].tool_calls[0].name == "get_next_buses"
+    stored = await doc(db, f"conversations/{session.id}/messages/{saved.id}")
+    assert stored["model"] == "test-model"
+    assert stored["promptVersion"] == "v-test"
+    assert stored["tokenUsage"]["reasoning_tokens"] == 2
+    assert stored["latencyMs"] == 1234
+    assert stored["contentType"] == "text"
 
 
 @pytest.mark.firestore
-async def test_find_session_by_origin(emulator):
-    store, uid = emulator.store, emulator.user_id
-    assert await store.find_session_by_origin(uid, "ev-1") is None
-    session = await store.create_session(uid, "bubble", origin="ev-1")
-    found = await store.find_session_by_origin(uid, "ev-1")
-    assert found.id == session.id
-    assert found.origin == "ev-1"
-    assert await store.find_session_by_origin(emulator.other_id, "ev-1") is None
-    await store.delete_session(uid, session.id)
-    assert await store.find_session_by_origin(uid, "ev-1") is None
+async def test_other_users_cannot_see_or_touch_a_conversation(db, users, chats):
+    alice = await new_user(users)
+    bob = await new_user(users)
+    session = await chats.create_session(alice, "alice 的對話")
+    await chats.add_message(alice, session.id, "user", "秘密")
+
+    assert await chats.get_session(bob, session.id) is None
+    assert await chats.list_messages(bob, session.id, 10) == []
+    assert await chats.list_sessions(bob) == []
+    await chats.rename_session(bob, session.id, "被改了")
+    await chats.delete_session(bob, session.id)
+    kept = await chats.get_session(alice, session.id)
+    assert kept.title == "alice 的對話"
+    assert len(await chats.list_messages(alice, session.id, 10)) == 1
 
 
 @pytest.mark.firestore
-async def test_session_limit_evicts_least_recently_updated(emulator):
-    store, uid = emulator.store, emulator.user_id
-    first = await store.create_session(uid, "first")
+async def test_origin_is_get_or_create_and_scoped_per_user(users, chats):
+    alice = await new_user(users)
+    bob = await new_user(users)
+    first, created = await chats.get_or_create_session(alice, "泡泡", "ev-1")
+    assert created
+    again, created = await chats.get_or_create_session(alice, "ignored", "ev-1")
+    assert (again.id, created) == (first.id, False)
+    theirs, created = await chats.get_or_create_session(bob, "泡泡", "ev-1")
+    assert created and theirs.id != first.id
+    await chats.delete_session(alice, first.id)
+    rebuilt, created = await chats.get_or_create_session(alice, "泡泡", "ev-1")
+    assert created and rebuilt.id != first.id
+
+
+@pytest.mark.firestore
+async def test_limit_evicts_least_recently_updated(db, users, chats):
+    user_id = await new_user(users)
+    first = await chats.create_session(user_id, "first")
     for _ in range(MAX_SESSIONS_PER_USER - 1):
-        await store.create_session(uid, "s")
-    await store.add_message(uid, first.id, "user", "keep me")
-    oldest = (await store.list_sessions(uid))[-1]
+        await chats.create_session(user_id, "s")
+    await chats.add_message(user_id, first.id, "user", "keep me")
+    oldest = (await chats.list_sessions(user_id))[-1]
 
-    newest = await store.create_session(uid, "one more")
-    ids = [s.id for s in await store.list_sessions(uid)]
+    newest = await chats.create_session(user_id, "one more")
+    ids = await owned_ids(db, user_id)
     assert len(ids) == MAX_SESSIONS_PER_USER
-    assert newest.id in ids
-    assert first.id in ids
+    assert {newest.id, first.id} <= ids
     assert oldest.id not in ids
-    assert await store.get_session(uid, oldest.id) is None
-    assert len(await raw_session_ids(emulator)) == MAX_SESSIONS_PER_USER
+    assert (await doc(db, f"users/{user_id}"))["conversationCount"] == MAX_SESSIONS_PER_USER
 
 
 @pytest.mark.firestore
-async def test_concurrent_origin_creation_across_clients(emulator):
-    results = await concurrent_creates(emulator, ["same-origin"] * 4)
+async def test_concurrent_creates_at_capacity_evict_atomically(db, users):
+    """原本會 lock timeout 的情境：交易不再讀取全部對話，只鎖 user 文件與被淘汰的那幾則。"""
+    user_id = await new_user(users)
+    with patch(MAX_SESSIONS_PATH, 5):
+        seed = FirestoreChatStore(db)
+        for _ in range(5):
+            await seed.create_session(user_id, "old")
+        clients = [firestore.AsyncClient(project=PROJECT) for _ in range(4)]
+        try:
+            results = await asyncio.gather(
+                *(
+                    FirestoreChatStore(c).get_or_create_session(user_id, "new", origin)
+                    for c, origin in zip(clients, [None, "e1", "e2", None], strict=True)
+                )
+            )
+        finally:
+            for c in clients:
+                c.close()
+    assert all(created for _, created in results)
+    ids = await owned_ids(db, user_id)
+    assert len(ids) == 5
+    assert {session.id for session, _ in results} <= ids
+    assert (await doc(db, f"users/{user_id}"))["conversationCount"] == 5
+
+
+@pytest.mark.firestore
+async def test_concurrent_same_origin_across_clients_creates_once(db, users):
+    user_id = await new_user(users)
+    clients = [firestore.AsyncClient(project=PROJECT) for _ in range(4)]
+    try:
+        results = await asyncio.gather(
+            *(FirestoreChatStore(c).get_or_create_session(user_id, "x", "same") for c in clients)
+        )
+    finally:
+        for c in clients:
+            c.close()
     assert sum(created for _, created in results) == 1
     assert len({session.id for session, _ in results}) == 1
-    assert len(await raw_session_ids(emulator)) == 1
+    assert len(await owned_ids(db, user_id)) == 1
 
 
 @pytest.mark.firestore
-async def test_existing_legacy_origin_does_not_evict_at_capacity(emulator):
-    reference = await seed_sessions(emulator, updated_at=datetime.now(UTC), with_origin=True)
-    # 舊對話文件不一定有上層的 user 文件
-    assert not (await reference.get()).exists
-    results = await concurrent_creates(emulator, ["legacy-origin-0"] * 4)
-    assert all(not created for _, created in results)
-    assert {session.id for session, _ in results} == {"legacy-0"}
-    assert len(await raw_session_ids(emulator)) == MAX_SESSIONS_PER_USER
-
-
-@pytest.mark.firestore
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "既有問題（flaky）：get_or_create_session 在交易內讀取全部對話，"
-        "滿額時 4 個並行交易互搶 user 文件鎖，在 emulator 上時常 5 次重試皆 lock timeout。"
-        "新資料結構重寫時修正並移除此標記。"
-    ),
-)
-async def test_concurrent_creates_atomically_evict_and_insert(emulator):
-    await seed_sessions(
-        emulator, updated_at=datetime.now(UTC) - timedelta(days=1), with_messages=True
-    )
-    results = await concurrent_creates(emulator, [None, "event-1", "event-2", None])
-    assert all(created for _, created in results)
-    ids = await raw_session_ids(emulator)
-    assert len(ids) == MAX_SESSIONS_PER_USER
-    assert {session.id for session, _ in results} <= ids
-    for index in range(4):
-        assert f"legacy-{index}" not in ids
-        assert await emulator.store.list_messages(emulator.user_id, f"legacy-{index}", 10) == []
-    assert len(await emulator.store.list_messages(emulator.user_id, "legacy-4", 10)) == 1
-
-
-@pytest.mark.firestore
-async def test_eviction_cleanup_cannot_delete_recreated_origin(emulator):
-    store, uid, client = emulator.store, emulator.user_id, emulator.client
+async def test_cleanup_failure_persists_marker_until_next_success(db, users, chats):
+    user_id = await new_user(users)
     with patch(MAX_SESSIONS_PATH, 1):
-        first = await store.create_session(uid, "first", "origin")
-        await store.add_message(uid, first.id, "user", "old")
-        cleanup_started = asyncio.Event()
-        resume_cleanup = asyncio.Event()
-        recursive_delete = client.recursive_delete
+        old = await chats.create_session(user_id, "old")
+        await chats.add_message(user_id, old.id, "user", "remove me")
+        with patch.object(db, "recursive_delete", side_effect=RuntimeError("unavailable")):
+            replacement = await chats.create_session(user_id, "new")
+        marker = f"users/{user_id}/conversationCleanup/{old.id}"
+        assert await doc(db, marker) is not None
+        assert await chats.get_session(user_id, old.id) is None
 
-        async def delayed_cleanup(reference):
-            cleanup_started.set()
-            await resume_cleanup.wait()
-            return await recursive_delete(reference)
-
-        other_client = firestore.AsyncClient(project=PROJECT)
-        try:
-            with patch.object(client, "recursive_delete", side_effect=delayed_cleanup):
-                pending = asyncio.create_task(store.create_session(uid, "replacement"))
-                try:
-                    await asyncio.wait_for(cleanup_started.wait(), timeout=30)
-                    other_store = FirestoreChatStore(other_client)
-                    recreated, created = await other_store.get_or_create_session(
-                        uid, "recreated", "origin"
-                    )
-                    assert created
-                    assert first.id != recreated.id
-                    await other_store.add_message(uid, recreated.id, "user", "keep")
-                finally:
-                    resume_cleanup.set()
-                    await pending
-            assert await raw_session_ids(emulator) == {recreated.id}
-            kept = await store.list_messages(uid, recreated.id, 10)
-            assert [message.content for message in kept] == ["keep"]
-            assert await store.list_messages(uid, first.id, 10) == []
-        finally:
-            other_client.close()
-
-
-@pytest.mark.firestore
-async def test_cleanup_failure_persists_marker_and_existing_origin_retries(emulator):
-    store, uid, client = emulator.store, emulator.user_id, emulator.client
-    with patch(MAX_SESSIONS_PATH, 1):
-        first = await store.create_session(uid, "old", "old-origin")
-        await store.add_message(uid, first.id, "user", "remove me")
-        marker = (
-            client.collection("users").document(uid).collection("session_cleanup").document(first.id)
-        )
-        with patch.object(client, "recursive_delete", side_effect=RuntimeError("unavailable")):
-            replacement, created = await store.get_or_create_session(uid, "new", "new-origin")
-        assert created
-        assert await store.get_session(uid, first.id) is None
-        assert (await marker.get()).exists
-        assert len(await store.list_messages(uid, first.id, 10)) == 1
-        # 新的 store 也能從持久化的 marker 接手清理，而且不會建立新對話
-        reopened, created = await FirestoreChatStore(client).get_or_create_session(
-            uid, "ignored", "new-origin"
-        )
-        assert not created
-        assert reopened.id == replacement.id
-        assert await raw_session_ids(emulator) == {replacement.id}
-        assert not (await marker.get()).exists
-        assert await store.list_messages(uid, first.id, 10) == []
-
-
-@pytest.mark.firestore
-async def test_daily_quota_boundary(emulator):
-    store = emulator.store
-    results = [await store.consume_daily_quota(emulator.user_id, 2) for _ in range(3)]
-    assert results == [True, True, False]
-    assert await store.consume_daily_quota(emulator.other_id, 2)
-
-
-@pytest.mark.firestore
-async def test_users_are_isolated(emulator):
-    store = emulator.store
-    session = await store.create_session(emulator.user_id, "mine")
-    assert await store.get_session(emulator.other_id, session.id) is None
-    assert await store.list_sessions(emulator.other_id) == []
+        # 新的 store（例如另一個實例）在下一次寫入時接手清理
+        await FirestoreChatStore(db).get_or_create_session(user_id, "x", None)
+    assert await doc(db, marker) is None
+    assert [m async for m in db.collection(f"conversations/{old.id}/messages").stream()] == []
+    assert replacement.id not in await owned_ids(db, user_id)  # 上限 1：也被淘汰了

@@ -12,10 +12,15 @@ from linebot.v3.messaging import ApiException
 from linebot.v3.webhook import WebhookParser
 
 from src.app import create_app
+from src.app.routes.callback import MODULE_DISABLED_MESSAGE
+from src.application.models.identity import AccountDisabledError
 from src.application.services.chat_store import MemoryChatStore
+from src.application.services.module_registry import StaticModuleRegistry
+from src.application.services.user_store import MemoryUserStore
 from tests.fakes import TEST_LIFF_ID, make_settings
 
 LIFF_BASE = f"https://liff.line.me/{TEST_LIFF_ID}"
+INTERNAL_ID = "usr_" + "0" * 32
 PROCESS_MESSAGE = "src.app.routes.callback.command_handler.process_message"
 
 
@@ -25,7 +30,10 @@ def webhook_app():
     app.state.settings = make_settings()
     app.state.parser = WebhookParser("test-secret")
     app.state.messaging_api = AsyncMock()
-    app.state.store = AsyncMock()
+    app.state.user_store = AsyncMock()
+    app.state.identity_service = AsyncMock()
+    app.state.identity_service.resolve_line_user.return_value = INTERNAL_ID
+    app.state.module_registry = StaticModuleRegistry()
     return app
 
 
@@ -82,12 +90,14 @@ def test_signature_required_and_validated_before_processing(post, webhook_app):
         ).status_code
         == 400
     )
-    webhook_app.state.store.touch_user.assert_not_awaited()
+    webhook_app.state.identity_service.resolve_line_user.assert_not_awaited()
 
 
 def test_free_text_replies_liff_button_with_question(post, webhook_app):
     assert post([event(text="機器學習的課")]).status_code == 200
-    webhook_app.state.store.touch_user.assert_awaited_once_with("user-1")
+    # LINE userId 先換成內部 id，之後的寫入都只用內部 id
+    webhook_app.state.identity_service.resolve_line_user.assert_awaited_once_with("user-1")
+    webhook_app.state.user_store.touch_activity.assert_awaited_once_with(INTERNAL_ID)
     (message,) = replied_messages(webhook_app)
     assert message.type == "flex"
     uri = message.contents.footer.contents[0].action.uri
@@ -103,22 +113,43 @@ def test_group_text_gets_liff_button_without_question(post, webhook_app):
     assert message.type == "flex"
     assert message.contents.footer.contents[0].action.uri == LIFF_BASE
     webhook_app.state.messaging_api.show_loading_animation.assert_not_awaited()
+    # 群組發言者沒有和 bot 建立關係：不建立、不更新任何使用者資料
+    webhook_app.state.identity_service.resolve_line_user.assert_not_awaited()
+    webhook_app.state.user_store.touch_activity.assert_not_awaited()
 
 
 def test_command_uses_command_handler_and_loading_animation(post, webhook_app):
     with patch(PROCESS_MESSAGE, new=AsyncMock(return_value="Command answer")) as process:
         assert post([event(text="@公車")]).status_code == 200
-    process.assert_awaited_once_with("@公車", "user-1")
-    webhook_app.state.messaging_api.show_loading_animation.assert_awaited_once()
+    process.assert_awaited_once_with("@公車", INTERNAL_ID)
+    loading = webhook_app.state.messaging_api.show_loading_animation.await_args.args[0]
+    assert loading.chat_id == "user-1"
     (message,) = replied_messages(webhook_app)
     assert message.text == "Command answer"
+    webhook_app.state.user_store.record_module_use.assert_awaited_once_with(INTERNAL_ID, "bus")
+
+
+def test_disabled_module_replies_fixed_message(post, webhook_app):
+    webhook_app.state.module_registry = StaticModuleRegistry(disabled={"bus"})
+    with patch(PROCESS_MESSAGE, new=AsyncMock()) as process:
+        post([event(text="@公車")])
+    process.assert_not_awaited()
+    (message,) = replied_messages(webhook_app)
+    assert message.text == MODULE_DISABLED_MESSAGE
+    webhook_app.state.user_store.record_module_use.assert_not_awaited()
+
+
+def test_disabled_account_gets_no_reply(post, webhook_app):
+    webhook_app.state.identity_service.resolve_line_user.side_effect = AccountDisabledError("x")
+    assert post([event(text="@公車")]).status_code == 200
+    webhook_app.state.messaging_api.reply_message.assert_not_awaited()
 
 
 @pytest.mark.parametrize("text", ["說明", "help", "？"])
 def test_help_keyword_routes_to_help_command(post, text):
     with patch(PROCESS_MESSAGE, new=AsyncMock(return_value="help")) as process:
         post([event(text=text)])
-    process.assert_awaited_once_with("@說明", "user-1")
+    process.assert_awaited_once_with("@說明", INTERNAL_ID)
 
 
 def test_help_command_renders_usage_bubble(post, webhook_app):
@@ -136,7 +167,9 @@ def test_help_command_renders_usage_bubble(post, webhook_app):
 
 def test_follow_sends_welcome_and_liff_button(post, webhook_app):
     assert post([event(kind="follow")]).status_code == 200
-    webhook_app.state.store.touch_user.assert_awaited_once_with("user-1", followed=True)
+    webhook_app.state.user_store.update_identity_metadata.assert_awaited_once_with(
+        INTERNAL_ID, "line", {"followed": True}
+    )
     messages = replied_messages(webhook_app)
     assert [m.type for m in messages] == ["text", "flex"]
     assert "狗狗情報員" in messages[0].text
@@ -147,11 +180,16 @@ def test_unfollow_marks_user(post, webhook_app):
     unfollow = event(kind="unfollow")
     unfollow.pop("replyToken")
     assert post([unfollow]).status_code == 200
-    webhook_app.state.store.touch_user.assert_awaited_once_with("user-1", followed=False)
+    webhook_app.state.user_store.update_identity_metadata.assert_awaited_once_with(
+        INTERNAL_ID, "line", {"followed": False}
+    )
 
 
 def test_failure_is_sanitized_and_next_event_still_runs(post, webhook_app):
-    webhook_app.state.store.touch_user.side_effect = [RuntimeError("secret-value"), None]
+    webhook_app.state.identity_service.resolve_line_user.side_effect = [
+        RuntimeError("secret-value"),
+        INTERNAL_ID,
+    ]
     assert post([event(), event(event_id="event-2")]).status_code == 200
     assert webhook_app.state.messaging_api.reply_message.await_count == 2
     first = webhook_app.state.messaging_api.reply_message.call_args_list[0].args[0]
@@ -200,6 +238,8 @@ def test_memory_store_startup_skips_firestore_and_manages_runner(lifecycle_mocks
             assert client.get("/ping").json() == {"message": "pong"}
             assert client.get("/api/config").json() == {"liff_id": TEST_LIFF_ID}
             assert isinstance(app.state.store, MemoryChatStore)
+            assert isinstance(app.state.user_store, MemoryUserStore)
+            assert set(app.state.authenticators) == {"line"}
             assert app.state.agent_runner is runner
             runner.start.assert_awaited_once()
             runner.stop.assert_not_awaited()

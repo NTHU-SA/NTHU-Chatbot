@@ -4,6 +4,8 @@
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+# 測試卡住超過 2 分鐘時印出所有執行緒的 stack trace（CI 上排查用）
+faulthandler_timeout = 120
 markers = [
     "firestore: 需要 Firestore emulator（FIRESTORE_EMULATOR_HOST）",
 ]
@@ -14,8 +16,8 @@ source = ["src", "templates"]
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
-# 基準 76%（2026-10-02，不含 emulator 測試）；之後每個 PR 往 80% 提升
-fail_under = 75
+# CI 含 emulator 測試約 82%（2026-10-02）；只升不降
+fail_under = 80
 
 [tool.ruff]
 target-version = "py312"

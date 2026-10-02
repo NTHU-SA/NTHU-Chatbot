@@ -1,22 +1,34 @@
 import asyncio
-from unittest.mock import patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from src.app.security import LineUser
+from src.application.models.identity import lookup_key
 from src.application.services.chat_store import MAX_SESSIONS_PER_USER, MemoryChatStore
 from src.infrastructure.ai.agent_runner import AgentEvent
-from tests.fakes import AUTH, TEST_LIFF_ID, FakeRunner, make_settings, parse_sse
+from src.infrastructure.ai.prompts import PROMPT_VERSION
+from tests.fakes import (
+    AUTH,
+    TEST_IDENTITY,
+    TEST_LIFF_ID,
+    FakeRunner,
+    make_settings,
+    parse_sse,
+)
 
 OTHER = {"Authorization": "Bearer other-token"}
 
 
 @pytest.fixture
-def other_user(chat_app):
-    """註冊第二位使用者的 token，回傳對應的 headers。"""
-    chat_app.state.token_verifier.valid["other-token"] = LineUser(user_id="Uother")
+def other_user():
+    """第二位使用者（FakeAuthenticator 認得 other-token）的 headers。"""
     return OTHER
+
+
+def internal_id(chat_app) -> str:
+    """測試使用者對應到的內部 user id。"""
+    users = chat_app.state.user_store
+    return users.lookup[lookup_key("line", TEST_IDENTITY.provider_user_id)]
 
 
 def new_session(client) -> str:
@@ -54,7 +66,73 @@ def test_api_requires_valid_bearer(client):
     )
     response = client.get("/api/me", headers=AUTH)
     assert response.status_code == 200
-    assert response.json()["user_id"] == "U0123456789abcdef"
+    assert response.json()["display_name"] == "測試者"
+
+
+def test_unknown_auth_provider_is_rejected(client):
+    headers = {**AUTH, "X-Auth-Provider": "google"}
+    response = client.get("/api/sessions", headers=headers)
+    assert response.status_code == 401
+    # 不區分「provider 不存在」與「token 無效」
+    assert response.json()["detail"] == "invalid credentials"
+
+
+def test_me_exposes_no_identifiers(client, chat_app):
+    body = client.get("/api/me", headers=AUTH).json()
+    assert set(body) == {"display_name", "picture_url", "liff_id"}
+    assert TEST_IDENTITY.provider_user_id not in str(body)
+    assert internal_id(chat_app) not in str(body)
+
+
+def test_first_request_creates_internal_user_once(client, chat_app):
+    client.get("/api/me", headers=AUTH)
+    client.get("/api/sessions", headers=AUTH)
+    users = chat_app.state.user_store
+    user_id = internal_id(chat_app)
+    assert user_id.startswith("usr_")
+    assert list(users.users) == [user_id]
+    assert users.identities[user_id]["line"]["providerUserId"] == TEST_IDENTITY.provider_user_id
+
+
+def test_disabled_account_is_forbidden(client, chat_app):
+    client.get("/api/me", headers=AUTH)
+    chat_app.state.user_store.users[internal_id(chat_app)]["status"] = "blocked"
+    chat_app.state.identity_service._status.clear()  # 略過 60 秒的狀態快取
+    assert client.get("/api/sessions", headers=AUTH).status_code == 403
+
+
+def test_me_post_stores_liff_client_info_as_metadata(client, chat_app):
+    info = {
+        "os": "ios",
+        "line_version": "14.0.0",
+        "language": "zh-TW",
+        "context_type": "utou",
+        "friendship": True,
+    }
+    response = client.post("/api/me", headers=AUTH, json=info)
+    assert response.status_code == 200
+    metadata = chat_app.state.user_store.identities[internal_id(chat_app)]["line"]["metadata"]
+    assert metadata["liff"] == {
+        "liffId": TEST_LIFF_ID,
+        "os": "ios",
+        "appVersion": "14.0.0",
+        "language": "zh-TW",
+        "contextType": "utou",
+        "friendshipStatus": True,
+    }
+    assert metadata["displayName"] == "測試者"
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        {"context_id": "C123"},  # 不收的欄位
+        {"os": "windows"},  # 不在白名單
+        {"line_version": "x" * 33},  # 超過長度
+    ],
+)
+def test_me_post_rejects_unexpected_client_info(client, info):
+    assert client.post("/api/me", headers=AUTH, json=info).status_code == 422
 
 
 def test_security_headers_and_liff_csp(client):
@@ -129,30 +207,22 @@ def test_bubble_origin_is_scoped_per_user(client, other_user):
 
 async def test_concurrent_bubble_requests_create_only_once(chat_app):
     store = chat_app.state.store
-    find = store.find_session_by_origin
-
-    async def delayed_find(*args):
-        session = await find(*args)
-        await asyncio.sleep(0)
-        return session
-
     async with AsyncClient(
         transport=ASGITransport(app=chat_app), base_url="http://test"
     ) as client:
-        with patch.object(store, "find_session_by_origin", delayed_find):
-            responses = await asyncio.gather(
-                *(
-                    client.post(
-                        "/api/sessions", headers=AUTH, json={"origin": "concurrent-event"}
-                    )
-                    for _ in range(20)
-                )
+        responses = await asyncio.gather(
+            *(
+                client.post("/api/sessions", headers=AUTH, json={"origin": "concurrent-event"})
+                for _ in range(20)
             )
+        )
     codes = [r.status_code for r in responses]
     assert codes.count(201) == 1
     assert codes.count(200) == 19
     assert len({r.json()["id"] for r in responses}) == 1
-    assert len(store._sessions["U0123456789abcdef"]) == 1
+    # 同一個 LINE 身分只建立了一個內部 user，對話也只有一個
+    assert list(store._sessions) == [internal_id(chat_app)]
+    assert len(store._sessions[internal_id(chat_app)]) == 1
 
 
 def test_session_limit_evicts_oldest(client):
@@ -173,7 +243,7 @@ def test_session_limit_evicts_oldest(client):
 
 
 # -- chat SSE --
-def test_send_message_streams_and_persists(client, runner):
+def test_send_message_streams_and_persists(client, chat_app, runner):
     session_id = new_session(client)
     response = send(client, session_id, "南大公車")
     assert response.status_code == 200
@@ -198,6 +268,12 @@ def test_send_message_streams_and_persists(client, runner):
     sessions = client.get("/api/sessions", headers=AUTH).json()
     assert sessions[0]["title"] == "南大公車"
     assert sessions[0]["message_count"] == 2
+
+    meta = chat_app.state.store.meta[messages[1]["id"]]
+    assert meta.model == chat_app.state.settings.openai_model
+    assert meta.prompt_version == PROMPT_VERSION
+    assert meta.latency_ms >= 0
+    assert "usage" not in events[-1][1]
 
     send(client, session_id, "那回程呢")
     history, text = runner.streams[-1]
