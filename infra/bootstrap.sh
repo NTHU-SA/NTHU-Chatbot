@@ -161,9 +161,11 @@ import json, pathlib
 for o in json.loads(pathlib.Path("firestore.indexes.json").read_text())["fieldOverrides"]:
     print(o["collectionGroup"], o["fieldPath"], "ttl" if o.get("ttl") else "-")
 PY
-  "${G[@]}" firestore indexes fields update "$field" "${DB[@]}" --collection-group="$group" --disable-indexes >/dev/null
+  # 每個欄位的變更在 GCP 端要跑好幾分鐘（空資料庫也是）：全部以 --async 送出，不在這裡等。
+  # 同一個欄位前一個變更還在跑時，GCP 會拒絕新的變更；重跑本腳本即可補上。
+  "${G[@]}" firestore indexes fields update "$field" "${DB[@]}" --collection-group="$group"     --disable-indexes --async >/dev/null 2>&1 || echo "  ${group}.${field}：前一個變更還在進行，稍後重跑本腳本"
   if [[ "$ttl" == "ttl" ]]; then
-    "${G[@]}" firestore fields ttls update "$field" "${DB[@]}" --collection-group="$group" --enable-ttl --async >/dev/null
+    "${G[@]}" firestore fields ttls update "$field" "${DB[@]}" --collection-group="$group"       --enable-ttl --async >/dev/null 2>&1 || echo "  ${group}.${field} TTL：前一個變更還在進行，稍後重跑本腳本"
   fi
   echo "  ${group}.${field} ${ttl}"
 done
