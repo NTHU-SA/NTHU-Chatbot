@@ -7,12 +7,15 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from src.app.security import LineUser
+from src.application.models.identity import VerifiedIdentity
 from src.core.config import Settings
 from src.infrastructure.ai.agent_runner import AgentEvent
 
 TEST_LIFF_ID = "1234567890-abcdefgh"
-TEST_USER = LineUser(user_id="U0123456789abcdef", display_name="測試者", picture_url=None)
+TEST_IDENTITY = VerifiedIdentity(
+    provider="line", provider_user_id="U0123456789abcdef", display_name="測試者"
+)
+OTHER_IDENTITY = VerifiedIdentity(provider="line", provider_user_id="U0000000000other")
 AUTH = {"Authorization": "Bearer good-token"}
 
 
@@ -29,14 +32,33 @@ def make_settings(**overrides: Any) -> Settings:
     return Settings(**values)
 
 
-class FakeVerifier:
-    def __init__(self):
-        self.valid = {"good-token": TEST_USER}
+class FakeAuthenticator:
+    """假的 LINE authenticator：只認得 `valid` 裡的 token。"""
 
-    async def verify(self, token: str) -> LineUser:
+    provider = "line"
+
+    def __init__(self):
+        self.valid = {"good-token": TEST_IDENTITY, "other-token": OTHER_IDENTITY}
+
+    async def verify(self, token: str) -> VerifiedIdentity:
         if token in self.valid:
             return self.valid[token]
         raise HTTPException(401, "invalid id_token")
+
+
+# NTHU API 單位目錄的一小部分（假資料的形狀與正式 API 相同；只取名稱，不含人員）
+FAKE_DEPARTMENTS = [
+    {"index": "6907", "name": "資訊工程學系", "parent_name": "電機資訊學院"},
+    {"index": "6905", "name": "電機工程學系", "parent_name": "電機資訊學院"},
+    {"index": "6913", "name": "資訊系統與應用研究所", "parent_name": "電機資訊學院"},
+    {"index": "6917", "name": "資訊安全研究所", "parent_name": "電機資訊學院"},
+    {"index": "5301", "name": "數學系", "parent_name": "理學院"},
+    {"index": "0101", "name": "教務處", "parent_name": None},
+]
+
+
+async def fake_departments():
+    return FAKE_DEPARTMENTS
 
 
 class FakeRunner:
@@ -44,10 +66,12 @@ class FakeRunner:
 
     def __init__(self):
         self.streams: list[tuple[list, str]] = []
+        self.contexts: list = []
         self.fail = False
 
-    async def stream(self, history, user_text):
+    async def stream(self, history, user_text, context=None):
         self.streams.append((list(history), user_text))
+        self.contexts.append(context)
         if self.fail:
             yield AgentEvent("error", {"message": "boom"})
             return

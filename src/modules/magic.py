@@ -4,12 +4,10 @@ import random
 from linebot.v3.messaging import (
     FlexContainer,
     FlexMessage,
-    MessageAction,
     PostbackAction,
     QuickReply,
     QuickReplyItem,
     TextMessage,
-    URIAction,
 )
 
 from src.app.handlers.command_handler import command_handler
@@ -124,7 +122,7 @@ def share_template(event):
     ],
 )
 def joke_response(event):
-    with open("data/anecdotes.json", "r", encoding="utf-8") as f:
+    with open("data/anecdotes.json", encoding="utf-8") as f:
         anecdotes_data = json.load(f)
         anecdote = random.choice(anecdotes_data)["content"]
     return [

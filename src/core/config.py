@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from dataclasses import dataclass, field
+
+from src.core.privacy import PRIVACY_POLICY_VERSION
 
 DEFAULT_MCP_TOOLS = (
     "search_campus",
@@ -24,6 +27,45 @@ DEFAULT_MCP_TOOLS = (
 )
 
 CHAT_STORES = ("firestore", "memory")
+
+# 只接受 https 網域（本機開發可用 http://localhost / 127.0.0.1），不接受萬用字元、路徑或結尾斜線
+_ORIGIN = re.compile(
+    r"^(https://[a-z0-9-]+(\.[a-z0-9-]+)+|http://(localhost|127\.0\.0\.1))(:\d{1,5})?$"
+)
+
+
+_DOMAIN = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)+$")
+# Firestore 資料庫 ID：(default) 或 4–63 字元的小寫英數與連字號
+_DATABASE = re.compile(r"^(\(default\)|[a-z][a-z0-9-]{2,61}[a-z0-9])$")
+
+
+def _database(value: str | None) -> str:
+    database = (value or "").strip() or "(default)"
+    if not _DATABASE.match(database):
+        raise RuntimeError("Invalid FIRESTORE_DATABASE")
+    return database
+
+
+def _domains(value: str | None) -> tuple[str, ...]:
+    """網路搜尋允許的網域（逗號分隔）；只接受裸網域，子網域自動包含。"""
+    domains = _csv((value or "").lower(), ("nthu.edu.tw",))
+    invalid = [domain for domain in domains if not _DOMAIN.match(domain)]
+    if invalid:
+        raise RuntimeError("Invalid WEB_SEARCH_DOMAINS entry: " + ", ".join(invalid))
+    return domains
+
+
+def parse_cors_origins(value: str | None) -> tuple[str, ...]:
+    """
+    解析 `CORS_ALLOWED_ORIGINS`（逗號分隔）。
+
+    格式不符時啟動失敗：寧可擋下也不要意外放行其他網站呼叫 API。
+    """
+    origins = tuple(item.strip().lower() for item in (value or "").split(",") if item.strip())
+    invalid = [origin for origin in origins if not _ORIGIN.match(origin)]
+    if invalid:
+        raise RuntimeError("Invalid CORS_ALLOWED_ORIGINS entry: " + ", ".join(invalid))
+    return origins
 
 
 def _bool(value: str | None, default: bool) -> bool:
@@ -83,9 +125,15 @@ class Settings:
     mcp_server_url: str = "https://api.nthusa.tw/mcp"
     mcp_allowed_tools: tuple[str, ...] = DEFAULT_MCP_TOOLS
     mcp_timeout_seconds: float = 30.0
+    # LIFF 前端（Firebase Hosting）的網域；API 只允許這些網域跨站呼叫
+    cors_allowed_origins: tuple[str, ...] = ()
+    # 隱私權政策版本（單一來源在 src/core/privacy.py）；改版後使用者需重新同意才能使用 AI 對話
+    privacy_policy_version: str = PRIVACY_POLICY_VERSION
     # 儲存
     chat_store: str = "firestore"
     google_cloud_project: str | None = None
+    # 同一個 GCP 專案裡 staging 與 prod 各用一個 Firestore 資料庫
+    firestore_database: str = "(default)"
     # 限制
     history_window: int = 10
     history_message_chars: int = 1500
@@ -95,6 +143,13 @@ class Settings:
     max_output_chars: int = 8000
     daily_message_limit: int = 100
     max_agent_turns: int = 8
+    # 每則訊息最多幾次外部工具呼叫（MCP + 網路搜尋）
+    max_tool_calls_per_message: int = 6
+    # 網路搜尋（只在官方 OpenAI Responses API 下可用；限定網域）
+    web_search_enabled: bool = False
+    web_search_model: str | None = None
+    web_search_domains: tuple[str, ...] = ("nthu.edu.tw",)
+    max_web_searches_per_message: int = 2
     tool_result_preview_chars: int = 500
 
     @property
@@ -110,9 +165,7 @@ class Settings:
         """
         chat_store = (os.getenv("CHAT_STORE") or "firestore").strip().lower()
         if chat_store not in CHAT_STORES:
-            raise RuntimeError(
-                "Invalid CHAT_STORE, expected one of: " + ", ".join(CHAT_STORES)
-            )
+            raise RuntimeError("Invalid CHAT_STORE, expected one of: " + ", ".join(CHAT_STORES))
 
         required = [
             "LINE_CHANNEL_SECRET",
@@ -140,8 +193,10 @@ class Settings:
             mcp_server_url=os.getenv("MCP_SERVER_URL") or "https://api.nthusa.tw/mcp",
             mcp_allowed_tools=_csv(os.getenv("MCP_ALLOWED_TOOLS"), DEFAULT_MCP_TOOLS),
             mcp_timeout_seconds=_float("MCP_TIMEOUT_SECONDS", 30.0),
+            cors_allowed_origins=parse_cors_origins(os.getenv("CORS_ALLOWED_ORIGINS")),
             chat_store=chat_store,
             google_cloud_project=os.getenv("GOOGLE_CLOUD_PROJECT") or None,
+            firestore_database=_database(os.getenv("FIRESTORE_DATABASE")),
             history_window=_int("HISTORY_WINDOW", 10),
             history_message_chars=_int("HISTORY_MESSAGE_CHARS", 1500),
             max_tool_output_chars=_int("MAX_TOOL_OUTPUT_CHARS", 6000),
@@ -150,5 +205,10 @@ class Settings:
             max_output_chars=_int("MAX_OUTPUT_CHARS", 8000),
             daily_message_limit=_int("DAILY_MESSAGE_LIMIT", 100, minimum=0),
             max_agent_turns=_int("MAX_AGENT_TURNS", 8),
+            max_tool_calls_per_message=_int("MAX_TOOL_CALLS_PER_MESSAGE", 6),
+            web_search_enabled=_bool(os.getenv("WEB_SEARCH_ENABLED"), False),
+            web_search_model=os.getenv("WEB_SEARCH_MODEL") or None,
+            web_search_domains=_domains(os.getenv("WEB_SEARCH_DOMAINS")),
+            max_web_searches_per_message=_int("MAX_WEB_SEARCHES_PER_MESSAGE", 2),
             tool_result_preview_chars=_int("TOOL_RESULT_PREVIEW_CHARS", 500, minimum=0),
         )

@@ -1,0 +1,86 @@
+[project]
+name = "nthu-chatbot"
+version = "0.1.0"
+description = "國立清華大學學生會 LINE 校園助理（Messaging API webhook + LIFF 對話 API）"
+readme = "README.md"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "cachetools>=7.2,<8",
+    "fastapi>=0.142,<1",
+    "google-cloud-firestore>=2.34,<3",
+    "httpx>=0.28,<1",
+    "jinja2>=3.1,<4",
+    "line-bot-sdk>=3.26,<4",
+    "loguru>=0.7,<1",
+    "openai>=3.23,<4",
+    "openai-agents>=0.22,<1",
+    "python-dotenv>=1.2,<2",
+    "pyyaml>=6.0,<7",
+    "uvicorn>=0.54,<1",
+]
+
+[dependency-groups]
+dev = [
+    "black>=26.5,<27",
+    "isort>=9.0,<10",
+    "pre-commit>=4.6,<5",
+    "ruff>=0.16,<1",
+]
+test = [
+    "pytest>=9.1,<10",
+    "pytest-asyncio>=1.4,<2",
+    "pytest-cov>=7.1,<8",
+]
+
+[tool.uv]
+# 這是應用程式不是套件：不建置、不安裝專案本身
+package = false
+default-groups = ["dev", "test"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# 專案不是安裝的套件（tool.uv.package = false）：讓 `uv run pytest` 也能 import src、templates
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+# 測試卡住超過 2 分鐘時印出所有執行緒的 stack trace（CI 上排查用）
+faulthandler_timeout = 120
+markers = [
+    "firestore: 需要 Firestore emulator（FIRESTORE_EMULATOR_HOST）",
+]
+
+[tool.coverage.run]
+source = ["src", "templates"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+# 資訊處開發守則的預設門檻；CI 含 emulator 測試約 87%（2026-10-02）
+fail_under = 85
+
+# 格式由 Black 決定、import 順序由 isort（black profile）決定；Ruff 只做 lint，不當第二個 formatter
+[tool.black]
+line-length = 100
+target-version = ["py314"]
+extend-exclude = "^/(data|build)/"
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["src", "templates", "tests"]
+extend_skip = ["data", "build"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+extend-exclude = ["data", "build", "scripts/*.png"]
+
+[tool.ruff.lint]
+# import 排序交給 isort，所以不選 I
+select = ["E4", "E7", "E9", "F", "B", "UP"]
+# B008：FastAPI 的 Depends() 慣用寫法
+ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+# 模組套件以 star import 觸發指令註冊
+"src/modules/*/__init__.py" = ["F403"]

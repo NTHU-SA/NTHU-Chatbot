@@ -1,0 +1,278 @@
+// Session list, opening/creating/deleting sessions, and sending a message
+// with the streamed (SSE) reply.
+
+import { api, readSse } from "./api.js";
+import { requestConsent } from "./consent.js";
+import {
+  autosize, closeSidebar, confirmDialog, el, scrollToBottom, setBusy, setLoading, showLoading,
+  state,
+} from "./dom.js";
+import { renderMarkdown, updateScrollHints } from "./markdown.js";
+import {
+  addCopyButton, appendMessage, appendThought, clearMessages, demoteToProgress, finishTool,
+  hideThinking, memoryNote, renderSuggestions, retireSuggestions, showError, showThinking, toolNode,
+} from "./messages.js";
+
+// --------------------------------------------------------------- sessions
+export async function loadSessions() {
+  state.sessions = await (await api("/api/sessions")).json();
+  renderSessionList();
+}
+
+function renderSessionList() {
+  el.sessionList.innerHTML = "";
+  for (const s of state.sessions) {
+    const li = document.createElement("li");
+    if (s.id === state.current) li.classList.add("active");
+    const btn = document.createElement("button");
+    btn.className = "sess-btn";
+    btn.type = "button";
+    btn.textContent = s.title || "新對話";
+    btn.addEventListener("click", () => { openSession(s.id); closeSidebar(); });
+    const del = document.createElement("button");
+    del.className = "del-btn";
+    del.type = "button";
+    del.textContent = "×";
+    del.setAttribute("aria-label", "刪除對話");
+    del.addEventListener("click", () => deleteSession(s.id));
+    li.append(btn, del);
+    el.sessionList.append(li);
+  }
+}
+
+// With `origin` (the key carried by a LINE bubble) the server does get-or-create:
+// 201 = new session, 200 = the bubble's existing session.
+export async function createSession(title, origin) {
+  const navigation = ++state.navigation;
+  state.current = null;
+  setLoading(true);
+  let s, created;
+  try {
+    const res = await api("/api/sessions", {
+      method: "POST",
+      body: { title: title || null, origin: origin || null },
+    });
+    s = await res.json();
+    created = res.status === 201;
+  } catch (err) {
+    if (navigation !== state.navigation) return;
+    throw err;
+  } finally {
+    if (navigation === state.navigation) setLoading(false);
+  }
+  if (navigation !== state.navigation) return;
+  if (!state.sessions.some((x) => x.id === s.id)) state.sessions.unshift(s);
+  if (!(await openSession(s.id)) || state.current !== s.id) return;
+  return { session: s, created };
+}
+
+export async function openSession(id) {
+  const navigation = ++state.navigation;
+  setLoading(true);
+  state.current = id;
+  const s = state.sessions.find((x) => x.id === id);
+  el.title.textContent = (s && s.title) || "新對話";
+  renderSessionList();
+  clearMessages();
+  showLoading(true);
+  let msgs;
+  try {
+    msgs = await (await api(`/api/sessions/${encodeURIComponent(id)}/messages?limit=100`)).json();
+  } catch (err) {
+    if (navigation !== state.navigation) return false;
+    if (err.status === 404) return resyncSessions();
+    throw err;
+  } finally {
+    if (navigation === state.navigation) {
+      setLoading(false);
+      showLoading(false);
+    }
+  }
+  if (navigation !== state.navigation) return false;
+  for (const m of msgs) appendMessage(m.role, m.content, m.tool_calls || []);
+  // Only the chips on the latest reply are still answerable; older ones were already passed.
+  const boxes = [...el.messages.querySelectorAll(".suggestions")];
+  const last = msgs[msgs.length - 1];
+  boxes.forEach((box, i) => {
+    if (i < boxes.length - 1 || !last || last.role !== "assistant") box.classList.add("used");
+  });
+  el.empty.hidden = msgs.length > 0;
+  scrollToBottom();
+  return true;
+}
+
+// The server no longer knows our current session (restart, or deleted from
+// another device): reload the list and land on a valid session.
+async function resyncSessions() {
+  const navigation = ++state.navigation;
+  setLoading(true);
+  state.current = null;
+  try {
+    await loadSessions();
+  } catch (err) {
+    if (navigation !== state.navigation) return;
+    throw err;
+  } finally {
+    if (navigation === state.navigation) setLoading(false);
+  }
+  if (navigation !== state.navigation) return false;
+  if (state.sessions.length) return openSession(state.sessions[0].id);
+  return Boolean(await createSession());
+}
+
+async function deleteSession(id) {
+  if (!(await confirmDialog("確定要刪除這個對話嗎？"))) return;
+  await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+  state.sessions = state.sessions.filter((s) => s.id !== id);
+  if (state.current === id) {
+    state.current = null;
+    if (state.sessions.length) await openSession(state.sessions[0].id);
+    else await createSession();
+  }
+  renderSessionList();
+}
+
+// --------------------------------------------------------------- sending
+export async function send(text, isRetry) {
+  text = (text || "").trim();
+  if (!text || state.busy || state.loading) return;
+  if (!state.current && !(await createSession())) return;
+  el.input.value = "";
+  autosize();
+  appendMessage("user", text, []);
+  const node = appendMessage("assistant", "", []);
+  await generate(text, node, { isRetry });
+}
+
+// Retry a reply that failed, in the same bubble. With `retryOf` (the stored user
+// message) the server reuses that message instead of saving the text again.
+function retry(node, text, retryOf) {
+  if (state.busy || state.loading) return;
+  node.classList.remove("error");
+  node.querySelector(".bubble").replaceChildren();
+  const tools = node.querySelector(".tools");
+  tools.replaceChildren();
+  tools.hidden = true;
+  node.querySelector(".msg-actions")?.remove();
+  return generate(text, node, { retryOf });
+}
+
+async function generate(text, node, { isRetry = false, retryOf = null } = {}) {
+  const sessionId = state.current;
+  const navigation = state.navigation;
+  setBusy(true);
+  retireSuggestions();
+  const bubble = node.querySelector(".bubble");
+  const tools = node.querySelector(".tools");
+  bubble.classList.add("cursor", "streaming");
+  let acc = "";
+  let done = false;
+  let userMessageId = retryOf;
+  const isCurrentView = () => state.current === sessionId && state.navigation === navigation;
+  const retryHere = () => retry(node, text, userMessageId);
+  showThinking(tools);
+  scrollToBottom(); // once, so the sent message and the reply's start are in view
+
+  try {
+    const res = await api(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
+      method: "POST",
+      body: retryOf ? { text, retry_of: retryOf } : { text },
+    });
+    await readSse(res, (event, data) => {
+      if (event === "user_message") userMessageId = data.id;
+      if (event === "done") done = true;
+      if (!isCurrentView()) return;
+      switch (event) {
+        case "tool_call_start": {
+          hideThinking(tools);
+          const t = toolNode(data.name, data.args, null);
+          t.dataset.call = data.call_id;
+          tools.append(t);
+          tools.hidden = false;
+          break;
+        }
+        case "tool_call_end":
+          finishTool(node, data.call_id, data);
+          showThinking(tools); // model reads the result and thinks again
+          break;
+        case "thinking":
+          appendThought(tools, data.delta);
+          break;
+        case "suggestions":
+          renderSuggestions(node, data.options || []);
+          break;
+        case "memory":
+          memoryNote(node, data);
+          break;
+        case "interim":
+          if (data.discard) bubble.innerHTML = ""; // repeated question, nothing worth keeping
+          else demoteToProgress(tools, bubble, data.text);
+          acc = "";
+          break;
+        case "token":
+          hideThinking(tools);
+          acc += data.delta;
+          if (!bubble.firstChild) bubble.append(document.createTextNode(""));
+          bubble.firstChild.appendData(data.delta);
+          break;
+        case "done":
+          hideThinking(tools);
+          acc = data.content || acc;
+          bubble.classList.remove("streaming");
+          bubble.innerHTML = renderMarkdown(acc);
+          updateScrollHints(bubble);
+          if (acc) addCopyButton(node, acc);
+          break;
+        case "error":
+          hideThinking(tools);
+          // The user message is already stored; retrying must not store it again.
+          showError(node, data.message, retryHere);
+          break;
+      }
+      // no auto-scroll while streaming: the view stays where the user left it
+    });
+    // Returning to an in-flight session may have loaded its unfinished history.
+    if (done && state.current === sessionId && !isCurrentView()) await openSession(sessionId);
+    // The first message names the session server-side; refresh titles.
+    const s = state.sessions.find((x) => x.id === sessionId);
+    if (s && s.message_count === 0) {
+      await loadSessions();
+      const cur = state.sessions.find((x) => x.id === sessionId);
+      if (cur && state.current === sessionId) el.title.textContent = cur.title;
+    } else if (s) {
+      s.message_count += retryOf ? 1 : 2;
+    }
+  } catch (err) {
+    if (!isCurrentView()) return;
+    if (err.status === 404 && !isRetry && !retryOf) {
+      // Stale session (server restarted): resync and resend once.
+      setBusy(false);
+      if (!(await resyncSessions())) return;
+      return await send(text, true);
+    }
+    if (err.code === "retry_stale") {
+      // A reply arrived after all (or the session moved on): show what is stored.
+      setBusy(false);
+      await openSession(sessionId);
+      return;
+    }
+    if (err.code === "consent_required") {
+      showError(node, "請先同意隱私權政策，再重新送出一次。");
+      requestConsent(err.version);
+      return;
+    }
+    if (err.message === "re-login") {
+      showError(node, "登入已過期，重新登入中…");
+    } else if (err.status === 429) {
+      // Daily quota (server sends a Chinese message) or the per-instance burst limiter.
+      const quota = /額度/.test(err.message);
+      showError(node, quota ? err.message : "訊息傳得有點快，等幾秒再試一次。", quota ? null : retryHere);
+    } else {
+      showError(node, `發生錯誤：${err.message}`, retryHere);
+    }
+  } finally {
+    hideThinking(tools);
+    bubble.classList.remove("cursor");
+    setBusy(false);
+  }
+}
