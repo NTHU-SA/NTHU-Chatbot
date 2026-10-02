@@ -46,7 +46,7 @@ async def get(
             follow_redirects=True, headers=_default_headers, timeout=10
         ) as client:
             response = await client.get(
-                url=url, params=params, *args, **kwargs
+                *args, url=url, params=params, **kwargs
             )  # 用 client 層級的預設 timeout
             response.raise_for_status()  # 確保 HTTP 請求成功 (2xx 狀態碼)
         result = response.json()
@@ -55,4 +55,4 @@ async def get(
         return result
     except httpx.HTTPError as e:
         logger.error(f"API request failed for URL: {url}, Error: {e}")
-        raise ValueError(f"API request failed: {e}")
+        raise ValueError(f"API request failed: {e}") from e
