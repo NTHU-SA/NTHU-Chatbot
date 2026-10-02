@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
-# 建立監測與告警：/ping uptime check（同時讓實例保溫）、email 通知、三個告警政策。可重複執行。
+# 建立監測與告警：email 通知、5xx 與 ERROR log 告警；可選的 GCP uptime check。可重複執行。
 #
+# 防冷啟動與存活檢查預設交給外部 ping 服務（GET /ping，間隔 ≤ 10 分鐘），所以預設不建 uptime check。
 # 用法（email 只從環境變數讀，不寫進 repo）：
-#   bash infra/monitoring.sh infra/environments/prod.conf                            # 只建 uptime check
-#   ALERT_EMAIL=you@example.com bash infra/monitoring.sh infra/environments/prod.conf  # 再加上告警
+#   ALERT_EMAIL=you@example.com bash infra/monitoring.sh infra/environments/prod.conf
+#   UPTIME_CHECK=true ALERT_EMAIL=... bash infra/monitoring.sh ...   # 另外建 GCP uptime check 與它的告警
+#   UPTIME_CHECK=true bash infra/monitoring.sh ...                   # 只建 uptime check
 set -euo pipefail
 # Git Bash（Windows）會把 --path=/ping 改寫成檔案路徑；只排除這個參數（Linux 上此變數無作用）
 export MSYS2_ARG_CONV_EXCL="--path="
 export CLOUDSDK_CORE_DISABLE_PROMPTS=1
 
-ENV_FILE="${1:?usage: [ALERT_EMAIL=...] bash infra/monitoring.sh infra/environments/<name>.conf}"
+ENV_FILE="${1:?usage: [UPTIME_CHECK=true] [ALERT_EMAIL=...] bash infra/monitoring.sh infra/environments/<name>.conf}"
 # shellcheck source=/dev/null
 source "$ENV_FILE"
 : "${PROJECT_ID:?}" "${REGION:?}" "${SERVICE:?}"
 PYTHON="${PYTHON:-python}"
+UPTIME_CHECK="${UPTIME_CHECK:-false}"
 UPTIME_PERIOD_MINUTES="${UPTIME_PERIOD_MINUTES:-5}"
 # 5 分鐘內超過幾個 5xx 就告警
 ERROR_5XX_THRESHOLD="${ERROR_5XX_THRESHOLD:-5}"
@@ -21,24 +24,29 @@ G=(gcloud --project="$PROJECT_ID" --quiet)
 
 step() { printf '\n==> %s\n' "$*"; }
 
-step "Uptime check：GET /ping，每 ${UPTIME_PERIOD_MINUTES} 分鐘（同時避免實例閒置被回收）"
-url="$("${G[@]}" run services describe "$SERVICE" --region="$REGION" --format='value(status.url)')"
-host="${url#https://}"
-check_name="${SERVICE}-ping"
-# list-configs 不支援以 displayName 篩選：列出全部後自己比對
-check_id="$("${G[@]}" monitoring uptime list-configs --format='value(name,displayName)' \
-  | tr -d '\r' | awk -v want="$check_name" '$2 == want { print $1; exit }')"
-if [[ -z "$check_id" ]]; then
-  check_id="$("${G[@]}" monitoring uptime create "$check_name" \
-    --resource-type=uptime-url --resource-labels="host=${host},project_id=${PROJECT_ID}" \
-    --protocol=https --path=/ping --period="$UPTIME_PERIOD_MINUTES" --timeout=10 \
-    --matcher-content=pong --matcher-type=contains-string --format='value(name)')"
+check_id=""
+if [[ "$UPTIME_CHECK" == "true" ]]; then
+  step "Uptime check：GET /ping，每 ${UPTIME_PERIOD_MINUTES} 分鐘（同時避免實例閒置被回收）"
+  url="$("${G[@]}" run services describe "$SERVICE" --region="$REGION" --format='value(status.url)')"
+  host="${url#https://}"
+  check_name="${SERVICE}-ping"
+  # list-configs 不支援以 displayName 篩選：列出全部後自己比對
+  check_id="$("${G[@]}" monitoring uptime list-configs --format='value(name,displayName)' \
+    | tr -d '\r' | awk -v want="$check_name" '$2 == want { print $1; exit }')"
+  if [[ -z "$check_id" ]]; then
+    check_id="$("${G[@]}" monitoring uptime create "$check_name" \
+      --resource-type=uptime-url --resource-labels="host=${host},project_id=${PROJECT_ID}" \
+      --protocol=https --path=/ping --period="$UPTIME_PERIOD_MINUTES" --timeout=10 \
+      --matcher-content=pong --matcher-type=contains-string --format='value(name)')"
+  fi
+  check_id="${check_id##*/}"
+  echo "$check_id"
+else
+  step "略過 GCP uptime check（UPTIME_CHECK=false）：防冷啟動與存活檢查由外部 ping 服務負責"
 fi
-check_id="${check_id##*/}"
-echo "$check_id"
 
 if [[ -z "${ALERT_EMAIL:-}" ]]; then
-  step "完成（只建 uptime check）"
+  step "完成"
   echo "沒有設定 ALERT_EMAIL，略過通知管道與告警；決定好告警對象後再帶 ALERT_EMAIL 重跑即可。"
   exit 0
 fi
@@ -84,7 +92,10 @@ def policy(name, documentation, condition):
 
 
 policies = {
-    "uptime": policy(
+}
+# 沒建 uptime check 時不建它的告警
+if os.environ["CHECK_ID"]:
+    policies["uptime"] = policy(
         "uptime check failing",
         f"`/ping` 連續失敗。檢查 Cloud Run `{service}` 的 revision 與啟動 log。",
         {
@@ -106,7 +117,9 @@ policies = {
                 "trigger": {"count": 1},
             }
         },
-    ),
+    )
+
+policies |= {
     "5xx": policy(
         "5xx responses",
         f"`{service}` 5 分鐘內回了超過 {os.environ['THRESHOLD']} 個 5xx。",

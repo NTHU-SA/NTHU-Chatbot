@@ -21,8 +21,8 @@
 
 ```bash
 bash infra/bootstrap.sh infra/environments/<env>.conf                          # 建立 / 校正資源
-bash infra/monitoring.sh infra/environments/<env>.conf                            # 只建 uptime check（保溫）
-ALERT_EMAIL=you@example.com bash infra/monitoring.sh infra/environments/<env>.conf  # 再加上告警
+ALERT_EMAIL=you@example.com bash infra/monitoring.sh infra/environments/<env>.conf  # 5xx 與 ERROR log 告警
+UPTIME_CHECK=true bash infra/monitoring.sh infra/environments/<env>.conf          # 選用：另外建 GCP uptime check
 ```
 
 兩支腳本都可以重複執行：已存在的資源只會被校正。刪除類操作一律不做，只在下面列出指令，由人確認後手動執行。
@@ -49,9 +49,10 @@ Windows 上如果 `python` 不是正確的直譯器，可以加 `PYTHON=.venv/Sc
 ### `monitoring.sh` 做的事
 
 - Email 通知管道（`ALERT_EMAIL` 只從環境變數讀，不會寫進 repo）。
-- Uptime check：每 5 分鐘 `GET /ping`、檢查回應含 `pong`。它也會讓實例保持在溫的狀態，減少冷啟動。
 - Log-based metric：該服務 `severity>=ERROR` 的 log。Cloud Run 上 log 是帶 severity 的 JSON，見 `log.py`。
-- 三個告警：uptime 失敗、5 分鐘內超過 5 個 5xx、出現 ERROR log。
+- 告警：5 分鐘內超過 5 個 5xx、出現 ERROR log。
+- **防冷啟動與存活檢查預設交給外部 ping 服務**：設定成每 5–10 分鐘 `GET <API 網址>/ping`、檢查回應含 `pong`（Cloud Run 閒置約 15 分鐘後回收實例，間隔不要超過 10 分鐘）。`/ping` 不碰資料庫也不呼叫 OpenAI。
+- 只有帶 `UPTIME_CHECK=true` 時才另外建 GCP uptime check（每 5 分鐘、每月前 100 萬次執行免費）與「uptime 失敗」告警。
 
 ## 加入 Secret 值
 
@@ -76,7 +77,7 @@ gcloud secrets versions disable <舊版本號> --secret=<name> --project=<PROJEC
 3. Console → Cloud Build → Repositories：連結 `NTHU-SA/NTHU-Chatbot`（需要 org 管理者同意安裝 Cloud Build GitHub App）。
 4. `bash infra/bootstrap.sh infra/environments/prod.conf`：第一次會停在 Secret 沒有值的那一步。
 5. 依上一節加入三個 Secret 值，再跑一次 bootstrap。
-6. `ALERT_EMAIL=... bash infra/monitoring.sh infra/environments/prod.conf`
+6. `ALERT_EMAIL=... bash infra/monitoring.sh infra/environments/prod.conf`，並把外部 ping 服務指向 prod 的 `/ping`
 7. 把 bootstrap 印出的服務網址填進 `prod.conf` 的 `API_ORIGIN`，`HOSTING_SITE` 填網站 ID；在 GitHub repo 設定印出的兩個 variables（`..._PROD`）。
 8. LINE Developers：Webhook URL 設為 `<服務網址>/callback`、開啟 Use webhook；LIFF Endpoint URL 設為 `https://<HOSTING_SITE>.web.app/`。
 9. 把 `main` 合併一次，觸發 API 與前端的第一次部署，再用 `/ping` 和 LINE 實測。
