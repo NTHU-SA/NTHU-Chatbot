@@ -6,20 +6,6 @@ import { escapeHtml, renderMarkdown, updateScrollHints } from "./markdown.js";
 
 const SUGGEST_TOOL = "suggest_replies";
 
-// Friendly names for the tool cards; the raw name stays in the tooltip.
-const TOOL_LABELS = {
-  search_campus: "查校園地點",
-  get_next_buses: "查公車時刻",
-  get_bus_stops: "查公車站牌",
-  search_courses: "查課程",
-  get_announcements: "查公告",
-  find_dining: "查餐廳",
-  get_library_info: "查圖書館",
-  get_newsletters: "查電子報",
-  get_energy_usage: "查用電",
-  web_search: "搜尋清大網站",
-};
-
 const TOOL_ICON =
   '<svg viewBox="0 0 24 24" aria-hidden="true">' +
   '<circle class="ring" cx="12" cy="12" r="9"/>' +
@@ -44,7 +30,7 @@ export function appendMessage(role, content, toolCalls) {
   let shown = 0;
   for (const tc of toolCalls) {
     if (tc.name === SUGGEST_TOOL) continue; // rendered as chips below the bubble
-    tools.append(toolNode(tc.name, tc.args, tc, true));
+    tools.append(toolNode(tc.name, tc.args, tc, true, tc.title));
     shown++;
   }
   tools.hidden = shown === 0;
@@ -154,7 +140,7 @@ function toolLabel(status) {
 
 // `done` is null while running, otherwise {ok, duration_ms, result_preview}.
 // `isStatic` renders the final state without replaying the animation (history).
-export function toolNode(name, args, done, isStatic) {
+export function toolNode(name, args, done, isStatic, title) {
   const status = done ? (done.ok ? "ok" : "err") : "running";
   const d = document.createElement("details");
   d.className = "tool " + status + (isStatic ? " static" : "");
@@ -167,7 +153,7 @@ export function toolNode(name, args, done, isStatic) {
   label.textContent = toolLabel(status);
   const nm = document.createElement("span");
   nm.className = "name";
-  nm.textContent = TOOL_LABELS[name] || name;
+  nm.textContent = title || name;
   nm.title = name;
   summary.append(icon, label, nm);
   if (done && done.duration_ms != null) {

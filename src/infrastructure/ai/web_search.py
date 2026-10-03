@@ -19,7 +19,8 @@ from openai import AsyncOpenAI
 from src.application.models.profile import clean_text
 from src.infrastructure.ai.run_state import begin_external_call
 
-WEB_SEARCH = "web_search"
+WEB_SEARCH = "nthu_web_search"
+WEB_SEARCH_TITLE = "搜尋清大官方網站"
 MAX_QUERY_CHARS = 200
 MAX_SUMMARY_CHARS = 3000
 MAX_SOURCES = 8
@@ -61,7 +62,7 @@ def _sources(response: Any, domains: tuple[str, ...]) -> list[dict[str, str]]:
 
 def build_web_search_tool(client: AsyncOpenAI, model: str, domains: tuple[str, ...], on_error):
     @function_tool(name_override=WEB_SEARCH, failure_error_function=on_error)
-    async def web_search(query: str) -> str:
+    async def nthu_web_search(query: str) -> str:
         """
         在清大官方網站（nthu.edu.tw 與其子網域）搜尋資訊，回傳摘要與來源網址。
 
@@ -90,4 +91,4 @@ def build_web_search_tool(client: AsyncOpenAI, model: str, domains: tuple[str, .
             {"summary": summary, "sources": _sources(response, domains)}, ensure_ascii=False
         )
 
-    return web_search
+    return nthu_web_search

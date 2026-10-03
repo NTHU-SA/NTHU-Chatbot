@@ -150,6 +150,7 @@ async def test_web_search_returns_only_allowed_https_sources(run_state):
         responses=SimpleNamespace(create=AsyncMock(return_value=fake_response()))
     )
     tool = build_web_search_tool(client, "test-model", ("nthu.edu.tw",), _tool_error_message)
+    assert tool.name == "nthu_web_search"
     result = json.loads(await call_search(tool, "註冊\n時間<script>"))
     assert result["summary"] == "摘要 [1]"
     assert [s["url"] for s in result["sources"]] == [
@@ -207,12 +208,13 @@ def tool_names(runner):
 
 
 def test_web_search_requires_responses_api():
-    assert "web_search" not in tool_names(AgentRunner(make_settings()))
-    assert "web_search" not in tool_names(AgentRunner(make_settings(web_search_enabled=True)))
+    assert "nthu_web_search" not in tool_names(AgentRunner(make_settings()))
+    assert "nthu_web_search" not in tool_names(AgentRunner(make_settings(web_search_enabled=True)))
     enabled = AgentRunner(make_settings(web_search_enabled=True, openai_use_responses_api=True))
-    assert "web_search" in tool_names(enabled)
+    assert "nthu_web_search" in tool_names(enabled)
+    assert "web_search" not in tool_names(enabled)
     instructions = agent_runner._instructions(SimpleNamespace(context=None), enabled._agent)
-    assert "web_search 只會搜尋清大官方網站" in instructions
+    assert "nthu_web_search 只會搜尋清大官方網站" in instructions
     plain = AgentRunner(make_settings())
     assert "網路搜尋" not in agent_runner._instructions(SimpleNamespace(context=None), plain._agent)
 

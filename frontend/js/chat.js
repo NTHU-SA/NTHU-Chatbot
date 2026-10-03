@@ -185,7 +185,7 @@ async function generate(text, node, { isRetry = false, retryOf = null } = {}) {
       switch (event) {
         case "tool_call_start": {
           hideThinking(tools);
-          const t = toolNode(data.name, data.args, null);
+          const t = toolNode(data.name, data.args, null, false, data.title);
           t.dataset.call = data.call_id;
           tools.append(t);
           tools.hidden = false;
