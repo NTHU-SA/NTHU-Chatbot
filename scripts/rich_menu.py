@@ -100,10 +100,6 @@ rich_menu_list = [
                     action=MessageAction(label="校園公佈欄", text="@學生餐廳"),
                 ),
                 RichMenuArea(
-                    bounds=RichMenuBounds(x=1700, y=270, width=700, height=300),
-                    action=MessageAction(label="載物書院", text="@載物書院"),
-                ),
-                RichMenuArea(
                     bounds=RichMenuBounds(x=100, y=630, width=2300, height=300),
                     action=URIAction(label="和本汪聊天", uri=liff_url(LIFF_ID)),
                 ),
