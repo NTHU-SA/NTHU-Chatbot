@@ -28,6 +28,7 @@ function renderSessionList() {
     btn.className = "sess-btn";
     btn.type = "button";
     btn.textContent = s.title || "新對話";
+    if (s.id === state.current) btn.setAttribute("aria-current", "true");
     btn.addEventListener("click", () => { openSession(s.id); closeSidebar(); });
     const del = document.createElement("button");
     del.className = "del-btn";
@@ -139,8 +140,8 @@ export async function send(text, isRetry) {
   if (!state.current && !(await createSession())) return;
   el.input.value = "";
   autosize();
-  appendMessage("user", text, []);
-  const node = appendMessage("assistant", "", []);
+  appendMessage("user", text, [], { animate: true });
+  const node = appendMessage("assistant", "", [], { animate: true });
   await generate(text, node, { isRetry });
 }
 

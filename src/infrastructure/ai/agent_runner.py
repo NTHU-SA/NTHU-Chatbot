@@ -298,7 +298,7 @@ class AgentRunner:
             )
 
         self._agent = Agent(
-            name="狗狗情報員",
+            name="清華校園情報員",
             instructions=_instructions,
             model=model,
             model_settings=model_settings,

@@ -267,9 +267,15 @@ async def weekend_restaurants_command(event):
     schedule = params.get("schedule", "today")
     if schedule not in {"today", "weekday", "saturday", "sunday"}:
         return [TextMessage(text="未知的營業日，請重新選擇")]
-    restaurant_data = await nthuapi.get(
-        "/dining/open", params={"schedule": schedule}, cache=schedule != "today"
+    # 上游已移除 /dining/open，改以 /dining/?schedule= 篩選營業中的餐廳（依大樓分組）
+    building_data = await nthuapi.get(
+        DINING_API_ENDPOINT, params={"schedule": schedule}, cache=schedule != "today"
     )
+    restaurant_data = [
+        restaurant
+        for building in building_data or []
+        for restaurant in building.get("restaurants") or []
+    ]
     if not restaurant_data:
         return ERROR_MESSAGE
 

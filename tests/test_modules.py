@@ -113,7 +113,7 @@ async def test_library_empty_space_returns_text():
 
 
 # -- dining --
-async def test_dining_weekend_uses_open_endpoint_and_selected_day():
+async def test_dining_weekend_filters_by_schedule_and_flattens_buildings():
     restaurants = [
         {
             "area": "Food Court",
@@ -124,9 +124,10 @@ async def test_dining_weekend_uses_open_endpoint_and_selected_day():
             "schedule": {"weekday": "09:00-17:00", "saturday": "10:00-14:00"},
         }
     ]
-    with fake_api(dining, restaurants) as get:
+    buildings = [{"building": "Food Court", "restaurants": restaurants}, {"building": "Empty"}]
+    with fake_api(dining, buildings) as get:
         messages = await dining.weekend_restaurants_command(command(schedule="saturday"))
-    get.assert_awaited_once_with("/dining/open", params={"schedule": "saturday"}, cache=True)
+    get.assert_awaited_once_with("/dining/", params={"schedule": "saturday"}, cache=True)
     column = messages[0].template.columns[0]
     assert "10:00-14:00" in column.text
     assert "09:00-17:00" not in column.text
@@ -225,6 +226,21 @@ async def test_map_missing_location_query_does_not_call_api():
 
 
 # -- registration --
+async def test_legacy_magic_share_command_uses_new_branding_without_duplicate_menu_entry():
+    from src.app.handlers.command_handler import command_handler
+
+    old = await command_handler.process_message("@神奇海螺/分享狗狗情報員", "user")
+    new = await command_handler.process_message("@神奇海螺/分享清華校園情報員", "user")
+
+    assert [message.to_dict() for message in old] == [message.to_dict() for message in new]
+    assert old[0].text == "汪！歡迎分享給更多朋友認識我！"
+
+    menu = await command_handler.process_message("@神奇海螺", "user")
+    titles = [column.title for message in menu for column in message.template.columns]
+    assert titles.count("分享清華校園情報員") == 1
+    assert "分享狗狗情報員" not in titles
+
+
 def test_tzaiwu_module_is_removed():
     """載物書院功能已停用：指令前綴與模組都不能再被註冊。"""
     from src.app.handlers.command_handler import command_handler

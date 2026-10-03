@@ -25,4 +25,4 @@ def test_bubble_variants():
 
     greeting = open_web_chat(LIFF_ID, greeting=True)
     assert greeting.contents.footer.contents[0].action.label == "開始和本汪聊天"
-    assert "狗狗情報員" in greeting.alt_text
+    assert "清華校園情報員" in greeting.alt_text

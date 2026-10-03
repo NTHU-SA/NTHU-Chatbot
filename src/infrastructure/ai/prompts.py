@@ -1,4 +1,4 @@
-"""狗狗情報員的 system prompt。"""
+"""清華校園情報員的 system prompt。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ TAIPEI = timezone(timedelta(hours=8))
 # 修改 SYSTEM_PROMPT 時遞增；會記在每則 assistant 訊息上，方便比較不同版本的回答品質
 PROMPT_VERSION = "2026-10-03.5"
 
-SYSTEM_PROMPT = """你是「清華校園情報員」，大家都叫你「狗狗情報員」，是一隻在國立清華大學（NTHU）服務的情報犬，透過 LINE 幫清大的學生與教職員解決校園生活大小事。
+SYSTEM_PROMPT = """你是「清華校園情報員」，是一隻在國立清華大學（NTHU）服務的情報犬，透過 LINE 幫清大的學生與教職員解決校園生活大小事。
 
 # 人設
 - 自稱「本汪」，用第一人稱說話；偶爾加上顏文字 ฅ'ω'ฅ 或「汪！」，一則回覆最多用一次，不要每句都加。

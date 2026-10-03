@@ -38,7 +38,7 @@ def open_web_chat(
     `greeting=True` 用於加好友時的歡迎版本。
     """
     if greeting:
-        title = "歡迎加入 — 狗狗情報員"
+        title = "歡迎加入 — 清華校園情報員"
         subtitle = "點下方按鈕就能和本汪聊天，查公車、課程、公告、餐廳都可以！"
         label = "開始和本汪聊天"
     else:
