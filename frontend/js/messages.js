@@ -35,9 +35,10 @@ export function clearMessages() {
   }
 }
 
-export function appendMessage(role, content, toolCalls) {
+export function appendMessage(role, content, toolCalls, { animate = false } = {}) {
   const node = el.tplMessage.content.firstElementChild.cloneNode(true);
   node.classList.add(role);
+  if (animate) node.classList.add("arriving");
   const bubble = node.querySelector(".bubble");
   bubble.innerHTML = role === "assistant" ? renderMarkdown(content) : escapeHtml(content);
   const tools = node.querySelector(".tools");

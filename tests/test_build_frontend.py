@@ -36,7 +36,16 @@ def test_config_json_holds_only_public_values(built):
     }
     assert "must-not-leak" not in (built / "public" / "config.json").read_text(encoding="utf-8")
     assert (built / "public" / "js" / "main.js").exists()
+    assert (built / "public" / "js" / "theme.js").exists()
     assert not (built / "public" / "config.example.json").exists()
+
+
+def test_theme_initializes_before_styles_on_both_pages(built):
+    for name in ("index.html", "privacy.html"):
+        html = (built / "public" / name).read_text(encoding="utf-8")
+        assert html.index('<script src="./js/theme.js"></script>') < html.index(
+            '<link rel="stylesheet" href="./style.css">'
+        )
 
 
 def test_privacy_page_shows_the_backend_policy_version(built, monkeypatch):
