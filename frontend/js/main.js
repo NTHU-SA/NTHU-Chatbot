@@ -35,7 +35,7 @@ function bindUi() {
     if (!el.sidebar.classList.contains("open") || el.app.inert || !el.overlay.hidden || document.querySelector("dialog[open]")) return;
     if (e.key === "Escape") closeSidebar();
     if (e.key !== "Tab") return;
-    const controls = [...el.sidebar.querySelectorAll("button:not(:disabled), a[href]")];
+    const controls = [...el.sidebar.querySelectorAll("button:not(:disabled), select:not(:disabled), a[href]")];
     const first = controls[0];
     const last = controls[controls.length - 1];
     if (!el.sidebar.contains(document.activeElement) || (e.shiftKey && document.activeElement === first)) {

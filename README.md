@@ -72,11 +72,15 @@ pyproject.toml / uv.lock          依賴（執行期、dev、test group）與工
 
 程式沿用 `src/{app,application,core,infrastructure}` 分層，而不是資訊處開發守則給新專案的 `src/<package>/`：這個 repo 早於守則，搬移會改動所有 import，目前沒有實際好處。
 
-前端 CSS 的顏色、字型、字級、間距與圓角一律使用 `frontend/style.css` `:root` 的變數（深色模式只覆寫顏色變數），不要在規則裡寫死數值。
+前端 CSS 的顏色、字型、字級、間距與圓角一律使用 `frontend/style.css` `:root` 的變數（深色模式透過 `data-theme` 覆寫顏色變數），不要在規則裡寫死數值。
 
 對話介面採 Soft Glass 風格，主色沿用 richmenu 常用功能頁籤的灰紫色 `#7362a2`，搭配淡紫白背景與有限的玻璃層次（工具列、側欄、輸入框）。不支援 `backdrop-filter` 時使用實心表面；深色模式另設對比色票。新訊息才播放入場動畫，載入歷史訊息不重播；所有動畫回應 `prefers-reduced-motion`。圖示使用頁內 SVG，不需額外下載字型或圖示套件。
 
 輸入框上方固定顯示 AI 回覆可能出錯的提醒，並以 `aria-describedby` 關聯到輸入欄位。
+
+側欄「外觀」可選擇跟隨系統、淺色或深色，預設跟隨系統。選擇僅保存在此瀏覽器的 `localStorage`（`nthu-chatbot-theme`），不送到後端；對話頁與隱私頁共用設定。`frontend/js/theme.js` 在 CSS 載入前套用外觀，避免手動深色設定閃成淺色；儲存被瀏覽器阻擋時仍可切換，並顯示無法保存的提醒。
+
+外觀設定的無相依測試：`node --test tests\frontend_theme.test.cjs`。
 
 ## 本機開發
 

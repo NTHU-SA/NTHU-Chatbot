@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="color-scheme" content="light dark">
   <title>清華校園情報員</title>
+  <script src="./js/theme.js"></script>
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
@@ -37,6 +38,15 @@
       </div>
       <ul id="sessionList" class="session-list"></ul>
       <p class="sidebar-note">最多保留 50 則對話；新增對話時，最久未更新的對話會被自動刪除。</p>
+      <div class="sidebar-theme">
+        <label for="themeSelect">外觀</label>
+        <select id="themeSelect" aria-describedby="themeStatus">
+          <option value="system">跟隨系統</option>
+          <option value="light">淺色</option>
+          <option value="dark">深色</option>
+        </select>
+        <p id="themeStatus" class="theme-status" role="status" hidden></p>
+      </div>
       <div class="sidebar-section" aria-label="隱私權與資料">
         <button id="profileBtn" class="side-link" type="button">我的資料（稱呼、系所、記住的事）</button>
         <a class="side-link" href="./privacy.html" target="_blank" rel="noopener">隱私權政策</a>
