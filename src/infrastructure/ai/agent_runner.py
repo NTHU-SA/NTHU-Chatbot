@@ -9,8 +9,8 @@
   memory          {action, items}  個人化工具寫入了稱呼 / 系所 / 記憶（action: saved / forgotten）
   interim         {text, discard}  呼叫工具前講的過場句；前端把它從回答移到「過程」卡片，
                                    discard=true 時只清掉（模型在 suggest_replies 後重講了問題）
-  tool_call_start {call_id, name, args}
-  tool_call_end   {call_id, name, ok, duration_ms, result_preview}
+  tool_call_start {call_id, name, title, args}
+  tool_call_end   {call_id, name, title, ok, duration_ms, result_preview}
   token           {delta}
   done            {content, tool_calls, usage}   usage 只給後端存檔，不送前端
   error           {message}
@@ -49,7 +49,7 @@ from src.infrastructure.ai.personal_tools import (
 )
 from src.infrastructure.ai.prompts import build_instructions
 from src.infrastructure.ai.run_state import RUN, RunState, begin_external_call
-from src.infrastructure.ai.web_search import build_web_search_tool
+from src.infrastructure.ai.web_search import WEB_SEARCH, WEB_SEARCH_TITLE, build_web_search_tool
 
 TOOL_ERROR_PREFIX = "[TOOL_ERROR]"
 SUGGEST_TOOL = "suggest_replies"
@@ -182,7 +182,7 @@ def _usage(result: Any) -> dict[str, int] | None:
 
 def _instructions(ctx, agent) -> str:
     context = ctx.context if isinstance(getattr(ctx, "context", None), ChatContext) else None
-    web_search = any(getattr(tool, "name", "") == "web_search" for tool in agent.tools)
+    web_search = any(getattr(tool, "name", "") == WEB_SEARCH for tool in agent.tools)
     if context is None:
         return build_instructions(web_search=web_search)
     return build_instructions(
@@ -238,6 +238,7 @@ class AgentRunner:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._connected = False
+        self._tool_titles: dict[str, str] = {WEB_SEARCH: WEB_SEARCH_TITLE}
 
         # 一個共用的 client；官方 OpenAI 或任何 OpenAI 相容端點都可用。
         client = AsyncOpenAI(
@@ -332,6 +333,10 @@ class AgentRunner:
             return
         await self._mcp.connect()
         tools = await self._mcp.list_tools()
+        for tool in tools:
+            title = tool.title or (tool.annotations.title if tool.annotations else None)
+            if title:
+                self._tool_titles[tool.name] = title
         self._connected = True
         logger.info("MCP connected: {} tools available", len(tools))
 
@@ -403,6 +408,7 @@ class AgentRunner:
                     raw = item.raw_item
                     call_id = getattr(raw, "call_id", None) or f"call_{len(pending)}"
                     name = getattr(raw, "name", "unknown")
+                    title = self._tool_titles.get(name)
                     args = _parse_args(getattr(raw, "arguments", None))
                     if name == SUGGEST_TOOL:
                         # 不是真的查資料：轉成快速回覆選項，並記進 tool_calls 供重新載入時重繪
@@ -434,7 +440,7 @@ class AgentRunner:
                     pending[call_id] = (name, args, time.monotonic())
                     yield AgentEvent(
                         "tool_call_start",
-                        {"call_id": call_id, "name": name, "args": args},
+                        {"call_id": call_id, "name": name, "title": title, "args": args},
                     )
 
                 elif event.name == "tool_output":
@@ -456,6 +462,7 @@ class AgentRunner:
                     ok = not output_text.startswith(TOOL_ERROR_PREFIX)
                     tool_call = ToolCall(
                         name=name,
+                        title=self._tool_titles.get(name),
                         args=args,
                         result_preview=_preview(output_text, preview_chars),
                         duration_ms=int((time.monotonic() - started) * 1000),
@@ -467,6 +474,7 @@ class AgentRunner:
                         {
                             "call_id": call_id,
                             "name": name,
+                            "title": tool_call.title,
                             "ok": ok,
                             "duration_ms": tool_call.duration_ms,
                             "result_preview": tool_call.result_preview,
