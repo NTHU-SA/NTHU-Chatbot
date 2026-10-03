@@ -27,6 +27,7 @@ from src.app.handlers.command_handler import command_handler
         ),
     ],
 )
+@command_handler.add_command("分享狗狗情報員")
 def share_template(event):
     # 分享給好友
     share_template_json = {

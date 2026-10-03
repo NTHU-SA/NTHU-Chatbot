@@ -392,6 +392,7 @@ button:disabled { cursor: not-allowed; }
 .send-btn:disabled { background: var(--disabled-bg); color: var(--disabled-ink); cursor: not-allowed; }
 .composer.busy .send-btn .icon { display: none; }
 .composer.busy .send-btn::after { content: ""; width: var(--icon-size); height: var(--icon-size); border: 2px solid var(--disabled-ink); border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---- overlay / dialog ---- */
 .overlay {
