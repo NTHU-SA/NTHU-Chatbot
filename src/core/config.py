@@ -117,7 +117,7 @@ class Settings:
     # LLM（任何 OpenAI 相容端點）
     openai_api_key: str = field(repr=False)
     openai_base_url: str | None = None
-    openai_model: str = "gpt-4.1-mini"
+    openai_model: str = "gpt-6-luna"
     openai_use_responses_api: bool = False
     # 串流模型的思考摘要給前端（僅 reasoning 模型 + Responses API 有效）
     reasoning_summary: bool = False
@@ -187,7 +187,7 @@ class Settings:
             liff_id=os.environ["LIFF_ID"],
             openai_api_key=os.environ["OPENAI_API_KEY"],
             openai_base_url=os.getenv("OPENAI_BASE_URL") or None,
-            openai_model=os.getenv("OPENAI_MODEL") or "gpt-4.1-mini",
+            openai_model=os.getenv("OPENAI_MODEL") or "gpt-6-luna",
             openai_use_responses_api=_bool(os.getenv("OPENAI_USE_RESPONSES_API"), False),
             reasoning_summary=_bool(os.getenv("REASONING_SUMMARY"), False),
             mcp_server_url=os.getenv("MCP_SERVER_URL") or "https://api.nthusa.tw/mcp",
