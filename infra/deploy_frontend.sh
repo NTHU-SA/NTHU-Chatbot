@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 手動部署 LIFF 前端到 Firebase Hosting（平常由 CI 在 push 到 dev / main 後自動部署）。
+# 手動部署 LIFF 前端到 Firebase Hosting（平常由 CI 在合併進 main 或推送版本 tag 後自動部署）。
 #
 #   LIFF_ID=... bash infra/deploy_frontend.sh infra/environments/staging.conf
 #   （沒給 LIFF_ID 時沿用該環境 Cloud Run 服務上的值）

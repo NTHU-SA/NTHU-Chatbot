@@ -1,0 +1,64 @@
+# Cloud Build（prod）：push 版本 tag（vX.Y.Z）時執行，不重新建置。
+#
+# 把 staging 為同一個 commit 建好、已在 staging 驗證過的映像提升為 prod 映像並部署，
+# prod 跑的就是 staging 測過的那一份。下列情況直接失敗、不會部署：
+# - tag 與 pyproject.toml 的 version 不符；
+# - 找不到 staging 映像：commit 不在 main 上、staging 還沒建置完成，或映像已被清理規則刪除。
+# 環境變數、Secret 與資源設定都在 Cloud Run 服務上（由 infra/bootstrap.sh 建立），這裡不碰。
+
+substitutions:
+  _AR_HOSTNAME: asia-northeast1-docker.pkg.dev
+  _AR_REPOSITORY: cloud-run-source-deploy
+  _DEPLOY_REGION: asia-northeast1
+  _SERVICE_NAME: nthu-chatbot
+  _SOURCE_SERVICE: nthu-chatbot-staging
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  dynamicSubstitutions: true
+
+steps:
+  - id: Check version
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        version="$(sed -nE 's/^version = "(.+)"$/\1/p' pyproject.toml)"
+        if [[ "${TAG_NAME}" != "v$${version}" ]]; then
+          echo "tag ${TAG_NAME} 與 pyproject.toml 的 version（$${version}）不符" >&2
+          exit 1
+        fi
+
+  - id: Promote
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        src="${_AR_HOSTNAME}/${PROJECT_ID}/${_AR_REPOSITORY}/nthu-chatbot/${_SOURCE_SERVICE}:${COMMIT_SHA}"
+        dst="${_AR_HOSTNAME}/${PROJECT_ID}/${_AR_REPOSITORY}/nthu-chatbot/${_SERVICE_NAME}"
+        if ! docker pull "$$src"; then
+          echo "找不到 staging 映像 $$src：commit 不在 main 上、staging 還沒建置完成，或映像已被清理" >&2
+          exit 1
+        fi
+        for tag in "${TAG_NAME}" "${COMMIT_SHA}"; do
+          docker tag "$$src" "$$dst:$$tag"
+          docker push "$$dst:$$tag"
+        done
+        # 以 digest 部署：之後就算 tag 被改，這次部署的映像也不會變
+        docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$$dst:${TAG_NAME}" \
+          | grep -m1 "^$$dst@" > /workspace/image
+        cat /workspace/image
+
+  - id: Deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        release="${TAG_NAME}"
+        gcloud run services update "${_SERVICE_NAME}" --platform=managed --region="${_DEPLOY_REGION}" \
+          --image="$(cat /workspace/image)" \
+          --labels="managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=${COMMIT_SHA},gcb-build-id=${BUILD_ID},release=$${release//./-}" \
+          --quiet
