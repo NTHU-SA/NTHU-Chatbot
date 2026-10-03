@@ -113,7 +113,7 @@ async def test_library_empty_space_returns_text():
 
 
 # -- dining --
-async def test_dining_weekend_uses_open_endpoint_and_selected_day():
+async def test_dining_weekend_filters_by_schedule_and_flattens_buildings():
     restaurants = [
         {
             "area": "Food Court",
@@ -124,9 +124,10 @@ async def test_dining_weekend_uses_open_endpoint_and_selected_day():
             "schedule": {"weekday": "09:00-17:00", "saturday": "10:00-14:00"},
         }
     ]
-    with fake_api(dining, restaurants) as get:
+    buildings = [{"building": "Food Court", "restaurants": restaurants}, {"building": "Empty"}]
+    with fake_api(dining, buildings) as get:
         messages = await dining.weekend_restaurants_command(command(schedule="saturday"))
-    get.assert_awaited_once_with("/dining/open", params={"schedule": "saturday"}, cache=True)
+    get.assert_awaited_once_with("/dining/", params={"schedule": "saturday"}, cache=True)
     column = messages[0].template.columns[0]
     assert "10:00-14:00" in column.text
     assert "09:00-17:00" not in column.text
