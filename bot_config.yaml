@@ -18,5 +18,3 @@ modules:
     prefix: 地圖
   menu:
     prefix: 選單
-  tzaiwu:
-    prefix: 載物書院
