@@ -222,7 +222,7 @@ staging 與 prod 在同一個 GCP 專案，Firestore 資料庫、Secret、servic
 
 | | staging | prod |
 | --- | --- | --- |
-| 分支 | `dev` | `main` |
+| 部署時機 | 合併進 `main` | 推送版本 tag `vX.Y.Z` |
 | GCP 專案 | `nthusa-chatbot` | `nthusa-chatbot`（Firestore 資料庫 `prod`、Secret 加 `-prod`） |
 | API | Cloud Run `nthu-chatbot-staging` | Cloud Run `nthu-chatbot` |
 | 前端 | `nthusa-chatbot.web.app` | `nthusa-chatbot-prod.web.app` |
@@ -232,17 +232,32 @@ LINE_LOGIN_CHANNEL_ID=... LIFF_ID=... bash infra/bootstrap.sh infra/environments
 ALERT_EMAIL=you@example.com bash infra/monitoring.sh infra/environments/prod.conf  # 5xx 與 ERROR log 告警（防冷啟動用外部 ping 服務）
 ```
 
-- **API**：push 到對應分支 → Cloud Build（`cloudbuild.yaml`，專用的最小權限部署 SA）建置映像 → 只更新 Cloud Run 的映像。環境變數與 Secret 設定在服務上，每個 revision 自動沿用。`--timeout=180` 必須大於 120 秒的 agent 上限。
-- **前端**：push 到 `dev` / `main` 且測試通過後，CI 以 Workload Identity Federation 部署到 Hosting（`infra/build_frontend.py` 依環境產生 `config.json` 與 CSP）；手動部署用 `bash infra/deploy_frontend.sh infra/environments/<env>.conf`。
+- **API**：合併進 `main` → Cloud Build（`cloudbuild.yaml`，專用的最小權限部署 SA）建置映像 → 只更新 staging 的 Cloud Run 映像。推送版本 tag → `cloudbuild.release.yaml` **不重新建置**，把 staging 為同一個 commit 建好的映像提升為 prod 並部署；tag 與 `pyproject.toml` 的 version 不符、或 commit 不在 `main` 上（沒有 staging 映像）時直接失敗。環境變數與 Secret 設定在服務上，每個 revision 自動沿用。`--timeout=180` 必須大於 120 秒的 agent 上限。
+- **前端**：push 到 `main`（staging）或版本 tag（prod）且測試通過後，CI 以 Workload Identity Federation 部署到 Hosting（`infra/build_frontend.py` 依環境產生 `config.json` 與 CSP），版本 tag 同樣先檢查版本號與是否在 `main` 上；手動部署用 `bash infra/deploy_frontend.sh infra/environments/<env>.conf`。
 - **監測**：Cloud Run 上的 log 是帶 `severity` 的 JSON，可用 `severity>=ERROR` 篩選；`infra/monitoring.sh` 建立 5xx 與 ERROR log 告警。防冷啟動與存活檢查由外部 ping 服務定期打 `/ping`（間隔 ≤ 10 分鐘）；支援 `GET`（回傳 `{"message":"pong"}`）與 `HEAD`（回傳 `200`、無 body，適用 UptimeRobot）。需要時可用 `UPTIME_CHECK=true` 改建 GCP uptime check。
 - 部署後把 API 網址填進 LINE Webhook、Hosting 網址填進 LIFF Endpoint URL，再驗證 `/ping`、LINE Verify、指令查詢，以及聊天室提問 → 開啟 LIFF → 串流回覆。
 - 更新 Secret 後要部署新 revision 才會生效；不得在 Cloud Run 設定 `FIRESTORE_EMULATOR_HOST`。建議設定 GCP 與 LLM 供應商的預算告警。
 
 ## 開發流程
 
-### 分支
+### 分支與發版
 
-功能分支 → PR 到 `dev`（部署 staging，在 LINE 實測）→ PR `dev` → `main`（部署 prod）。建議在 `main`、`dev` 開啟 branch protection：必須經過 PR 且 CI 通過。
+只有一個長期分支 `main`；staging 與 prod 用版本 tag 區分，不再用分支區分。
+
+1. 功能分支 → PR 到 `main`，一律 **squash merge**（一個 PR 在 `main` 上就是一個 commit，標題沿用 PR 標題）。
+2. 合併後自動部署 staging，在 LINE 實測。
+3. 要上 prod 時，開一個 PR 把 `pyproject.toml` 的 `version` 改成新版本並合併，等 staging 部署完成、確認沒問題後，在該 commit 打 tag 並推送：
+
+   ```bash
+   git switch main && git pull
+   git tag -a v0.2.0 -m "v0.2.0"
+   git push origin v0.2.0
+   ```
+
+4. tag 觸發 prod 部署（API 與前端），沿用 staging 驗證過的同一個映像。
+
+`main` 有 branch protection（必須經過 PR、1 個 approval、CI 通過、不能 force push 或刪除）；`v*` tag 有 tag ruleset，只有管理員能建立、更新或刪除，避免沒經過 review 的 commit 被打 tag 上 prod。
+回滾：在 Cloud Run 把流量切回前一個 revision，或對舊 tag 重跑 prod trigger（`gcloud builds triggers run deploy-nthu-chatbot --tag=v0.1.0 --region=global`）。版本 tag 的映像會一直保留；staging 映像只保留最新 10 個，其餘 7 天後刪除，所以要發版的 commit 請在合併後一週內打 tag（過期的話對該 commit 重跑一次 staging trigger 即可重建）。
 
 ### 依賴管理
 
@@ -276,21 +291,21 @@ npx firebase-tools emulators:exec --only firestore --project demo-nthu-chatbot "
 
 ### CI
 
-`.github/workflows/ci.yml` 在每個 PR 與每次 push 到 `main` / `dev` 時執行：`uv sync --locked` → pre-commit（isort、Black、Ruff、uv.lock）→ 在 Firestore emulator 下執行 `pytest --cov`；另一個 job 建置正式映像並確認 `/ping` 會回應（smoke test）。push 時測試通過後再部署前端。
+`.github/workflows/ci.yml` 在每個 PR、每次 push 到 `main` 與每個版本 tag 執行：`uv sync --locked` → pre-commit（isort、Black、Ruff、uv.lock）→ 前端的 Node 測試（`node --test tests/*.test.cjs`）→ 在 Firestore emulator 下執行 `pytest --cov`；另一個 job 建置正式映像並確認 `/ping` 會回應（smoke test）。push 時測試通過後再部署前端（`main` → staging、tag → prod）。
 SonarQube Cloud 由學生會從 SonarQube 端直接連結 repo，不在 CI 裡另外跑掃描。
 workflow 預設只有 `contents: read`，只有部署 job 能取得 OIDC token；第三方 action 都釘選 commit SHA。
 
 ### PR
 
-PR 標題用 `<type>: <description>`，分支用 [conventional branch](https://conventionalbranch.org/)（例如 `fix/retry-duplicates`）。PR 內容依 `.github/pull_request_template.md`：Features / Fixes / Refactors / Internal / Documentations / Notes，沒有的寫 N/A；Validation 只列實際跑過的檢查；介面變更附前後截圖。`CODEOWNERS` 會自動請 maintainer review。
+PR 標題用 `<type>: <description>`，分支用 [conventional branch](https://conventionalbranch.org/)（例如 `fix/retry-duplicates`）。PR 內容依 `.github/pull_request_template.md`：Features / Fixes / Refactors / Internal / Documentations / Notes，沒有的寫 N/A；Validation 只列實際跑過的檢查；介面變更附前後截圖。`CODEOWNERS` 會自動請 maintainer review。合併一律用 squash merge，PR 標題就是 `main` 上的 commit 訊息。
 
 ### 版本
 
-`pyproject.toml` 的 `version` 依 [SemVer](https://semver.org/)：修 bug 遞增 PATCH、新功能遞增 MINOR、不相容的變更遞增 MAJOR。
+`pyproject.toml` 的 `version` 依 [SemVer](https://semver.org/)：修 bug 遞增 PATCH、新功能遞增 MINOR、不相容的變更遞增 MAJOR。只在發版時遞增，並打同名的 tag（`version = "0.2.0"` ↔ `v0.2.0`）；prod 部署會檢查兩者一致。
 
 ### Commit messages
 
-使用 conventional commits：`feat:`、`fix:`、`docs:`、`style:`、`refactor:`、`perf:`、`test:`、`chore:`、`ci:`、`revert:`；破壞相容性時加 `!` 並在內文寫 `BREAKING CHANGE:`。依元件拆成小 commit，內文說明原因。
+使用 conventional commits：`feat:`、`fix:`、`docs:`、`style:`、`refactor:`、`perf:`、`test:`、`chore:`、`ci:`、`revert:`；破壞相容性時加 `!` 並在內文寫 `BREAKING CHANGE:`。PR 分支內依元件拆成小 commit、內文說明原因方便 review；合併時會 squash 成一個，所以 PR 標題也要符合這個格式。
 
 ## 附錄
 

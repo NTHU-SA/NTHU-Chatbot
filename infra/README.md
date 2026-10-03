@@ -9,8 +9,9 @@
 | Firestore 資料庫 | `(default)` | `prod` |
 | Secret | `openai-api-key`、`line-channel-secret`、`line-channel-access-token` | 同名加 `-prod` |
 | Service accounts | `nthu-chatbot`、`nthu-chatbot-deployer`、`nthu-chatbot-hosting` | `nthu-chatbot-prod`、`nthu-chatbot-prod-deployer`、`nthu-chatbot-prod-hosting` |
-| WIF pool（GitHub Actions 部署前端） | `github-actions`（只信任 `refs/heads/dev`） | `github-actions-prod`（只信任 `refs/heads/main`） |
-| 部署來源 | `NTHU-SA/NTHU-Chatbot` 的 `dev` | `NTHU-SA/NTHU-Chatbot` 的 `main` |
+| WIF pool（GitHub Actions 部署前端） | `github-actions`（只信任 `refs/heads/main`） | `github-actions-prod`（只信任 `refs/tags/v*`） |
+| 部署來源 | `NTHU-SA/NTHU-Chatbot` 合併進 `main` | `NTHU-SA/NTHU-Chatbot` 的版本 tag `vX.Y.Z` |
+| Cloud Build | `cloudbuild.yaml`（建置映像） | `cloudbuild.release.yaml`（沿用 staging 同一個 commit 的映像，不重新建置） |
 | Cloud Run | `nthu-chatbot-staging` | `nthu-chatbot` |
 | LINE | 測試用 Provider 的頻道 | 正式 Provider（Messaging API 與 LINE Login 必須在**同一個 Provider**） |
 | Firestore 刪除保護 | 關 | 開 |
@@ -19,10 +20,10 @@
 權限隔離：
 - 執行期 SA 的 `roles/datastore.user` 帶 IAM condition，只能存取自己的 Firestore 資料庫；Secret 逐一授權。
 - 部署 SA 的 `roles/run.developer` 只授予自己的 Cloud Run 服務（不是整個專案），只能代理自己的執行期 SA。
-- WIF 每個環境一個 pool：principalSet 是以 pool 為範圍，共用 pool 時 `dev` 的 token 也能代理 prod 的 SA。
-- 仍共用的部分：帳單、專案層級的 Owner / Editor、Artifact Registry repo（映像依服務分開路徑），以及 Hosting 部署 SA 的 `firebasehosting.admin`（專案層級，靠 branch protection 與 WIF 的 ref 限制保護）。正式資料的存取請只給少數維運帳號。
+- WIF 每個環境一個 pool：principalSet 是以 pool 為範圍，共用 pool 時 `main` 的 token 也能代理 prod 的 SA。
+- 仍共用的部分：帳單、專案層級的 Owner / Editor、Artifact Registry repo（映像依服務分開路徑；prod 部署 SA 從 staging 的路徑讀取映像），以及 Hosting 部署 SA 的 `firebasehosting.admin`（專案層級，靠 branch protection、tag ruleset 與 WIF 的 ref 限制保護）。正式資料的存取請只給少數維運帳號。
 
-兩個環境共用 repo 根目錄的 `cloudbuild.yaml`，差別只在 trigger 的 substitutions。
+staging 用 `cloudbuild.yaml` 建置；prod 用 `cloudbuild.release.yaml`：檢查 tag 等於 `pyproject.toml` 的 version，把 `nthu-chatbot-staging:<commit>` 複製成 `nthu-chatbot:<tag>`，以 digest 部署。staging 沒建過這個 commit（不在 `main` 上）時找不到映像而失敗。
 前端由 CI（`.github/workflows/ci.yml` 的 `deploy-frontend`）部署到 Firebase Hosting；`infra/build_frontend.py` 依環境設定檔產生 `config.json`（只有公開的 LIFF ID 與 API 網址）和 CSP（`connect-src` 只允許該環境的 API）。
 
 ## LINE 頻道設定（不寫在 repo）
@@ -54,7 +55,7 @@ Windows 上如果 `python` 不是正確的直譯器，可以加 `PYTHON=.venv/Sc
 
 1. 啟用需要的 API；把專案加入 Firebase（**不可逆**，只能刪除整個專案）並建立 Hosting 網站。
 2. 建立 Firestore `(default)`（Native mode），發布 `firestore.rules`（全部拒絕），套用 `firestore.indexes.json` 的索引豁免。
-3. 建立 Artifact Registry，設定清理規則：保留最新 3 個、刪除 7 天前的映像。
+3. 建立 Artifact Registry，設定清理規則：版本 tag（`v` 開頭）的映像永久保留（回滾用），其餘保留最新 10 個、超過 7 天刪除。
 4. 建立兩個 service account，只給最小權限：
 
    | SA | 權限 |
@@ -62,10 +63,10 @@ Windows 上如果 `python` 不是正確的直譯器，可以加 `PYTHON=.venv/Sc
    | `nthu-chatbot`（執行期） | `datastore.user`；三個 Secret **個別**授予 `secretAccessor` |
    | `nthu-chatbot-deployer`（Cloud Build） | `run.developer`、`logging.logWriter`、只限該 AR repo 的 `artifactregistry.writer`、只能代理執行期 SA 的 `iam.serviceAccountUser` |
 
-5. GitHub Actions 部署前端用的 Workload Identity Federation：provider 只信任 `GITHUB_OWNER/GITHUB_REPO` 在 `DEPLOY_REF` 上的 workflow，換到的身分是只有 `firebasehosting.admin` 的 `nthu-chatbot-hosting` SA；不產生任何金鑰。
+5. GitHub Actions 部署前端用的 Workload Identity Federation：provider 只信任 `GITHUB_OWNER/GITHUB_REPO` 在 `DEPLOY_REF` 上的 workflow（結尾 `*` 為前綴比對，prod 是 `refs/tags/v*`），換到的身分是只有 `firebasehosting.admin` 的 `nthu-chatbot-hosting` SA；不產生任何金鑰。
 6. 建立 Secret（只建容器，不碰值）；任何 Secret 還沒有值時會停下來。
 7. 建立或更新 Cloud Run 服務：環境變數（含 `CORS_ALLOWED_ORIGINS` = Hosting 的兩個預設網域）、Secret 掛載、`--timeout=180 --concurrency=40 --cpu-boost`、`min-instances=0`，並開放公開呼叫（webhook 與 API 自己驗證簽章和 id_token）。
-8. 建立 Cloud Build trigger（`deploy-<service>`），使用 `cloudbuild.yaml` 和部署 SA。
+8. 建立或校正 Cloud Build trigger（`deploy-<service>`）：conf 的 `BRANCH_REGEX`（staging）或 `TAG_REGEX`（prod）擇一、`BUILD_CONFIG`（預設 `cloudbuild.yaml`）、substitutions，使用部署 SA。
 9. 最後印出要設定的 GitHub repo variables（`GCP_WIF_PROVIDER_<ENV>`、`GCP_HOSTING_SA_<ENV>`，不是機密）。設定後 CI 才會部署前端，沒設定時該 job 會略過。
 
 ### `monitoring.sh` 做的事
@@ -104,7 +105,7 @@ gcloud secrets versions disable <舊版本號> --secret=<name> --project=<PROJEC
 6. `ALERT_EMAIL=... bash infra/monitoring.sh infra/environments/prod.conf`，並把外部 ping 服務指向 prod 的 `/ping`
 7. 確認 bootstrap 印出的服務網址與 `prod.conf` 的 `API_ORIGIN` 相同；在 GitHub repo 設定印出的兩個 variables（`..._PROD`），以及 `LIFF_ID_PROD`。
 8. LINE Developers：Webhook URL 設為 `<服務網址>/callback`、開啟 Use webhook；LIFF Endpoint URL 設為 `https://nthusa-chatbot-prod.web.app/`；用正式 bot 的 token 部署 rich menu（`uv run python -m scripts.rich_menu`）。
-9. 把 `main` 合併一次，觸發 API 與前端的第一次部署，再用 `/ping` 和 LINE 實測。
+9. 依 README「分支與發版」打第一個版本 tag，觸發 API 與前端的第一次部署，再用 `/ping` 和 LINE 實測。
 
 ## 把 staging 校正到同一套設定
 
