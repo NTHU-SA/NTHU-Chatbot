@@ -1,6 +1,6 @@
-# Cloud Build：建置映像 → 推到 Artifact Registry → 只更新 Cloud Run 服務的映像。
+# Cloud Build（staging）：push 到 main 時建置映像 → 推到 Artifact Registry → 只更新 Cloud Run 服務的映像。
 #
-# staging（dev 分支）與 prod（main 分支）共用這份設定，差異只在各自 trigger 的 substitutions。
+# prod 不用這份：打版本 tag 時由 cloudbuild.release.yaml 把這裡建好的同一個映像提升為 prod。
 # 環境變數、Secret 掛載、資源與縮放設定都在 Cloud Run 服務上（由 infra/bootstrap.sh 建立），
 # 這裡刻意不碰，避免部署時把服務設定覆蓋掉。
 

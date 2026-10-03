@@ -21,13 +21,19 @@ ENV_FILE="${1:?usage: bash infra/bootstrap.sh infra/environments/<name>.conf}"
 # shellcheck source=/dev/null
 source "$ENV_FILE"
 
-: "${PROJECT_ID:?}" "${REGION:?}" "${SERVICE:?}" "${GITHUB_OWNER:?}" "${GITHUB_REPO:?}" "${BRANCH_REGEX:?}"
+: "${PROJECT_ID:?}" "${REGION:?}" "${SERVICE:?}" "${GITHUB_OWNER:?}" "${GITHUB_REPO:?}"
 : "${OPENAI_MODEL:?}" "${MAX_INSTANCES:?}"
 : "${HOSTING_SITE:?}" "${DEPLOY_REF:?}"
 if grep -q "REPLACE_ME" "$ENV_FILE"; then
   echo "${ENV_FILE} 還有 REPLACE_ME 沒填" >&2
   exit 1
 fi
+# 部署觸發：staging 用 BRANCH_REGEX（合併進 main），prod 用 TAG_REGEX（版本 tag），兩者擇一
+if [[ -n "${BRANCH_REGEX:-}" && -n "${TAG_REGEX:-}" ]] || [[ -z "${BRANCH_REGEX:-}${TAG_REGEX:-}" ]]; then
+  echo "${ENV_FILE} 必須設定 BRANCH_REGEX 或 TAG_REGEX 其中一個" >&2
+  exit 1
+fi
+BUILD_CONFIG="${BUILD_CONFIG:-cloudbuild.yaml}"
 DELETE_PROTECTION="${DELETE_PROTECTION:-true}"
 AR_REPOSITORY="${AR_REPOSITORY:-cloud-run-source-deploy}"
 RUNTIME_SA_NAME="${RUNTIME_SA_NAME:-nthu-chatbot}"
@@ -170,14 +176,15 @@ PY
   echo "  ${group}.${field} ${ttl}"
 done
 
-step "Artifact Registry：${AR_REPOSITORY}（保留最新 3 個、刪除 7 天前）"
+step "Artifact Registry：${AR_REPOSITORY}（保留版本 tag 與最新 10 個、其餘 7 天後刪除）"
 if ! "${G[@]}" artifacts repositories describe "$AR_REPOSITORY" --location="$REGION" >/dev/null 2>&1; then
   "${G[@]}" artifacts repositories create "$AR_REPOSITORY" --location="$REGION" --repository-format=docker
 fi
 policy_file="$(mktemp)"
 cat >"$policy_file" <<'JSON'
 [
-  {"name": "keep-latest-3", "action": {"type": "Keep"}, "mostRecentVersions": {"keepCount": 3}},
+  {"name": "keep-releases", "action": {"type": "Keep"}, "condition": {"tagState": "TAGGED", "tagPrefixes": ["v"]}},
+  {"name": "keep-latest-10", "action": {"type": "Keep"}, "mostRecentVersions": {"keepCount": 10}},
   {"name": "delete-older-than-7d", "action": {"type": "Delete"}, "condition": {"olderThan": "7d"}}
 ]
 JSON
@@ -210,12 +217,17 @@ step "部署 SA 權限：寫 log、推映像，且只能代理執行期 SA（Clo
   --member="serviceAccount:${DEPLOYER_SA}" --role=roles/iam.serviceAccountUser >/dev/null
 
 step "GitHub Actions 部署前端：Workload Identity Federation（不使用任何金鑰）"
-# 只有 ${GITHUB_OWNER}/${GITHUB_REPO} 在 ${DEPLOY_REF} 上執行的 workflow 能換到憑證
+# 只有 ${GITHUB_OWNER}/${GITHUB_REPO} 在 ${DEPLOY_REF} 上執行的 workflow 能換到憑證（結尾 * 為前綴比對）
 project_number="$("${G[@]}" projects describe "$PROJECT_ID" --format='value(projectNumber)')"
 if ! "${G[@]}" iam workload-identity-pools describe "$WIF_POOL" --location=global >/dev/null 2>&1; then
   "${G[@]}" iam workload-identity-pools create "$WIF_POOL" --location=global --display-name="GitHub Actions"
 fi
-condition="assertion.repository == '${GITHUB_OWNER}/${GITHUB_REPO}' && assertion.ref == '${DEPLOY_REF}'"
+if [[ "$DEPLOY_REF" == *"*" ]]; then
+  ref_condition="assertion.ref.startsWith('${DEPLOY_REF%"*"}')"
+else
+  ref_condition="assertion.ref == '${DEPLOY_REF}'"
+fi
+condition="assertion.repository == '${GITHUB_OWNER}/${GITHUB_REPO}' && ${ref_condition}"
 provider_flags=(
   --location=global --workload-identity-pool="$WIF_POOL"
   --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref"
@@ -290,14 +302,23 @@ fi
 "${G[@]}" run services add-iam-policy-binding "$SERVICE" --region="$REGION" \
   --member=allUsers --role=roles/run.invoker >/dev/null
 
-step "Cloud Build trigger：${GITHUB_OWNER}/${GITHUB_REPO} ${BRANCH_REGEX} → ${SERVICE}"
+if [[ -n "${BRANCH_REGEX:-}" ]]; then
+  trigger_on=(--branch-pattern="$BRANCH_REGEX")
+else
+  trigger_on=(--tag-pattern="$TAG_REGEX")
+fi
+step "Cloud Build trigger：${GITHUB_OWNER}/${GITHUB_REPO} ${trigger_on[*]} → ${SERVICE}（${BUILD_CONFIG}）"
 trigger_name="deploy-${SERVICE}"
 substitutions="_AR_HOSTNAME=${REGION}-docker.pkg.dev,_AR_REPOSITORY=${AR_REPOSITORY},_DEPLOY_REGION=${REGION},_SERVICE_NAME=${SERVICE}"
+[[ -n "${SOURCE_SERVICE:-}" ]] && substitutions+=",_SOURCE_SERVICE=${SOURCE_SERVICE}"
 if "${G[@]}" builds triggers describe "$trigger_name" >/dev/null 2>&1; then
-  echo "已存在（設定變更請用 gcloud builds triggers update）"
+  # 已存在的 trigger 也校正成 conf 的設定（觸發條件、build 設定檔、substitutions）
+  "${G[@]}" builds triggers update github "$trigger_name" "${trigger_on[@]}" \
+    --build-config="$BUILD_CONFIG" --update-substitutions="$substitutions" >/dev/null
+  echo "已校正"
 elif ! "${G[@]}" builds triggers create github --name="$trigger_name" \
-    --repo-owner="$GITHUB_OWNER" --repo-name="$GITHUB_REPO" --branch-pattern="$BRANCH_REGEX" \
-    --build-config=cloudbuild.yaml --substitutions="$substitutions" \
+    --repo-owner="$GITHUB_OWNER" --repo-name="$GITHUB_REPO" "${trigger_on[@]}" \
+    --build-config="$BUILD_CONFIG" --substitutions="$substitutions" \
     --service-account="projects/${PROJECT_ID}/serviceAccounts/${DEPLOYER_SA}"; then
   echo "建立失敗：多半是這個專案還沒連上 GitHub。請先在 Console → Cloud Build → Repositories"
   echo "連結 ${GITHUB_OWNER}/${GITHUB_REPO}（安裝 Cloud Build GitHub App），再重跑本腳本。"
