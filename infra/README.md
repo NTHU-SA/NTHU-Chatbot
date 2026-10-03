@@ -73,7 +73,7 @@ Windows 上如果 `python` 不是正確的直譯器，可以加 `PYTHON=.venv/Sc
 - Email 通知管道（`ALERT_EMAIL` 只從環境變數讀，不會寫進 repo）。
 - Log-based metric：該服務 `severity>=ERROR` 的 log。Cloud Run 上 log 是帶 severity 的 JSON，見 `log.py`。
 - 告警：5 分鐘內超過 5 個 5xx、出現 ERROR log。
-- **防冷啟動與存活檢查預設交給外部 ping 服務**：設定成每 5–10 分鐘 `GET <API 網址>/ping`、檢查回應含 `pong`（Cloud Run 閒置約 15 分鐘後回收實例，間隔不要超過 10 分鐘）。`/ping` 不碰資料庫也不呼叫 OpenAI。
+- **防冷啟動與存活檢查預設交給外部 ping 服務**：設定成每 5–10 分鐘 `GET <API 網址>/ping`、檢查回應含 `pong`，或讓 UptimeRobot 使用 `HEAD <API 網址>/ping`、檢查 HTTP 狀態碼為 `200`（HEAD 無 body，不做關鍵字檢查）。Cloud Run 閒置約 15 分鐘後回收實例，間隔不要超過 10 分鐘。`/ping` 不碰資料庫也不呼叫 OpenAI。
 - 只有帶 `UPTIME_CHECK=true` 時才另外建 GCP uptime check（每 5 分鐘、每月前 100 萬次執行免費）與「uptime 失敗」告警。
 
 ## 加入 Secret 值
