@@ -13,6 +13,9 @@
     <symbol id="icon-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h12M4 18h16"/></symbol>
     <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="icon-system" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M12 17v4M8 21h8"/></symbol>
+    <symbol id="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></symbol>
+    <symbol id="icon-moon" viewBox="0 0 24 24"><path d="M20.5 13A9 9 0 0 1 11 3.5 9 9 0 1 0 20.5 13Z"/></symbol>
     <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
     <symbol id="icon-bus" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="16" rx="3"/><path d="M5 11h14M8 19v2m8-2v2M9 6h6M8 15h1m6 0h1"/></symbol>
     <symbol id="icon-dining" viewBox="0 0 24 24"><path d="M5 3v5a3 3 0 0 0 6 0V3M8 3v18M19 21V3c-4 2-4 7-4 10h4"/></symbol>
@@ -39,18 +42,17 @@
       <ul id="sessionList" class="session-list"></ul>
       <p class="sidebar-note">最多保留 50 則對話；新增對話時，最久未更新的對話會被自動刪除。</p>
       <div class="sidebar-theme">
-        <label for="themeSelect">外觀</label>
-        <select id="themeSelect" aria-describedby="themeStatus">
-          <option value="system">跟隨系統</option>
-          <option value="light">淺色</option>
-          <option value="dark">深色</option>
-        </select>
+        <span id="themeLabel">外觀</span>
+        <div class="theme-options" role="group" aria-labelledby="themeLabel" aria-describedby="themeStatus">
+          <button class="icon-btn theme-btn" type="button" data-theme-preference="system" aria-label="跟隨系統" title="跟隨系統" aria-pressed="true"><svg class="icon" aria-hidden="true"><use href="#icon-system"/></svg></button>
+          <button class="icon-btn theme-btn" type="button" data-theme-preference="light" aria-label="淺色" title="淺色" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#icon-sun"/></svg></button>
+          <button class="icon-btn theme-btn" type="button" data-theme-preference="dark" aria-label="深色" title="深色" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#icon-moon"/></svg></button>
+        </div>
         <p id="themeStatus" class="theme-status" role="status" hidden></p>
       </div>
       <div class="sidebar-section" aria-label="隱私權與資料">
         <button id="profileBtn" class="side-link" type="button">我的資料（稱呼、系所、記住的事）</button>
         <a class="side-link" href="./privacy.html" target="_blank" rel="noopener">隱私權政策</a>
-        <button id="revokeBtn" class="side-link" type="button">撤回同意</button>
         <button id="deleteDataBtn" class="side-link danger" type="button">刪除我的所有資料</button>
       </div>
       <div id="userBox" class="user-box"></div>
@@ -100,7 +102,7 @@
         <li>你的提問會送到 <strong>OpenAI（美國）</strong>產生回答，並查詢清大校園資料服務。</li>
         <li>對話紀錄存在 <strong>Google Cloud（東京）</strong>，其他使用者看不到；只有維運的學生會成員在除錯或處理申訴必要時才會存取，且會留下紀錄。每人最多保留 50 則對話。</li>
         <li>我們只保存 LINE 顯示名稱、頭像、使用紀錄，以及你選擇提供的稱呼、系所與要本汪記住的事，不會拿來做廣告或分享給其他人。</li>
-        <li>你可以隨時在側欄撤回同意，或刪除你的所有資料。</li>
+        <li>你可以隨時在側欄刪除你的所有資料。</li>
       </ul>
       <p><a href="./privacy.html" target="_blank" rel="noopener">閱讀完整隱私權政策</a></p>
       <p id="consentStale" class="consent-note" role="alert" hidden>隱私權政策剛更新，請稍後重新開啟頁面再同意。</p>

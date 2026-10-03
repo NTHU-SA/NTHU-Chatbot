@@ -39,16 +39,16 @@ def test_new_user_must_consent_before_ai_chat(client, runner):
     assert send(client, session_id).status_code == 200
 
 
-def test_revoking_consent_blocks_ai_chat_again(client, chat_app):
+def test_removed_revocation_endpoint_does_not_change_consent(client, chat_app):
     client.post(CONSENT, headers=AUTH, json={"version": "1"})
     session_id = session(client)
     assert send(client, session_id).status_code == 200
 
-    revoked = client.post(f"{CONSENT}/revoke", headers=AUTH)
-    assert revoked.json()["accepted"] is False
-    assert send(client, session_id).status_code == 403
+    assert client.post(f"{CONSENT}/revoke", headers=AUTH).status_code == 404
+    assert client.get("/api/me", headers=AUTH).json()["consent"]["accepted"] is True
+    assert send(client, session_id).status_code == 200
     audit = chat_app.state.user_store.audit[user_id(chat_app)]
-    assert [entry["action"] for entry in audit] == ["consent", "revoke"]
+    assert [entry["action"] for entry in audit] == ["consent"]
 
 
 def test_accepting_a_stale_version_is_rejected(client):

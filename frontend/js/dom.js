@@ -27,7 +27,6 @@ export const el = {
   consent: $("consent"),
   consentAccept: $("consentAccept"),
   consentStale: $("consentStale"),
-  revokeBtn: $("revokeBtn"),
   deleteDataBtn: $("deleteDataBtn"),
   profileBtn: $("profileBtn"),
   scrollBtn: $("scrollBtn"),
@@ -45,6 +44,8 @@ export const state = {
 };
 
 let retryHandler = null;
+let followingLatest = true;
+export const desktopLayout = matchMedia("(min-width: 1024px)");
 
 // `onRetry` replaces what the retry button does (default: restart the page boot).
 export function showOverlay(text, retry, onRetry) {
@@ -59,7 +60,37 @@ export const overlayRetryHandler = () => retryHandler;
 export const hideOverlay = () => (el.overlay.hidden = true);
 
 export function scrollToBottom() {
+  followingLatest = true;
   el.messages.scrollTop = el.messages.scrollHeight;
+  updateScrollButton();
+}
+
+export function bindMessageScrolling() {
+  let frame = null;
+  const schedule = () => {
+    if (frame !== null) return;
+    frame = requestAnimationFrame(() => {
+      frame = null;
+      if (followingLatest) scrollToBottom();
+      else updateScrollButton();
+    });
+  };
+  const resize = new ResizeObserver(schedule);
+  resize.observe(el.messages);
+  const observeMessages = () => {
+    resize.disconnect();
+    resize.observe(el.messages);
+    for (const child of el.messages.children) resize.observe(child);
+    schedule();
+  };
+  new MutationObserver(observeMessages).observe(el.messages, {
+    childList: true, subtree: true, characterData: true, attributes: true,
+  });
+  observeMessages();
+  el.messages.addEventListener("scroll", () => {
+    followingLatest = el.messages.scrollHeight - el.messages.clientHeight - el.messages.scrollTop < 48;
+    updateScrollButton();
+  }, { passive: true });
 }
 
 // Placeholder while a session's history loads.
@@ -69,7 +100,7 @@ export function showLoading(on) {
   if (on) el.empty.hidden = true;
 }
 
-// The view never auto-scrolls while streaming, so offer a way back down.
+// Offer a way back down while the user is reading earlier messages.
 export function updateScrollButton() {
   const fromBottom = el.messages.scrollHeight - el.messages.clientHeight - el.messages.scrollTop;
   el.scrollBtn.hidden = fromBottom < 120;
@@ -132,6 +163,7 @@ export function confirmDialog(text, okLabel = "刪除") {
 }
 
 export function openSidebar() {
+  if (desktopLayout.matches) return;
   el.sidebar.inert = false;
   el.sidebar.setAttribute("aria-hidden", "false");
   el.sidebar.classList.add("open");
@@ -141,6 +173,7 @@ export function openSidebar() {
 }
 
 export function closeSidebar() {
+  if (desktopLayout.matches) return;
   if (!el.sidebar.classList.contains("open")) return;
   el.menuBtn.focus();
   el.sidebar.inert = true;
@@ -148,4 +181,14 @@ export function closeSidebar() {
   el.sidebar.classList.remove("open");
   el.backdrop.hidden = true;
   el.menuBtn.setAttribute("aria-expanded", "false");
+}
+
+export function syncSidebarLayout() {
+  const hadFocus = el.sidebar.contains(document.activeElement);
+  el.sidebar.inert = !desktopLayout.matches;
+  el.sidebar.setAttribute("aria-hidden", String(!desktopLayout.matches));
+  el.sidebar.classList.toggle("open", desktopLayout.matches);
+  el.backdrop.hidden = true;
+  el.menuBtn.setAttribute("aria-expanded", String(desktopLayout.matches));
+  if (hadFocus) (desktopLayout.matches ? el.input : el.menuBtn).focus();
 }

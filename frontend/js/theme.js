@@ -22,8 +22,9 @@
     document.documentElement.dataset.theme = preference === "system"
       ? (systemTheme.matches ? "dark" : "light")
       : preference;
-    const select = document.getElementById("themeSelect");
-    if (select) select.value = preference;
+    for (const button of document.querySelectorAll("[data-theme-preference]")) {
+      button.setAttribute("aria-pressed", String(button.dataset.themePreference === preference));
+    }
   }
 
   try {
@@ -51,17 +52,17 @@
   });
 
   function bindControls() {
-    const select = document.getElementById("themeSelect");
-    if (!select) return;
-    select.value = preference;
+    const buttons = document.querySelectorAll("[data-theme-preference]");
+    applyTheme();
     showStorageWarning();
-    select.addEventListener("change", () => {
-      if (!preferences.includes(select.value)) {
+    for (const button of buttons) button.addEventListener("click", () => {
+      const next = button.dataset.themePreference;
+      if (!preferences.includes(next)) {
         console.warn("Ignoring an invalid theme selection.");
         applyTheme();
         return;
       }
-      preference = select.value;
+      preference = next;
       applyTheme();
       try {
         localStorage.setItem(storageKey, preference);
