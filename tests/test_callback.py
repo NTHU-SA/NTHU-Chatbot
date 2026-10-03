@@ -153,7 +153,8 @@ def test_help_command_renders_usage_bubble(post, webhook_app):
         post([event(text="@說明")])
     (message,) = replied_messages(webhook_app)
     assert message.type == "flex"
-    assert message.alt_text == "狗狗情報員使用說明"
+    assert message.alt_text == "清華校園情報員使用說明"
+    assert message.contents.header.contents[0].wrap is True
     assert message.contents.footer.contents[0].action.uri == LIFF_BASE
     body_text = str(message.contents.body.contents)
     assert "@公車" in body_text
@@ -168,7 +169,7 @@ def test_follow_sends_welcome_and_liff_button(post, webhook_app):
     )
     messages = replied_messages(webhook_app)
     assert [m.type for m in messages] == ["text", "flex"]
-    assert "狗狗情報員" in messages[0].text
+    assert "清華校園情報員" in messages[0].text
     assert messages[1].contents.footer.contents[0].action.uri == LIFF_BASE
 
 

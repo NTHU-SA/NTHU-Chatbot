@@ -59,7 +59,8 @@ def help_message(prefixes: list[str], liff_id: str | None = None) -> FlexMessage
             "contents": [
                 {
                     "type": "text",
-                    "text": "狗狗情報員使用說明 ฅ'ω'ฅ",
+                    "text": "清華校園情報員使用說明 ฅ'ω'ฅ",
+                    "wrap": True,
                     "color": "#FFFFFF",
                     "weight": "bold",
                     "size": "md",
@@ -86,4 +87,4 @@ def help_message(prefixes: list[str], liff_id: str | None = None) -> FlexMessage
                 }
             ],
         }
-    return FlexMessage(alt_text="狗狗情報員使用說明", contents=FlexContainer.from_dict(bubble))
+    return FlexMessage(alt_text="清華校園情報員使用說明", contents=FlexContainer.from_dict(bubble))

@@ -4,21 +4,36 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="color-scheme" content="light dark">
-  <title>狗狗情報員</title>
+  <title>清華校園情報員</title>
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
+  <svg class="icon-defs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="icon-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h12M4 18h16"/></symbol>
+    <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
+    <symbol id="icon-bus" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="16" rx="3"/><path d="M5 11h14M8 19v2m8-2v2M9 6h6M8 15h1m6 0h1"/></symbol>
+    <symbol id="icon-dining" viewBox="0 0 24 24"><path d="M5 3v5a3 3 0 0 0 6 0V3M8 3v18M19 21V3c-4 2-4 7-4 10h4"/></symbol>
+    <symbol id="icon-book" viewBox="0 0 24 24"><path d="M12 5v16M3 3c4-1 6 0 9 2 3-2 5-3 9-2v16c-4-1-6 0-9 2-3-2-5-3-9-2Z"/></symbol>
+    <symbol id="icon-course" viewBox="0 0 24 24"><path d="m2 9 10-5 10 5-10 5ZM6 11v6c4 3 8 3 12 0v-6m4-2v8"/></symbol>
+    <symbol id="icon-paw" viewBox="0 0 64 64"><ellipse cx="15" cy="24" rx="5" ry="7" transform="rotate(-25 15 24)"/><ellipse cx="26" cy="16" rx="5" ry="7" transform="rotate(-10 26 16)"/><ellipse cx="39" cy="16" rx="5" ry="7" transform="rotate(10 39 16)"/><ellipse cx="50" cy="24" rx="5" ry="7" transform="rotate(25 50 24)"/><path d="M19 39c4-4 6-12 13-12s9 8 13 12c8 9 2 17-5 14-5-2-11-2-16 0-7 3-13-5-5-14Z"/></symbol>
+  </svg>
+  <a class="skip-link" href="#input">跳到輸入問題</a>
   <div id="app" class="app">
     <header class="topbar">
-      <button id="menuBtn" class="icon-btn" type="button" aria-label="開啟對話列表" aria-controls="sidebar" aria-expanded="false">☰</button>
-      <h1 id="sessionTitle" class="title">狗狗情報員</h1>
-      <button id="newBtn" class="icon-btn" type="button" aria-label="新對話">＋</button>
+      <button id="menuBtn" class="icon-btn" type="button" aria-label="開啟對話列表" title="開啟對話列表" aria-controls="sidebar" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="#icon-menu"/></svg></button>
+      <div class="title-group">
+        <h1 id="sessionTitle" class="title">清華校園情報員</h1>
+        <p class="title-caption">清華校園情報員</p>
+      </div>
+      <button id="newBtn" class="icon-btn" type="button" aria-label="新對話" title="新對話"><svg class="icon" aria-hidden="true"><use href="#icon-plus"/></svg></button>
     </header>
 
     <aside id="sidebar" class="sidebar" aria-label="對話列表" aria-hidden="true" inert>
       <div class="sidebar-head">
         <span>我的對話</span>
-        <button id="closeSidebar" class="icon-btn" type="button" aria-label="關閉">×</button>
+        <button id="closeSidebar" class="icon-btn" type="button" aria-label="關閉對話列表" title="關閉對話列表"><svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg></button>
       </div>
       <ul id="sessionList" class="session-list"></ul>
       <p class="sidebar-note">最多保留 50 則對話；新增對話時，最久未更新的對話會被自動刪除。</p>
@@ -37,27 +52,33 @@
         <div class="skeleton"></div><div class="skeleton short"></div><div class="skeleton"></div>
       </div>
       <div id="empty" class="empty">
-        <p class="empty-title">汪！想查什麼？ฅ'ω'ฅ</p>
+        <div class="empty-mark" aria-hidden="true"><svg><use href="#icon-paw"/></svg></div>
+        <h2 class="empty-title">汪！想查什麼？ฅ'ω'ฅ</h2>
         <div class="chips">
-          <button class="chip" type="button" data-q="下一班往南大的公車幾點？">🚌 往南大的公車</button>
-          <button class="chip" type="button" data-q="現在有哪些餐廳開著？">🍱 現在開的餐廳</button>
-          <button class="chip" type="button" data-q="總圖現在還有討論室嗎？">📚 總圖討論室</button>
-          <button class="chip" type="button" data-q="幫我找資工系的機器學習課程">🎓 找課程</button>
+          <button class="chip" type="button" data-q="下一班往南大的公車幾點？"><svg class="icon" aria-hidden="true"><use href="#icon-bus"/></svg>往南大的公車</button>
+          <button class="chip" type="button" data-q="現在有哪些餐廳開著？"><svg class="icon" aria-hidden="true"><use href="#icon-dining"/></svg>現在開的餐廳</button>
+          <button class="chip" type="button" data-q="總圖現在還有討論室嗎？"><svg class="icon" aria-hidden="true"><use href="#icon-book"/></svg>總圖討論室</button>
+          <button class="chip" type="button" data-q="幫我找資工系的機器學習課程"><svg class="icon" aria-hidden="true"><use href="#icon-course"/></svg>找課程</button>
         </div>
       </div>
     </main>
 
-    <button id="scrollBtn" class="scroll-btn" type="button" aria-label="回到最新訊息" hidden>↓ 最新</button>
-    <form id="composer" class="composer">
-      <textarea id="input" rows="1" placeholder="輸入問題…" maxlength="2000" autocomplete="off" enterkeyhint="send"></textarea>
-      <button id="sendBtn" class="send-btn" type="submit" aria-label="送出" disabled>➤</button>
-    </form>
+    <button id="scrollBtn" class="scroll-btn" type="button" aria-label="回到最新訊息" hidden><svg class="icon" aria-hidden="true"><use href="#icon-arrow"/></svg>最新</button>
+    <footer id="composerDock" class="composer-dock">
+      <p id="aiNotice" class="composer-note">AI 的回覆可能會出錯，若有任何疑問歡迎聯繫開發者</p>
+      <form id="composer" class="composer">
+        <label class="sr-only" for="input">輸入問題</label>
+        <textarea id="input" rows="1" placeholder="輸入問題…" aria-describedby="aiNotice" maxlength="2000" autocomplete="off" enterkeyhint="send"></textarea>
+        <button id="sendBtn" class="send-btn" type="submit" aria-label="送出" title="送出" disabled><svg class="icon" aria-hidden="true"><use href="#icon-arrow"/></svg></button>
+      </form>
+    </footer>
+    <span id="composerStatus" class="sr-only" role="status"></span>
   </div>
 
   <div id="overlay" class="overlay">
     <div class="overlay-card">
       <div class="spinner" aria-hidden="true"></div>
-      <p id="overlayText">連線中…</p>
+      <p id="overlayText" role="status">連線中…</p>
       <button id="overlayRetry" class="btn" type="button" hidden>重試</button>
     </div>
   </div>
@@ -106,7 +127,7 @@
     </form>
   </dialog>
 
-  <dialog id="confirmDlg" class="dialog">
+  <dialog id="confirmDlg" class="dialog" aria-labelledby="confirmText">
     <form method="dialog">
       <p id="confirmText">確定要刪除這個對話嗎？</p>
       <div class="dialog-actions">

@@ -14,8 +14,8 @@ from src.app.handlers.command_handler import command_handler
 
 
 @command_handler.add_command_with_menu(
-    name="分享狗狗情報員",
-    title="分享狗狗情報員",
+    name="分享清華校園情報員",
+    title="分享清華校園情報員",
     description="快讓更多朋友認識情報員吧！\n我會很開心哦！",
     actions=[
         PostbackAction(

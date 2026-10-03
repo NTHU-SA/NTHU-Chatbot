@@ -31,7 +31,24 @@ function bindUi() {
   for (const chip of document.querySelectorAll(".chip")) {
     chip.addEventListener("click", () => send(chip.dataset.q));
   }
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSidebar(); });
+  document.addEventListener("keydown", (e) => {
+    if (!el.sidebar.classList.contains("open") || el.app.inert || !el.overlay.hidden || document.querySelector("dialog[open]")) return;
+    if (e.key === "Escape") closeSidebar();
+    if (e.key !== "Tab") return;
+    const controls = [...el.sidebar.querySelectorAll("button:not(:disabled), a[href]")];
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (!el.sidebar.contains(document.activeElement) || (e.shiftKey && document.activeElement === first)) {
+      e.preventDefault();
+      (e.shiftKey ? last : first).focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  });
+  new ResizeObserver(() => {
+    el.app.style.setProperty("--composer-height", `${el.composerDock.getBoundingClientRect().height}px`);
+  }).observe(el.composerDock);
   // scroll events don't bubble; capture phase catches every .scroll-x-inner
   el.messages.addEventListener("scroll", (e) => {
     if (e.target.classList && e.target.classList.contains("scroll-x-inner")) updateScrollHint(e.target);
