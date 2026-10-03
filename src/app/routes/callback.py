@@ -217,7 +217,7 @@ async def handle_follow(event: FollowEvent, state, user_id, writes):
         )
 
     reply_token = event.reply_token
-    welcome_text = """初次見面！我是清華校園情報員，你可以叫我狗狗情報員！清華生活中的大小事，只要是你遇到的問題，我都會努力幫你解決唷！
+    welcome_text = """初次見面！我是清華校園情報員！清華生活中的大小事，只要是你遇到的問題，我都會努力幫你解決唷！
 你可以點擊下方的選單~~ฅ'ω'ฅ
 🚩索取校巴時刻表
 🚩詢問校務相關問題💬

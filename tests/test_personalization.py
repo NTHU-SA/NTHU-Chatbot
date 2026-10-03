@@ -170,6 +170,11 @@ async def test_remember_respects_the_limit(context):
 
 
 # -- prompt / runner --
+def test_service_name_matches_prompt_and_agent():
+    assert build_instructions().startswith("你是「清華校園情報員」，是一隻")
+    assert AgentRunner(make_settings())._agent.name == "清華校園情報員"
+
+
 def test_profile_is_injected_as_delimited_data():
     profile = Profile(
         nickname="小明", department="資訊工程學系", memories=[MemoryItem(id="m", value="住清齋")]

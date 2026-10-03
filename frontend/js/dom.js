@@ -15,8 +15,10 @@ export const el = {
   messages: $("messages"),
   empty: $("empty"),
   composer: $("composer"),
+  composerDock: $("composerDock"),
   input: $("input"),
   sendBtn: $("sendBtn"),
+  composerStatus: $("composerStatus"),
   overlay: $("overlay"),
   overlayText: $("overlayText"),
   overlayRetry: $("overlayRetry"),
@@ -76,6 +78,12 @@ export function updateScrollButton() {
 export function updateControls() {
   el.sendBtn.disabled = state.busy || state.loading || !el.input.value.trim();
   el.newBtn.disabled = state.busy || state.loading;
+  el.composer.classList.toggle("busy", state.busy);
+  el.composer.setAttribute("aria-busy", String(state.busy));
+  el.sendBtn.setAttribute("aria-label", state.busy ? "回覆中" : "送出");
+  el.sendBtn.title = state.busy ? "回覆中" : "送出";
+  const status = state.busy ? "回覆中…" : state.loading ? "載入對話中…" : "";
+  if (el.composerStatus.textContent !== status) el.composerStatus.textContent = status;
 }
 
 export function setBusy(busy) {
