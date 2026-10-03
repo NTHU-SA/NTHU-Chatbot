@@ -39,7 +39,7 @@ def test_memory_store_defaults():
     assert settings.chat_store == "memory"
     assert settings.google_cloud_project is None
     assert settings.firestore_database == "(default)"
-    assert settings.openai_model == "gpt-4.1-mini"
+    assert settings.openai_model == "gpt-6-luna"
     assert not settings.openai_use_responses_api
     assert settings.mcp_allowed_tools == DEFAULT_MCP_TOOLS
     assert settings.daily_message_limit == 100
