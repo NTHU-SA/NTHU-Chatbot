@@ -1,5 +1,4 @@
 import copy
-import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -226,13 +225,12 @@ async def test_map_missing_location_query_does_not_call_api():
 
 
 # -- registration --
-def test_tzaiwu_announcement_is_registered_once_with_menu():
+def test_tzaiwu_module_is_removed():
+    """載物書院功能已停用：指令前綴與模組都不能再被註冊。"""
     from src.app.handlers.command_handler import command_handler
-    from src.modules import tzaiwu  # noqa: F401 - registers commands
 
-    registered = command_handler.modules["tzaiwu"].commands["書院公告"]
-    assert registered.menu_info is not None
-    assert inspect.iscoroutinefunction(registered.function)
+    assert "tzaiwu" not in command_handler.modules
+    assert "載物書院" not in command_handler.prefix_to_module_name
 
 
 def test_menu_module_points_at_real_modules():
