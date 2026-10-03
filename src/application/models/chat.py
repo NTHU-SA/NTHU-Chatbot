@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 class ToolCall(BaseModel):
     name: str
+    title: str | None = None
     args: dict[str, Any] = Field(default_factory=dict)
     result_preview: str | None = None
     duration_ms: int | None = None

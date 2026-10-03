@@ -1,8 +1,10 @@
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from mcp.types import Tool, ToolAnnotations
 
+from src.application.models.chat import ToolCall
 from src.infrastructure.ai import agent_runner
 from src.infrastructure.ai.agent_runner import AgentRunner
 from tests.fakes import make_settings
@@ -81,9 +83,55 @@ async def test_tool_calls_are_paired_and_persisted():
     ]
     out = await collect(make_runner(), events, "17:00")
     assert types(out) == ["tool_call_start", "tool_call_end", "token", "done"]
-    assert out[0].data == {"call_id": "c1", "name": "get_next_buses", "args": {"route": "nanda"}}
+    assert out[0].data == {
+        "call_id": "c1",
+        "name": "get_next_buses",
+        "title": None,
+        "args": {"route": "nanda"},
+    }
     assert out[1].data["ok"]
     assert out[-1].data["tool_calls"][0]["name"] == "get_next_buses"
+
+
+@pytest.mark.parametrize(
+    ("title", "annotation_title", "expected"),
+    [
+        ("公車即時資訊", "舊標題", "公車即時資訊"),
+        (None, "公車即時資訊", "公車即時資訊"),
+        (None, None, None),
+    ],
+)
+async def test_mcp_tool_titles_are_forwarded_and_persisted(title, annotation_title, expected):
+    runner = AgentRunner(make_settings())
+    tool = Tool(
+        name="get_next_buses",
+        title=title,
+        inputSchema={"type": "object"},
+        annotations=ToolAnnotations(title=annotation_title) if annotation_title else None,
+    )
+    with (
+        patch.object(runner._mcp, "connect", AsyncMock()),
+        patch.object(runner._mcp, "list_tools", AsyncMock(return_value=[tool])),
+    ):
+        await runner._ensure_connected()
+    out = await collect(runner, [called("c1", tool.name), output("c1", "{}")])
+    assert out[0].data["title"] == expected
+    assert out[1].data["title"] == expected
+    saved = ToolCall.model_validate(out[-1].data["tool_calls"][0])
+    assert saved.title == expected
+
+
+async def test_nthu_web_search_has_a_display_title():
+    out = await collect(
+        make_runner(web_search_enabled=True, openai_use_responses_api=True),
+        [called("c1", "nthu_web_search"), output("c1", "{}")],
+    )
+    assert out[0].data["title"] == "搜尋清大官方網站"
+    assert out[-1].data["tool_calls"][0]["title"] == "搜尋清大官方網站"
+
+
+def test_legacy_tool_calls_without_titles_are_readable():
+    assert ToolCall.model_validate({"name": "get_next_buses"}).title is None
 
 
 async def test_text_before_tool_call_becomes_interim_not_answer():
@@ -150,6 +198,7 @@ async def test_suggest_replies_becomes_suggestions_not_a_tool_card():
     assert out[-1].data["tool_calls"] == [
         {
             "name": "suggest_replies",
+            "title": None,
             "args": {"options": cleaned},
             "result_preview": None,
             "duration_ms": None,
