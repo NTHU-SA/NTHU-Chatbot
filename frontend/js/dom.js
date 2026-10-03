@@ -77,16 +77,25 @@ export function bindMessageScrolling() {
   };
   const resize = new ResizeObserver(schedule);
   resize.observe(el.messages);
-  const observeMessages = () => {
-    resize.disconnect();
-    resize.observe(el.messages);
-    for (const child of el.messages.children) resize.observe(child);
-    schedule();
+  const observed = new Set();
+  const observeChild = (child) => {
+    if (child.nodeType !== 1 || observed.has(child)) return;
+    observed.add(child);
+    resize.observe(child);
   };
-  new MutationObserver(observeMessages).observe(el.messages, {
-    childList: true, subtree: true, characterData: true, attributes: true,
-  });
-  observeMessages();
+  for (const child of el.messages.children) observeChild(child);
+  new MutationObserver((records) => {
+    for (const record of records) {
+      for (const child of record.removedNodes) {
+        if (child.parentNode !== el.messages && observed.delete(child)) resize.unobserve(child);
+      }
+      for (const child of record.addedNodes) {
+        if (child.parentNode === el.messages) observeChild(child);
+      }
+    }
+    schedule();
+  }).observe(el.messages, { childList: true });
+  schedule();
   el.messages.addEventListener("scroll", () => {
     followingLatest = el.messages.scrollHeight - el.messages.clientHeight - el.messages.scrollTop < 48;
     updateScrollButton();

@@ -17,6 +17,12 @@ LINE_CHANNEL_SECRET=must-not-leak
 """
 
 
+def test_local_config_example_uses_backend_policy_version():
+    example = Path(__file__).resolve().parent.parent / "frontend" / "config.example.json"
+    config = json.loads(example.read_text(encoding="utf-8"))
+    assert config["privacyPolicyVersion"] == PRIVACY_POLICY_VERSION
+
+
 @pytest.fixture
 def built(tmp_path, monkeypatch):
     # LINE 的 ID 不寫在 repo：由環境變數注入（CI 用 repo variable LIFF_ID_<ENV>）

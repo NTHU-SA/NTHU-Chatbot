@@ -7,7 +7,7 @@ const { runInNewContext } = require("node:vm");
 const source = readFileSync(join(__dirname, "..", "frontend", "js", "dom.js"), "utf8")
   .replaceAll("export ", "");
 
-function setup({ desktop = false } = {}) {
+function setup({ desktop = false, initialMessages = 0 } = {}) {
   const nodes = new Map();
   const observers = {};
   const frames = [];
@@ -16,6 +16,7 @@ function setup({ desktop = false } = {}) {
     if (!nodes.has(id)) {
       const classes = new Set();
       nodes.set(id, {
+        nodeType: 1,
         hidden: true,
         inert: false,
         attrs: {},
@@ -36,6 +37,11 @@ function setup({ desktop = false } = {}) {
     return nodes.get(id);
   };
   const messages = node("messages");
+  for (let i = 0; i < initialMessages; i++) {
+    const child = node(`message-${i}`);
+    child.parentNode = messages;
+    messages.children.push(child);
+  }
   messages.scrollHeight = 1000;
   messages.clientHeight = 400;
   let top = 600;
@@ -53,13 +59,19 @@ function setup({ desktop = false } = {}) {
     matchMedia: () => media,
     requestAnimationFrame: (fn) => { frames.push(fn); return frames.length; },
     ResizeObserver: class {
-      constructor(fn) { observers.resize = fn; }
-      observe() {}
-      disconnect() {}
+      constructor(fn) {
+        observers.resize = fn;
+        observers.registrations = [];
+        observers.unregistrations = [];
+        observers.disconnects = 0;
+      }
+      observe(element) { observers.registrations.push(element); }
+      unobserve(element) { observers.unregistrations.push(element); }
+      disconnect() { observers.disconnects++; }
     },
     MutationObserver: class {
       constructor(fn) { observers.mutation = fn; }
-      observe() {}
+      observe(target, options) { observers.mutationTarget = target; observers.mutationOptions = options; }
     },
   });
   const flush = () => { while (frames.length) frames.shift()(); };
@@ -67,18 +79,62 @@ function setup({ desktop = false } = {}) {
 }
 
 test("streamed text, tool cards, and final layout follow the latest message", () => {
-  const ctx = setup();
+  const ctx = setup({ initialMessages: 1 });
   ctx.bindMessageScrolling();
   ctx.flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.observers.mutationOptions)), { childList: true });
+  assert.equal(ctx.observers.mutationTarget, ctx.messages);
+  assert.equal(ctx.observers.registrations.length, 2);
   for (const height of [1300, 1600, 2100]) {
     ctx.messages.scrollHeight = height;
-    ctx.observers.mutation();
     ctx.observers.resize();
     assert.equal(ctx.frames.length, 1);
     ctx.flush();
     assert.equal(ctx.messages.scrollTop, height - 400);
     assert.equal(ctx.node("scrollBtn").hidden, true);
   }
+  assert.equal(ctx.observers.registrations.length, 2);
+  assert.equal(ctx.observers.disconnects, 0);
+});
+
+test("direct message changes update resize targets without re-registering history", () => {
+  const ctx = setup({ initialMessages: 100 });
+  ctx.bindMessageScrolling();
+  ctx.flush();
+  assert.equal(ctx.observers.registrations.length, 101);
+  const added = ctx.node("new-message");
+  added.parentNode = ctx.messages;
+  ctx.messages.children.push(added);
+  ctx.observers.mutation([{ addedNodes: [added], removedNodes: [] }]);
+  ctx.flush();
+  assert.equal(ctx.observers.registrations.length, 102);
+  assert.equal(ctx.observers.registrations.at(-1), added);
+  ctx.messages.scrollHeight = 1400;
+  ctx.observers.resize();
+  ctx.flush();
+  assert.equal(ctx.messages.scrollTop, 1000);
+
+  ctx.messages.children.pop();
+  added.parentNode = null;
+  ctx.observers.mutation([{ addedNodes: [], removedNodes: [added] }]);
+  ctx.flush();
+  assert.deepEqual(ctx.observers.unregistrations, [added]);
+  assert.equal(ctx.observers.registrations.length, 102);
+  assert.equal(ctx.observers.disconnects, 0);
+});
+
+test("batched message moves and text nodes do not churn resize observations", () => {
+  const ctx = setup({ initialMessages: 1 });
+  ctx.bindMessageScrolling();
+  ctx.flush();
+  const child = ctx.node("message-0");
+  ctx.observers.mutation([
+    { addedNodes: [], removedNodes: [child] },
+    { addedNodes: [child, { nodeType: 3, parentNode: ctx.messages }], removedNodes: [] },
+  ]);
+  ctx.flush();
+  assert.deepEqual(ctx.observers.registrations, [ctx.messages, child]);
+  assert.deepEqual(ctx.observers.unregistrations, []);
 });
 
 test("reading history pauses following; latest button and sending resume it", () => {
@@ -88,13 +144,13 @@ test("reading history pauses following; latest button and sending resume it", ()
   ctx.messages.scrollTop = 100;
   ctx.messages.handlers.scroll();
   ctx.messages.scrollHeight = 1500;
-  ctx.observers.mutation();
+  ctx.observers.resize();
   ctx.flush();
   assert.equal(ctx.messages.scrollTop, 100);
   assert.equal(ctx.node("scrollBtn").hidden, false);
   ctx.scrollToBottom();
   ctx.messages.scrollHeight = 1700;
-  ctx.observers.mutation();
+  ctx.observers.resize();
   ctx.flush();
   assert.equal(ctx.messages.scrollTop, 1300);
   assert.equal(ctx.node("scrollBtn").hidden, true);
