@@ -6,12 +6,12 @@
 import { api, loadConfig } from "./api.js";
 import { createSession, loadSessions, openSession, send } from "./chat.js";
 import {
-  deleteAllData, finishDeletion, requestConsent, revokeConsent, setPolicyVersion,
+  deleteAllData, finishDeletion, requestConsent, setPolicyVersion,
 } from "./consent.js";
 import { openProfile } from "./profile.js";
 import {
-  autosize, closeSidebar, el, hideOverlay, openSidebar, overlayRetryHandler, showOverlay, state,
-  updateControls, updateScrollButton,
+  autosize, bindMessageScrolling, closeSidebar, desktopLayout, el, hideOverlay, openSidebar,
+  overlayRetryHandler, scrollToBottom, showOverlay, state, syncSidebarLayout, updateControls,
 } from "./dom.js";
 import { updateScrollHint, updateScrollHints } from "./markdown.js";
 
@@ -20,7 +20,6 @@ function bindUi() {
   el.closeSidebar.addEventListener("click", closeSidebar);
   el.backdrop.addEventListener("click", closeSidebar);
   el.newBtn.addEventListener("click", () => createSession());
-  el.revokeBtn.addEventListener("click", () => revokeConsent().catch(reportError));
   el.profileBtn.addEventListener("click", () => openProfile().catch(reportError));
   el.deleteDataBtn.addEventListener("click", () => deleteAllData().catch(reportError));
   el.composer.addEventListener("submit", (e) => { e.preventDefault(); send(el.input.value); });
@@ -32,7 +31,7 @@ function bindUi() {
     chip.addEventListener("click", () => send(chip.dataset.q));
   }
   document.addEventListener("keydown", (e) => {
-    if (!el.sidebar.classList.contains("open") || el.app.inert || !el.overlay.hidden || document.querySelector("dialog[open]")) return;
+    if (desktopLayout.matches || !el.sidebar.classList.contains("open") || el.app.inert || !el.overlay.hidden || document.querySelector("dialog[open]")) return;
     if (e.key === "Escape") closeSidebar();
     if (e.key !== "Tab") return;
     const controls = [...el.sidebar.querySelectorAll("button:not(:disabled), select:not(:disabled), a[href]")];
@@ -54,13 +53,10 @@ function bindUi() {
     if (e.target.classList && e.target.classList.contains("scroll-x-inner")) updateScrollHint(e.target);
   }, true);
   window.addEventListener("resize", () => updateScrollHints(el.messages));
-  el.messages.addEventListener("scroll", updateScrollButton, { passive: true });
-  new MutationObserver(updateScrollButton).observe(el.messages, { childList: true, subtree: true, characterData: true });
-  el.scrollBtn.addEventListener("click", () => {
-    // ScrollToOptions ignores the CSS reduced-motion rule, so check the preference here.
-    const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    el.messages.scrollTo({ top: el.messages.scrollHeight, behavior: reduce ? "auto" : "smooth" });
-  });
+  bindMessageScrolling();
+  el.scrollBtn.addEventListener("click", scrollToBottom);
+  syncSidebarLayout();
+  desktopLayout.addEventListener("change", syncSidebarLayout);
 }
 
 function reportError(err) {

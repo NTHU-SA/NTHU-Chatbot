@@ -128,19 +128,8 @@ async def accept_consent(
     version = _settings(request).privacy_policy_version
     if body.version != version:
         raise HTTPException(status.HTTP_409_CONFLICT, "policy version changed")
-    await _users(request).set_consent(user.user_id, consent_type, version, True, CONSENT_SOURCE)
+    await _users(request).set_consent(user.user_id, consent_type, version, CONSENT_SOURCE)
     return ConsentState(type=consent_type, version=version, accepted=True)
-
-
-@router.post("/consents/{consent_type}/revoke", response_model=ConsentState)
-async def revoke_consent(
-    consent_type: str, request: Request, user: Principal = Depends(get_principal)
-):
-    """撤回同意：之後無法使用 AI 對話，直到再次同意。既有資料不會因撤回而刪除（另有刪除功能）。"""
-    _check_type(consent_type)
-    version = _settings(request).privacy_policy_version
-    await _users(request).set_consent(user.user_id, consent_type, version, False, CONSENT_SOURCE)
-    return ConsentState(type=consent_type, version=version, accepted=False)
 
 
 # -- personalisation --

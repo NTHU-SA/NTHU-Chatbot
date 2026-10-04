@@ -13,7 +13,7 @@ Firestore 使用者與外部身分儲存。
   users/{uid}/auditLog/{id}                 action / provider / at / expiresAt（TTL）
   users/{uid}/moduleStates/{moduleId}       lastUsedAt / usageCount / updatedAt
   users/{uid}/usage/{YYYY-MM-DD}            count / expiresAt（TTL）
-  users/{uid}/consents/{type}_v{version}    type / version / status / acceptedAt / revokedAt / source
+  users/{uid}/consents/{type}_v{version}    type / version / status / acceptedAt / source
   users/{uid}/preferences/{key}             value / source(user|assistant) / updatedAt（nickname、department）
   users/{uid}/memory/{m00…m19}              type / value / sourceConversationId / createdAt / updatedAt
 
@@ -360,22 +360,20 @@ class FirestoreUserStore:
         )
         return snapshot.exists and (snapshot.to_dict() or {}).get("status") == "accepted"
 
-    async def set_consent(self, user_id, consent_type, version, accepted, source) -> None:
+    async def set_consent(self, user_id, consent_type, version, source) -> None:
         doc_id = consent_doc_id(consent_type, version)
         payload = {
             "type": consent_type,
             "version": version,
-            "status": "accepted" if accepted else "revoked",
+            "status": "accepted",
             "source": source,
-            "acceptedAt" if accepted else "revokedAt": firestore.SERVER_TIMESTAMP,
+            "acceptedAt": firestore.SERVER_TIMESTAMP,
         }
         consent = self._user(user_id).collection("consents").document(doc_id)
         audit = self._audit(user_id)
         batch = self._db.batch()
         batch.set(consent, payload, merge=True)
-        batch.create(
-            audit, self._audit_payload("consent" if accepted else "revoke", document=doc_id)
-        )
+        batch.create(audit, self._audit_payload("consent", document=doc_id))
         await batch.commit()
         await self._undo_if_deleted(user_id, consent, audit)
 

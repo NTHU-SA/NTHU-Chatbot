@@ -27,6 +27,7 @@ def make_settings(**overrides: Any) -> Settings:
         "liff_id": TEST_LIFF_ID,
         "openai_api_key": "test-key",
         "chat_store": "memory",
+        "privacy_policy_version": "1",
     }
     values.update(overrides)
     return Settings(**values)

@@ -172,7 +172,7 @@ async function generate(text, node, { isRetry = false, retryOf = null } = {}) {
   const isCurrentView = () => state.current === sessionId && state.navigation === navigation;
   const retryHere = () => retry(node, text, userMessageId);
   showThinking(tools);
-  scrollToBottom(); // once, so the sent message and the reply's start are in view
+  scrollToBottom();
 
   try {
     const res = await api(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
@@ -230,7 +230,6 @@ async function generate(text, node, { isRetry = false, retryOf = null } = {}) {
           showError(node, data.message, retryHere);
           break;
       }
-      // no auto-scroll while streaming: the view stays where the user left it
     });
     // Returning to an in-flight session may have loaded its unfinished history.
     if (done && state.current === sessionId && !isCurrentView()) await openSession(sessionId);

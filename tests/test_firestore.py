@@ -399,25 +399,26 @@ async def test_cleanup_failure_persists_marker_until_next_success(db, users, cha
 async def test_consent_documents_are_per_version_and_audited(db, users):
     user_id = await new_user(users)
     assert not await users.has_consent(user_id, "privacy_policy", "1")
-    await users.set_consent(user_id, "privacy_policy", "1", True, "LIFF")
+    await users.set_consent(user_id, "privacy_policy", "1", "LIFF")
     assert await users.has_consent(user_id, "privacy_policy", "1")
-    await users.set_consent(user_id, "privacy_policy", "1", False, "LIFF")
-    assert not await users.has_consent(user_id, "privacy_policy", "1")
-    await users.set_consent(user_id, "privacy_policy", "2", True, "LIFF")
+    assert not await users.has_consent(user_id, "privacy_policy", "2")
+    await users.set_consent(user_id, "privacy_policy", "2", "LIFF")
+    assert await users.has_consent(user_id, "privacy_policy", "1")
+    assert await users.has_consent(user_id, "privacy_policy", "2")
 
     v1 = await doc(db, f"users/{user_id}/consents/privacy_policy_v1")
-    assert v1["status"] == "revoked"
-    assert isinstance(v1["acceptedAt"], datetime) and isinstance(v1["revokedAt"], datetime)
+    assert v1["status"] == "accepted"
+    assert isinstance(v1["acceptedAt"], datetime)
     assert (await doc(db, f"users/{user_id}/consents/privacy_policy_v2"))["status"] == "accepted"
     audit = [d.to_dict() async for d in db.collection(f"users/{user_id}/auditLog").stream()]
-    assert sorted(entry["action"] for entry in audit) == ["consent", "consent", "revoke"]
+    assert sorted(entry["action"] for entry in audit) == ["consent", "consent"]
 
 
 @pytest.mark.firestore
 async def test_delete_user_leaves_nothing_behind(db, users, chats):
     who = identity()
     user_id, _ = await users.resolve_or_create(who)
-    await users.set_consent(user_id, "privacy_policy", "1", True, "LIFF")
+    await users.set_consent(user_id, "privacy_policy", "1", "LIFF")
     await users.consume_daily_quota(user_id, 10)
     await users.record_module_use(user_id, "bus")
     await users.set_preference(user_id, "nickname", "小明", "user")
@@ -484,7 +485,7 @@ async def test_writes_that_land_after_deletion_undo_themselves(db, users, chats)
     await users.update_identity_metadata(user_id, "line", {"followed": True})
     await users.record_module_use(user_id, "bus")
     assert not await users.consume_daily_quota(user_id, 10)
-    await users.set_consent(user_id, "privacy_policy", "1", True, "LIFF")
+    await users.set_consent(user_id, "privacy_policy", "1", "LIFF")
     await users.set_preference(user_id, "nickname", "小明", "assistant")
     await users.set_preferences(user_id, {"department": "資訊工程學系"}, "user")
     await users.set_onboarding(user_id, "asked")
