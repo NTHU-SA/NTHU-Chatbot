@@ -1,4 +1,4 @@
-// Privacy-policy consent, revoking it, and deleting all of the user's data.
+// Privacy-policy consent and deleting all of the user's data.
 // The backend enforces consent (403 consent_required); this module only shows
 // the screen and records the user's choice.
 
@@ -62,14 +62,6 @@ export function requestConsent(required) {
     };
   });
   return pending;
-}
-
-export async function revokeConsent() {
-  closeSidebar();
-  if (!(await confirmDialog("撤回同意後就不能和本汪對話，直到再次同意。既有資料不會被刪除。確定要撤回嗎？", "撤回"))) return;
-  const res = await api("/api/consents/privacy_policy/revoke", { method: "POST" });
-  const state = await res.json();
-  await requestConsent(state.version);
 }
 
 export async function deleteAllData() {

@@ -77,13 +77,11 @@ class UserStore(Protocol):
         ...
 
     async def has_consent(self, user_id: str, consent_type: str, version: str) -> bool:
-        """該版本是否為「已同意」且未撤回。"""
+        """該版本是否為「已同意」。"""
         ...
 
-    async def set_consent(
-        self, user_id: str, consent_type: str, version: str, accepted: bool, source: str
-    ) -> None:
-        """同意或撤回某一版本；每個版本一份文件，不覆蓋其他版本，並寫稽核紀錄。"""
+    async def set_consent(self, user_id: str, consent_type: str, version: str, source: str) -> None:
+        """同意某一版本；每個版本一份文件，不覆蓋其他版本，並寫稽核紀錄。"""
         ...
 
     async def get_profile(self, user_id: str) -> Profile:
@@ -262,16 +260,14 @@ class MemoryUserStore:
         record = self.consents[user_id].get(consent_doc_id(consent_type, version))
         return bool(record) and record["status"] == "accepted"
 
-    async def set_consent(self, user_id, consent_type, version, accepted, source) -> None:
+    async def set_consent(self, user_id, consent_type, version, source) -> None:
         doc_id = consent_doc_id(consent_type, version)
         record = self.consents[user_id].setdefault(
             doc_id, {"type": consent_type, "version": version}
         )
-        record.update(status="accepted" if accepted else "revoked", source=source)
-        record["acceptedAt" if accepted else "revokedAt"] = now_utc()
-        self.audit[user_id].append(
-            {"action": "consent" if accepted else "revoke", "document": doc_id}
-        )
+        record.update(status="accepted", source=source)
+        record["acceptedAt"] = now_utc()
+        self.audit[user_id].append({"action": "consent", "document": doc_id})
 
     async def get_profile(self, user_id: str) -> Profile:
         prefs = self.preferences[user_id]

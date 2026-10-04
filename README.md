@@ -96,9 +96,11 @@ LINE Flex（AI 入口、公車、圖書館、使用說明、系統通知、加�
 剪貼簿受限時提供手動複製；「下載 JSON」則保留完整的 message 陣列。
 預覽檔案只供本機設計驗收，Hosting 建置時排除，不會把假資料或示例 LIFF ID 部署到正式網站。
 
-側欄「外觀」可選擇跟隨系統、淺色或深色，預設跟隨系統。選擇僅保存在此瀏覽器的 `localStorage`（`nthu-chatbot-theme`），不送到後端；對話頁與隱私頁共用設定。`frontend/js/theme.js` 在 CSS 載入前套用外觀，避免手動深色設定閃成淺色；儲存被瀏覽器阻擋時仍可切換，並顯示無法保存的提醒。
+側欄「外觀」以系統、太陽、月亮三個圖示按鈕選擇跟隨系統、淺色或深色，預設跟隨系統；選取狀態以 `aria-pressed` 標示。選擇僅保存在此瀏覽器的 `localStorage`（`nthu-chatbot-theme`），不送到後端；對話頁與隱私頁共用設定。`frontend/js/theme.js` 在 CSS 載入前套用外觀，避免手動深色設定閃成淺色；儲存被瀏覽器阻擋時仍可切換，並顯示無法保存的提醒。
 
-外觀設定的無相依測試：`node --test tests\frontend_theme.test.cjs`。
+桌面版（視窗寬度至少 1024px）常駐展開聊天清單，切換或新增對話不會收合；較窄視窗保留選單抽屜。聊天在底部時自動跟隨串流回覆、工具卡片與排版高度變化；往上閱讀歷史訊息時暫停跟隨，回到底部、點「最新」或送出訊息後恢復。
+
+前端的無相依測試：`node --test tests\frontend_theme.test.cjs tests\frontend_navigation.test.cjs tests\frontend_ui.test.cjs tests\frontend_flex_preview.test.cjs`。
 
 ## 本機開發
 
@@ -188,12 +190,12 @@ Firestore Native mode `(default)`，由 `infra/bootstrap.sh` 建立；區域建�
 | `quotaCarryover/{sha256(provider:id)}` | 刪除帳號時保留當日 AI 用量：`day`、`count`、`expiresAt`（TTL 2 天）。同一個外部身分當天重建帳號時沿用，避免以刪除帳號重置每日上限 |
 | `users/{uid}` | `status`（active / blocked / deleting / deleted；deleted 只剩不含個資的墓碑與 `expiresAt` TTL）、`displayName`、`pictureUrl`、`createdAt`、`updatedAt`、`lastActiveAt`、`lastConversationId`、`lastModuleId`、`lastModuleUsedAt`、`conversationCount` |
 | `users/{uid}/identities/{provider}` | `providerUserId`、`linkedAt`、`lastLoginAt`、`metadata`（LINE：`followed`、`liff`{os、appVersion、language、contextType、friendshipStatus}；前端自報，不參與授權；不收 contextId） |
-| `users/{uid}/consents/{type}_v{version}` | 同意紀錄：`status`（accepted / revoked）、`acceptedAt`、`revokedAt`、`source`；每個版本一份，不覆蓋 |
+| `users/{uid}/consents/{type}_v{version}` | 同意紀錄：`status`（accepted）、`acceptedAt`、`source`；每個版本一份，不覆蓋 |
 | `users/{uid}/preferences/{nickname\|department}` | `value`、`source`（user：設定頁；assistant：對話中由 AI 記下）、`updatedAt` |
 | `users/{uid}/memory/{m00…m19}` | 使用者要求記住的事：`value`（≤100 字）、`sourceConversationId`、`createdAt`；每則占一個固定格子，以 `create()` 搶空格，並行也不會超過 20 則 |
 | `users/{uid}/moduleStates/{moduleId}` | `@` 指令的 `lastUsedAt`、`usageCount`；`onboarding` 記錄首次使用是否已問過稱呼與系所 |
 | `users/{uid}/usage/{YYYY-MM-DD}` | 每日 LLM 訊息計數 `count`、`expiresAt`（TTL 8 天） |
-| `users/{uid}/auditLog/{id}` | 連結、解除、同意、撤回：`action`、`at`、`expiresAt`（TTL 365 天） |
+| `users/{uid}/auditLog/{id}` | 連結、解除、同意：`action`、`at`、`expiresAt`（TTL 365 天） |
 | `users/{uid}/conversationOrigins/{sha256(origin)}` | LINE 泡泡 → `conversationId` |
 | `users/{uid}/conversationCleanup/{cid}` | 已刪除、訊息尚未清完的對話（中斷後下次繼續清） |
 | `conversations/{cid}` | `userId`、`channel`、`status`、`title`、`startedAt`、`lastMessageAt`、`messageCount`、`metadata.origin`；每人最多 50 個，超過時刪除最久未更新的 |
@@ -221,7 +223,7 @@ Firestore Native mode `(default)`，由 `infra/bootstrap.sh` 建立；區域建�
 - 隱私權政策在 `frontend/privacy.html`（**草稿，需學生會審閱定稿並填入聯絡方式**），依個資法第 8 條列出蒐集者、目的、資料類別、期間 / 地區 / 對象（含 OpenAI 美國）、當事人權利與不提供的影響。
 - **後端強制同意**：未同意目前版本時，送出訊息回 `403 {"code": "consent_required", "version": …}`，內容不會送到 LLM；`@` 指令不經過 AI，不需要同意。
 - **政策版本只有一個來源**：`src/core/privacy.py`。後端以它決定要同意哪一版；`infra/build_frontend.py` 把同一個值寫進 `privacy.html` 的版本與 `config.json`。前端送出同意時帶的是畫面上顯示的版本，前後端尚未同步部署時後端回 409，前端請使用者稍後再開，不會記錄成沒看過的版本。改版時修改政策內容並遞增版本，舊版本的紀錄保留。
-- 使用者可在側欄**撤回同意**（之後無法使用 AI 對話，資料保留）或**刪除我的所有資料**（`DELETE /api/me`：對話、訊息、個人化資料、同意與使用紀錄、外部身分對應與帳號本身全部刪除；之後同一個 LINE 帳號是全新的使用者）。
+- 使用者可在側欄**刪除我的所有資料**（`DELETE /api/me`：對話、訊息、個人化資料、同意與使用紀錄、外部身分對應與帳號本身全部刪除；之後同一個 LINE 帳號是全新的使用者）。不提供撤回同意按鈕或 API；尚未同意、舊版本同意與歷史上未接受的紀錄仍不能使用 AI 對話。
 - **刪除流程**：先把帳號標成 `deleting`（其他請求一律 403，只能再呼叫刪除）→ 刪除對話與 user 資料，每一步重新查詢確認清空 → user 文件換成不含個資的墓碑（`status=deleted`，`expiresAt` TTL 1 天）→ 再清一次。墓碑之後才完成的寫入會讀到 `deleted` 並撤銷自己，所以刪除與進行中的請求同時發生也不會留下資料。沒刪乾淨時回 `503 deletion_incomplete`，帳號維持 `deleting`，使用者重新開啟頁面會看到「完成刪除」的按鈕。
 - LLM 供應商會收到最近 `HISTORY_WINDOW` 則對話與使用者資料區塊；MCP 只收到模型產生的查詢參數。Agents SDK 的 tracing 已停用。
 
