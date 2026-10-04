@@ -7,9 +7,20 @@ from scripts.build_flex_preview import OUTPUT, build_samples
 
 async def test_committed_preview_matches_production_builders():
     content = OUTPUT.read_text(encoding="utf-8")
-    payload = content.split("window.FLEX_PREVIEW = ", 1)[1].removesuffix(";\n")
+    nodes = json.loads(content.split("  const nodes = ", 1)[1].split(";\n", 1)[0])
+
+    def expand(value):
+        if isinstance(value, list):
+            return [expand(item) for item in value]
+        if isinstance(value, dict):
+            if value.keys() == {"$ref"}:
+                return expand(nodes[value["$ref"]])
+            return {key: expand(item) for key, item in value.items()}
+        return value
+
+    payload = json.loads(content.split("  return expand(", 1)[1].split(");", 1)[0])
     samples = await build_samples()
-    assert json.loads(payload) == samples
+    assert expand(payload) == samples
     for sample in samples:
         assert sample["messages"], sample["id"]
         for message in sample["messages"]:

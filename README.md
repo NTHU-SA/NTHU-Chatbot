@@ -91,6 +91,7 @@ LINE Flex（AI 入口、公車、圖書館、使用說明、系統通知、加�
 新版 Flex 預覽：執行 `uv run python scripts\build_flex_preview.py` 後，
 以 `uv run python -m http.server 5500 --bind 127.0.0.1 --directory .` 開啟
 `http://localhost:5500/frontend/flex-preview.html`。範例取自正式 builder，使用假資料、不需登入，
+產生的資料檔會共用重複的 Flex 子樹，載入時還原為彼此獨立的訊息物件。
 訊息內的按鈕只顯示動作；「複製 JSON」可複製單則 bubble／carousel 到 LINE Flex Simulator，
 剪貼簿受限時提供手動複製；「下載 JSON」則保留完整的 message 陣列。
 預覽檔案只供本機設計驗收，Hosting 建置時排除，不會把假資料或示例 LIFF ID 部署到正式網站。

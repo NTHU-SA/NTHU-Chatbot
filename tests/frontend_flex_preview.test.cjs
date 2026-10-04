@@ -5,6 +5,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const script = readFileSync(join(__dirname, "..", "frontend", "js", "flex-preview.js"), "utf8");
+const dataScript = readFileSync(join(__dirname, "..", "frontend", "flex-preview-data.js"), "utf8");
 const contents = {
   type: "bubble",
   body: {
@@ -56,6 +57,18 @@ function setup(clipboard) {
   const [copy, feedback] = tools.children;
   return { copy, feedback, fallback, warnings };
 }
+
+test("generated data expands repeated subtrees without sharing mutable objects", () => {
+  const context = { window: {} };
+  vm.runInNewContext(dataScript, context);
+  const samples = context.window.FLEX_PREVIEW;
+  assert.ok(samples.length > 2);
+  const first = samples[0].messages[0].contents;
+  const second = samples[1].messages[0].contents;
+  assert.deepEqual(JSON.parse(JSON.stringify(first.styles)), JSON.parse(JSON.stringify(second.styles)));
+  assert.notEqual(first.styles, second.styles);
+  assert.notEqual(first.styles.body, second.styles.body);
+});
 
 test("copy writes the exact Flex container, not the message array", async () => {
   let copied;
