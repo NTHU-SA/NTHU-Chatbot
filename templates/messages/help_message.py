@@ -1,19 +1,14 @@
 from linebot.v3.messaging import FlexContainer, FlexMessage
 
-from .liff_message import BRAND_COLOR, liff_url
+from .flex_theme import bubble, inset, text
+from .friend_message import friend_actions
+from .liff_message import liff_url
 
 SESSION_LIMIT_NOTE = "網頁對話最多保留 50 則，超過時最久沒更新的會自動刪除。"
 
 
 def _section(title: str, lines: list[str]) -> dict:
-    contents = [
-        {"type": "text", "text": title, "weight": "bold", "size": "sm", "color": BRAND_COLOR}
-    ]
-    contents += [
-        {"type": "text", "text": line, "size": "sm", "color": "#333333", "wrap": True}
-        for line in lines
-    ]
-    return {"type": "box", "layout": "vertical", "spacing": "xs", "contents": contents}
+    return inset([text(title, weight="bold", color="brand")] + [text(line) for line in lines])
 
 
 def help_message(prefixes: list[str], liff_id: str | None = None) -> FlexMessage:
@@ -49,42 +44,9 @@ def help_message(prefixes: list[str], liff_id: str | None = None) -> FlexMessage
         ),
     ]
 
-    bubble: dict = {
-        "type": "bubble",
-        "size": "mega",
-        "header": {
-            "type": "box",
-            "layout": "vertical",
-            "backgroundColor": BRAND_COLOR,
-            "contents": [
-                {
-                    "type": "text",
-                    "text": "清華校園情報員使用說明 ฅ'ω'ฅ",
-                    "wrap": True,
-                    "color": "#FFFFFF",
-                    "weight": "bold",
-                    "size": "md",
-                }
-            ],
-        },
-        "body": {"type": "box", "layout": "vertical", "spacing": "lg", "contents": sections},
-    }
+    actions = []
     if liff_id:
-        bubble["footer"] = {
-            "type": "box",
-            "layout": "vertical",
-            "contents": [
-                {
-                    "type": "button",
-                    "style": "primary",
-                    "color": BRAND_COLOR,
-                    "height": "sm",
-                    "action": {
-                        "type": "uri",
-                        "label": "開始和本汪聊天",
-                        "uri": liff_url(liff_id),
-                    },
-                }
-            ],
-        }
-    return FlexMessage(alt_text="清華校園情報員使用說明", contents=FlexContainer.from_dict(bubble))
+        actions.append({"type": "uri", "label": "開始和本汪聊天", "uri": liff_url(liff_id)})
+    actions.extend(friend_actions())
+    card = bubble("清華校園情報員使用說明 ฅ'ω'ฅ", sections, actions)
+    return FlexMessage(alt_text="清華校園情報員使用說明", contents=FlexContainer.from_dict(card))

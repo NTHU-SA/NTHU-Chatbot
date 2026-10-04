@@ -5,17 +5,16 @@ from urllib.parse import quote
 
 from linebot.v3.messaging import (
     CarouselColumn,
-    CarouselTemplate,
     PostbackAction,
     QuickReply,
     QuickReplyItem,
-    TemplateMessage,
     TextMessage,
     URIAction,
 )
 
 from src.app.handlers.command_handler import command_handler
 from src.utils import nthuapi
+from templates.messages.flex_theme import carousel_message
 
 DINING_API_ENDPOINT = "/dining/"
 ERROR_MESSAGE = [TextMessage(text="😵‍💫 抱歉，目前無法取得餐廳資料，請稍後再試")]
@@ -138,9 +137,9 @@ async def handle_random_restaurant(event):
         random_building["building"], random_restaurant
     )
 
-    restaurant_card = TemplateMessage(
+    restaurant_card = carousel_message(
         alt_text=f"隨機推薦：{random_restaurant['name']}",
-        template=CarouselTemplate(columns=[restaurant_column]),
+        columns=[restaurant_column],
         quick_reply=QuickReply(
             items=[
                 QuickReplyItem(
@@ -219,9 +218,9 @@ async def building_restaurant_command(event):
 
     if not columns:
         return ERROR_MESSAGE
-    building_restaurants_carousel = TemplateMessage(
+    building_restaurants_carousel = carousel_message(
         alt_text=f"{building_name}餐廳列表",
-        template=CarouselTemplate(columns=columns[:10]),
+        columns=columns[:10],
     )
     return [building_restaurants_carousel]
 
@@ -291,9 +290,9 @@ async def weekend_restaurants_command(event):
 
     messages = []
     for offset in range(0, len(open_restaurants_columns), 10):
-        carousel = TemplateMessage(
+        carousel = carousel_message(
             alt_text="營業餐廳",
-            template=CarouselTemplate(columns=open_restaurants_columns[offset : offset + 10]),
+            columns=open_restaurants_columns[offset : offset + 10],
         )
         messages.append(carousel)
     messages = messages[:5]

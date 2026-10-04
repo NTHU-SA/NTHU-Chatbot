@@ -44,14 +44,32 @@ async def test_bus_arrivals_use_flat_v2_fields_and_escape_json():
             "bus_type": "large-sized_bus",
         },
     ]
-    with fake_api(bus, arrivals) as get:
+    with patch.object(
+        bus.nthuapi,
+        "get",
+        new=AsyncMock(
+            side_effect=[
+                arrivals,
+                [
+                    {
+                        "time": "12:00",
+                        "dep_stop": 'North "Gate"',
+                        "description": "First line\nSecond line",
+                        "bus_type": "large-sized_bus",
+                        "line": "red",
+                    }
+                ],
+            ]
+        ),
+    ) as get:
         messages = await bus.query_stop_bus(command(stop_name="North Gate"))
 
-    get.assert_awaited_once_with(
-        "/buses/stops/North%20Gate",
-        params={"day": "current", "limits": 5, "bus_type": "all", "direction": "up"},
-        cache=False,
-    )
+    assert get.await_count == 2
+    assert get.await_args_list[0].args == ("/buses/stops/North%20Gate",)
+    assert get.await_args_list[0].kwargs == {
+        "params": {"day": "current", "limits": 5, "bus_type": "all", "direction": "up"},
+        "cache": False,
+    }
     assert len(messages) == 2
     bubbles = messages[1].contents.contents
     assert len(bubbles) == 1
@@ -96,8 +114,11 @@ async def test_library_rss_accepts_command_event_and_does_not_mutate_cache():
     assert get.await_count == 2
     assert entries == original
     assert first[0].to_dict() == second[0].to_dict()
-    assert "type=branches" in first[1].template.actions[0].data
-    assert first[0].template.columns[0].actions[0].uri == "https://www.lib.nthu.edu.tw/"
+    assert "type=branches" in first[1].contents.footer.contents[0].action.data
+    assert (
+        first[0].contents.contents[0].footer.contents[0].action.uri
+        == "https://www.lib.nthu.edu.tw/"
+    )
 
 
 async def test_library_empty_rss_page_returns_text():
@@ -128,11 +149,11 @@ async def test_dining_weekend_filters_by_schedule_and_flattens_buildings():
     with fake_api(dining, buildings) as get:
         messages = await dining.weekend_restaurants_command(command(schedule="saturday"))
     get.assert_awaited_once_with("/dining/", params={"schedule": "saturday"}, cache=True)
-    column = messages[0].template.columns[0]
-    assert "10:00-14:00" in column.text
-    assert "09:00-17:00" not in column.text
-    assert len(column.actions) == 2
-    assert "Food%20Court" in column.actions[1].uri
+    card = messages[0].contents.contents[0]
+    assert "10:00-14:00" in card.body.contents[0].text
+    assert "09:00-17:00" not in card.body.contents[0].text
+    assert len(card.footer.contents) == 2
+    assert "Food%20Court" in card.footer.contents[1].action.uri
 
 
 async def test_dining_random_restaurant_handles_empty_buildings():
@@ -158,7 +179,7 @@ async def test_announcement_board_title_matching_ignores_extra_whitespace():
     ]
     with fake_api(announcecrawler, boards):
         message = await announcecrawler.get("清華學院住宿書院", "最新公告 - 清華書院")
-    assert message.template.columns[0].title == "公告一"
+    assert message.contents.contents[0].header.contents[0].text == "公告一"
 
 
 async def test_announcement_repeated_calls_handle_nullable_articles_without_mutation():
@@ -204,8 +225,8 @@ async def test_announcement_board_name_is_filtered_locally_not_as_article_title(
     with fake_api(announcecrawler, boards) as get:
         message = await announcecrawler.get("Office", "News")
     get.assert_awaited_once_with("/announcements/", params=ANNOUNCEMENT_PARAMS)
-    assert len(message.template.columns) == 1
-    assert message.template.columns[0].title == "Bus schedule"
+    assert len(message.contents.contents) == 1
+    assert message.contents.contents[0].header.contents[0].text == "Bus schedule"
 
 
 # -- map --
@@ -236,7 +257,9 @@ async def test_legacy_magic_share_command_uses_new_branding_without_duplicate_me
     assert old[0].text == "汪！歡迎分享給更多朋友認識我！"
 
     menu = await command_handler.process_message("@神奇海螺", "user")
-    titles = [column.title for message in menu for column in message.template.columns]
+    titles = [
+        card.header.contents[0].text for message in menu for card in message.contents.contents
+    ]
     assert titles.count("分享清華校園情報員") == 1
     assert "分享狗狗情報員" not in titles
 

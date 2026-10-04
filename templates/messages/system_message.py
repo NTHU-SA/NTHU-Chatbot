@@ -1,23 +1,8 @@
 from linebot.v3.messaging import FlexContainer, FlexMessage
 
+from .flex_theme import FLEX_THEME, bubble, text
+
 
 def system_message(title, info):
-    system_message_json = {
-        "type": "bubble",
-        "size": "kilo",
-        "header": {
-            "type": "box",
-            "layout": "vertical",
-            "contents": [{"type": "text", "text": title, "weight": "bold", "size": "md"}],
-        },
-        "body": {
-            "type": "box",
-            "layout": "vertical",
-            "contents": [{"type": "text", "text": info, "wrap": True, "size": "xs"}],
-        },
-        "styles": {
-            "header": {"backgroundColor": "#D1C4E9"},
-            "body": {"backgroundColor": "#EDE7F6"},
-        },
-    }
+    system_message_json = bubble(title, [text(info)], size=FLEX_THEME["components"]["notice_size"])
     return [FlexMessage(alt_text="系統訊息", contents=FlexContainer.from_dict(system_message_json))]

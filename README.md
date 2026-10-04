@@ -78,11 +78,29 @@ pyproject.toml / uv.lock          依賴（執行期、dev、test group）與工
 
 輸入框上方固定顯示 AI 回覆可能出錯的提醒，並以 `aria-describedby` 關聯到輸入欄位。
 
+LINE Flex（AI 入口、公車、圖書館、使用說明、系統通知、加入／分享卡）和功能選單、餐廳、
+公告的輪播統一沿用同一套白色／淡紫色票；LINE 不支援背景模糊，以白色內層與細框表達玻璃層次。
+全域風格在 `templates/messages/flex_theme.py` 的 `FLEX_THEME`：色票、字級、padding、圓角、
+按鈕與卡片尺寸、紅綠藍路線色一次設定；所有 Python／Jinja Flex 共用同一組 builder。
+完整規範與修改範例見 [design.md](design.md)。
+公車以紅／綠表示校本部，藍色表示南大專車並保留路線一／二標籤；
+到站 API 缺少路線時比對時刻表，不依車型猜測，無法確認時明確標示。
+`@神奇海螺/分享給好友` 可開啟加入／分享卡，使用 `https://line.me/R/ti/p/@741vdfol` 加好友，
+分享按鈕開啟 LINE 分享畫面，由使用者自行確認送出。
+
+新版 Flex 預覽：執行 `uv run python scripts\build_flex_preview.py` 後，
+以 `uv run python -m http.server 5500 --bind 127.0.0.1 --directory .` 開啟
+`http://localhost:5500/frontend/flex-preview.html`。範例取自正式 builder，使用假資料、不需登入，
+產生的資料檔會共用重複的 Flex 子樹，載入時還原為彼此獨立的訊息物件。
+訊息內的按鈕只顯示動作；「複製 JSON」可複製單則 bubble／carousel 到 LINE Flex Simulator，
+剪貼簿受限時提供手動複製；「下載 JSON」則保留完整的 message 陣列。
+預覽檔案只供本機設計驗收，Hosting 建置時排除，不會把假資料或示例 LIFF ID 部署到正式網站。
+
 側欄「外觀」以系統、太陽、月亮三個圖示按鈕選擇跟隨系統、淺色或深色，預設跟隨系統；選取狀態以 `aria-pressed` 標示。選擇僅保存在此瀏覽器的 `localStorage`（`nthu-chatbot-theme`），不送到後端；對話頁與隱私頁共用設定。`frontend/js/theme.js` 在 CSS 載入前套用外觀，避免手動深色設定閃成淺色；儲存被瀏覽器阻擋時仍可切換，並顯示無法保存的提醒。
 
 桌面版（視窗寬度至少 1024px）常駐展開聊天清單，切換或新增對話不會收合；較窄視窗保留選單抽屜。聊天在底部時自動跟隨串流回覆、工具卡片與排版高度變化；往上閱讀歷史訊息時暫停跟隨，回到底部、點「最新」或送出訊息後恢復。
 
-前端的無相依測試：`node --test tests\frontend_theme.test.cjs tests\frontend_navigation.test.cjs tests\frontend_ui.test.cjs`。
+前端的無相依測試：`node --test tests\frontend_theme.test.cjs tests\frontend_navigation.test.cjs tests\frontend_ui.test.cjs tests\frontend_flex_preview.test.cjs`。
 
 ## 本機開發
 

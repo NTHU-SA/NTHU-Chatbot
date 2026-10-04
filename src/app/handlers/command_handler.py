@@ -9,12 +9,12 @@ import yaml
 from linebot.v3.messaging import (
     Action,
     CarouselColumn,
-    CarouselTemplate,
+    FlexMessage,
     MessageAction,
-    TemplateMessage,
 )
 
 from log import logger
+from templates.messages.flex_theme import carousel_message, theme_signature
 
 
 @dataclass
@@ -91,7 +91,8 @@ class CommandHandler:
         self.config = self._load_config(config_path)
         self.command_prefix = "@"
         self._initialize_module_mappings()
-        self._menu_cache: dict[str, list[TemplateMessage]] = {}
+        self._menu_cache: dict[str, list[FlexMessage]] = {}
+        self._menu_theme = theme_signature()
 
     def _initialize_module_mappings(self) -> None:
         """初始化模組名稱與前綴的映射關係。"""
@@ -248,11 +249,15 @@ class CommandHandler:
             thumbnail_image_url=(command.menu_info.image_url if command.menu_info else None),
         )
 
-    async def auto_generate_default_menu(self, module: str) -> list[TemplateMessage]:
+    async def auto_generate_default_menu(self, module: str) -> list[FlexMessage]:
         """自動生成預設選單。
 
         為指定模組自動生成輪播選單，顯示模組下所有帶有選單資訊的指令。
         """
+        current_theme = theme_signature()
+        if self._menu_theme != current_theme:
+            self._menu_cache.clear()
+            self._menu_theme = current_theme
         if module in self._menu_cache:
             return self._menu_cache[module]
 
@@ -264,20 +269,18 @@ class CommandHandler:
         if not prefix:
             raise ValueError(f"模組 {module} 未配置前綴")
 
-        menu_columns = [
-            self._create_carousel_column(cmd, prefix)
-            for cmd in module_config.commands.values()
-            if cmd.menu_info
-        ]
+        commands = {id(cmd): cmd for cmd in module_config.commands.values() if cmd.menu_info}
+        menu_columns = [self._create_carousel_column(cmd, prefix) for cmd in commands.values()]
 
         if not menu_columns:
             raise ValueError(f"{prefix} 模組沒有可用的選單資訊")
 
         self._menu_cache[module] = [
-            TemplateMessage(
+            carousel_message(
                 alt_text=f"{prefix} 模組選單",
-                template=CarouselTemplate(columns=menu_columns),
+                columns=menu_columns[offset : offset + 12],
             )
+            for offset in range(0, len(menu_columns), 12)
         ]
         return self._menu_cache[module]
 

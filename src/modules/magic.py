@@ -2,8 +2,6 @@ import json
 import random
 
 from linebot.v3.messaging import (
-    FlexContainer,
-    FlexMessage,
     PostbackAction,
     QuickReply,
     QuickReplyItem,
@@ -11,6 +9,7 @@ from linebot.v3.messaging import (
 )
 
 from src.app.handlers.command_handler import command_handler
+from templates.messages.friend_message import friend_message
 
 
 @command_handler.add_command_with_menu(
@@ -27,85 +26,9 @@ from src.app.handlers.command_handler import command_handler
         ),
     ],
 )
-@command_handler.add_command("分享狗狗情報員")
+@command_handler.add_command("分享狗狗情報員|分享給好友|新增情報員好友")
 def share_template(event):
-    # 分享給好友
-    share_template_json = {
-        "type": "bubble",
-        "size": "mega",
-        "header": {
-            "type": "box",
-            "layout": "baseline",
-            "contents": [
-                {
-                    "type": "icon",
-                    "url": "https://scdn.line-apps.com/n/channel_devcenter/img/fx/review_gold_star_28.png",
-                    "offsetStart": "10px",
-                },
-                {
-                    "type": "text",
-                    "text": "掃描加入 — 清華校園情報員",
-                    "offsetStart": "25px",
-                    "color": "#FFFFFF",
-                    "weight": "bold",
-                    "adjustMode": "shrink-to-fit",
-                },
-            ],
-            "backgroundColor": "#6F00D2",
-        },
-        "hero": {
-            "type": "image",
-            "url": "https://i.imgur.com/40t9Qo0.png",
-            "position": "relative",
-            "align": "center",
-            "gravity": "center",
-            "offsetTop": "lg",
-            "size": "5xl",
-        },
-        "body": {
-            "type": "box",
-            "layout": "vertical",
-            "contents": [
-                {
-                    "type": "text",
-                    "text": "@741vdfol",
-                    "color": "#7B7B7B",
-                    "align": "center",
-                    "size": "md",
-                },
-                {
-                    "type": "box",
-                    "layout": "horizontal",
-                    "contents": [],
-                    "justifyContent": "center",
-                    "alignItems": "center",
-                    "margin": "lg",
-                },
-                {
-                    "type": "button",
-                    "action": {
-                        "type": "uri",
-                        "label": "分享給LINE好友",
-                        "uri": "https://line.me/R/nv/recommendOA/@741vdfol",
-                    },
-                    "style": "secondary",
-                    "height": "sm",
-                    "offsetTop": "sm",
-                },
-            ],
-            "paddingBottom": "xxl",
-        },
-    }
-    response = []
-    response.append(TextMessage(text="汪！歡迎分享給更多朋友認識我！"))
-    response.append(
-        FlexMessage(
-            type="flex",
-            altText="分享QRcode",
-            contents=FlexContainer.from_dict(share_template_json),
-        )
-    )
-    return response
+    return [TextMessage(text="汪！歡迎分享給更多朋友認識我！"), friend_message()]
 
 
 @command_handler.add_command_with_menu(
