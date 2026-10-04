@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Flex 預覽 · 清華校園情報員</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%237362A2'/%3E%3Cpath d='M8 10h16v10H14l-6 4z' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="flex-preview.css">
+  <script src="flex-preview-data.js" defer></script>
+  <script src="js/flex-preview.js" defer></script>
+</head>
+<body class="preview-page">
+  <!-- Established Soft Glass world: white inner surfaces on lavender.
+       This gallery renders production Flex JSON, not independent card mockups.
+       Inspect AI, transport, library, menus and invitations; download any payload.
+       Buttons expose their actions without sending messages or opening demo LIFF sessions.
+       LINE remains the final rendering authority: no blur, shadow or dark-mode claims. -->
+  <a class="preview-skip" href="#gallery">跳到訊息預覽</a>
+  <main class="preview-main">
+    <header class="preview-header">
+      <div>
+        <h1>校園情報，換上同一種風格。</h1>
+        <p>白色內層、淡紫底色、灰紫按鈕。從 AI 到公車，延續網頁的 Soft Glass。</p>
+      </div>
+      <a class="preview-doc" href="../design.md">設計規範 ↗</a>
+    </header>
+    <div class="preview-toolbar">
+      <label for="sample-picker">查看訊息</label>
+      <select id="sample-picker"><option value="all">全部訊息</option></select>
+      <span class="preview-note">示範資料 · 非即時資訊</span>
+    </div>
+    <p class="preview-disclaimer">下方由實際 Flex JSON 產生。瀏覽器僅近似 LINE 排版；Flex 不支援毛玻璃模糊，最終外觀請以 LINE 手機版為準。點按鈕可檢視動作，不會送出訊息。</p>
+    <div id="gallery" class="preview-gallery" tabindex="-1"></div>
+    <aside class="preview-inspector" aria-labelledby="inspector-title">
+      <h2 id="inspector-title">按鈕動作</h2>
+      <p id="action-detail" role="status" aria-live="polite">點任一預覽按鈕，查看它實際帶出的網址或指令。</p>
+    </aside>
+  </main>
+</body>
+</html>

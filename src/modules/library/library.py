@@ -6,24 +6,26 @@ from email.utils import parsedate_to_datetime
 from jinja2 import Environment, FileSystemLoader
 from linebot.v3.messaging import (
     CarouselColumn,
-    CarouselTemplate,
-    ConfirmTemplate,
     FlexContainer,
     FlexMessage,
     PostbackAction,
     Sender,
-    TemplateMessage,
     TextMessage,
     URIAction,
 )
 
 from src.app.handlers.command_handler import command_handler
 from src.utils import nthuapi
+from templates.messages.flex_theme import bubble, carousel_message, text
+from templates.messages.library_message import library_info_bubble, library_space_bubble
 
 templates_path = "src/modules/library/templates"
 
 # 初始化 Jinja 環境
 env = Environment(loader=FileSystemLoader(templates_path))
+env.globals.update(
+    library_space_bubble=library_space_bubble, library_info_bubble=library_info_bubble
+)
 
 LIBRARY_API_ENDPOINT = "/libraries"
 
@@ -91,42 +93,37 @@ async def lib_news_message(rss, page_num):
         return [TextMessage(text="這一頁沒有圖書館消息，請回到選單重新查詢")]
 
     template_list.append(
-        TemplateMessage(
+        carousel_message(
             alt_text=alttext,
             sender=Sender(name=alttext),
-            template=CarouselTemplate(columns=result),
+            columns=result,
         )
     )
     if len(result) != 10:
-        no_more_page = TemplateMessage(
-            alt_text="要回到第一頁嗎？",
-            template=ConfirmTemplate(
-                text=f"你目前在第 {page_num} 頁，但沒有更多頁數了，要回到第一頁嗎？",
-                actions=[
-                    PostbackAction(
-                        label="回到第一頁",
-                        data=f"@圖書館/rss type={rss} page=1",
-                    ),
-                    PostbackAction(label="回到首頁", data="@圖書館"),
-                ],
-            ),
-        )
-        template_list.append(no_more_page)
+        title = "要回到第一頁嗎？"
+        description = f"你目前在第 {page_num} 頁，但沒有更多頁數了，要回到第一頁嗎？"
+        page_action = PostbackAction(label="回到第一頁", data=f"@圖書館/rss type={rss} page=1")
     else:
-        confirm_template_message = TemplateMessage(
-            alt_text="要查看下一頁嗎？",
-            template=ConfirmTemplate(
-                text=f"你目前在第 {page_num} 頁，要查看下一頁嗎？",
-                actions=[
-                    PostbackAction(
-                        label="查看下一頁",
-                        data=f"@圖書館/rss type={rss} page={page_num + 1}",
-                    ),
-                    PostbackAction(label="回到首頁", data="@圖書館"),
-                ],
+        title = "要查看下一頁嗎？"
+        description = f"你目前在第 {page_num} 頁，要查看下一頁嗎？"
+        page_action = PostbackAction(
+            label="查看下一頁", data=f"@圖書館/rss type={rss} page={page_num + 1}"
+        )
+    template_list.append(
+        FlexMessage(
+            alt_text=title,
+            contents=FlexContainer.from_dict(
+                bubble(
+                    title,
+                    [text(description)],
+                    [
+                        page_action.to_dict(),
+                        PostbackAction(label="回到首頁", data="@圖書館").to_dict(),
+                    ],
+                )
             ),
         )
-        template_list.append(confirm_template_message)
+    )
     return template_list
 
 

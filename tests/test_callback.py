@@ -173,6 +173,19 @@ def test_follow_sends_welcome_and_liff_button(post, webhook_app):
     assert messages[1].contents.footer.contents[0].action.uri == LIFF_BASE
 
 
+def test_share_postback_returns_working_friend_and_share_links(post, webhook_app):
+    from templates.messages.friend_message import ADD_FRIEND_URL, SHARE_URL
+
+    payload = event(kind="postback")
+    payload["postback"] = {"data": "@神奇海螺/分享給好友"}
+    assert post([payload]).status_code == 200
+    messages = replied_messages(webhook_app)
+    assert [message.type for message in messages] == ["text", "flex"]
+    actions = messages[1].contents.footer.contents
+    assert actions[0].action.uri == ADD_FRIEND_URL
+    assert actions[1].action.uri == SHARE_URL
+
+
 def test_unfollow_marks_user(post, webhook_app):
     unfollow = event(kind="unfollow")
     unfollow.pop("replyToken")

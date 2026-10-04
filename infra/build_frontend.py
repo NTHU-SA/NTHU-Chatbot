@@ -111,7 +111,11 @@ def build(conf_path: Path) -> Path:
     out = ROOT / "build" / f"frontend-{conf_path.stem}"
     if out.exists():
         shutil.rmtree(out)
-    shutil.copytree(FRONTEND, out / "public", ignore=shutil.ignore_patterns("config*.json"))
+    shutil.copytree(
+        FRONTEND,
+        out / "public",
+        ignore=shutil.ignore_patterns("config*.json", "flex-preview*"),
+    )
     public_config = {
         "liffId": liff_id(),
         "apiBase": conf["API_ORIGIN"],

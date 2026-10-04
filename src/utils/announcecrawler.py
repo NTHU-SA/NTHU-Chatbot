@@ -1,13 +1,12 @@
 from linebot.v3.messaging import (
     CarouselColumn,
-    CarouselTemplate,
     Sender,
-    TemplateMessage,
     TextMessage,
     URIAction,
 )
 
 from src.utils import nthuapi
+from templates.messages.flex_theme import carousel_message
 
 
 def _normalize(title) -> str:
@@ -22,13 +21,13 @@ async def get(
     alttext: str = "清華校園情報員",
 ):
     """
-    取得 Rpage 公告的資料，並且轉換成 Line 的 CarouselTemplate 格式
+    取得 Rpage 公告的資料，並且轉換成 Soft Glass Flex 輪播。
     Args:
         department_name (str): 系所名稱
         announcement_title (str): 佈告欄名稱（不是 API 的文章標題篩選）
         alttext (str): Line 在無法顯示 FlexMessage 時的替代文字
     Returns:
-        Line 的 CarouselTemplate
+        LINE FlexMessage，沒有公告時回傳 TextMessage。
     """
     params = {
         "department": department_name,
@@ -59,10 +58,10 @@ async def get(
     if not columns:
         return TextMessage(text="目前沒有符合條件的公告，請稍後再試")
 
-    carousel_template = TemplateMessage(
+    carousel_template = carousel_message(
         alt_text=alttext,
         sender=Sender(name=alttext),
-        template=CarouselTemplate(columns=columns[:10]),
+        columns=columns[:10],
     )
 
     return carousel_template

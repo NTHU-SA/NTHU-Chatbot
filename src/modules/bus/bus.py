@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
@@ -12,11 +13,93 @@ from linebot.v3.messaging import (
     TextMessage,
 )
 
+from log import logger
 from src.app.handlers.command_handler import command_handler
 from src.utils import announcecrawler, nthuapi
+from templates.messages.bus_message import BUS_TYPE_NAMES, bus_carousel, bus_direction_bubble
 
 STATIC_URL = "https://data.nthusa.tw"
 JINJA_ENV = Environment(loader=FileSystemLoader("src/modules/bus/templates"))
+JINJA_ENV.globals["bus_carousel"] = bus_carousel
+ROUTE_LOOKUP_LIMIT = 300
+
+
+def _departure_minutes(value: str | None) -> int | None:
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", value.strip())
+    if not match:
+        return None
+    hour, minute = map(int, match.groups())
+    return hour * 60 + minute if hour < 24 and minute < 60 else None
+
+
+def _departure_key(item: dict, time_field: str) -> tuple:
+    return (
+        _departure_minutes(item.get(time_field)),
+        item.get("dep_stop"),
+        item.get("bus_type"),
+        (item.get("description") or "").strip(),
+    )
+
+
+async def _with_route_labels(arrivals: list[dict], query: dict, now: datetime) -> list[dict]:
+    """Stop responses omit line; match exact departures, never infer it from vehicle size."""
+    result = [dict(item) for item in arrivals]
+    missing = [item for item in result if not item.get("line")]
+    if not missing:
+        return result
+    departures = [
+        minutes
+        for item in missing
+        if (minutes := _departure_minutes(item.get("dep_time"))) is not None
+    ]
+    if not departures:
+        logger.warning("Bus route lookup skipped: no valid departure times")
+        return result
+    earliest = min(departures)
+    day = query["day"]
+    if day == "current":
+        day = "weekend" if now.weekday() >= 5 else "weekday"
+    try:
+        schedules = await nthuapi.get(
+            "/buses/schedules",
+            params={
+                "bus_type": query["bus_type"],
+                "day": day,
+                "direction": query["direction"],
+                "time": f"{earliest // 60:02d}:{earliest % 60:02d}",
+                "limits": ROUTE_LOOKUP_LIMIT,
+            },
+            cache=False,
+        )
+    except ValueError:
+        logger.warning("Bus route lookup unavailable; retaining arrival information")
+        for item in missing:
+            item["route_status"] = "路線暫無資料"
+        return result
+    if not isinstance(schedules, list):
+        logger.warning("Bus route lookup returned an invalid response")
+        for item in missing:
+            item["route_status"] = "路線暫無資料"
+        return result
+    lines_by_departure: dict[tuple, set[str]] = {}
+    for schedule in schedules:
+        if not schedule or not schedule.get("line"):
+            continue
+        key = _departure_key(schedule, "time")
+        if key[0] is not None:
+            lines_by_departure.setdefault(key, set()).add(schedule["line"])
+    unresolved = 0
+    for item in missing:
+        lines = lines_by_departure.get(_departure_key(item, "dep_time"), set())
+        if len(lines) == 1:
+            item["line"] = next(iter(lines))
+        else:
+            unresolved += 1
+    if unresolved:
+        logger.warning("Bus route lookup could not uniquely identify {} arrivals", unresolved)
+    return result
 
 
 @command_handler.add_command_with_menu(
@@ -51,8 +134,9 @@ def select_route(params):
         ]
     )
     return [
-        TextMessage(
-            text="請問你想要上山還是下山呢！\n（上山含往南大校區，下山含往校本部）",
+        FlexMessage(
+            alt_text="公車紅線、綠線與藍線（南大專車）：請選擇上山或下山",
+            contents=FlexContainer.from_dict(bus_direction_bubble()),
             quick_reply=quick_reply,
         )
     ]
@@ -111,10 +195,12 @@ async def query_stop_bus(event):
     if not bus_stop_info:
         return [TextMessage(text=f"🚌 抱歉，目前 {stop_name} 站點沒有公車資訊")]
 
+    now = datetime.now(timezone(timedelta(hours=8)))
+    bus_stop_info = await _with_route_labels(bus_stop_info, query_params, now)
     day_mapping = {"current": "即時", "weekday": "平日", "weekend": "假日"}
     day_zh = day_mapping.get(query_params["day"], "")
     direction_zh = "上山" if query_params["direction"] == "up" else "下山"
-    now_time = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
+    now_time = now.strftime("%Y-%m-%d %H:%M:%S")
     info_message = f"🚌 【{stop_name}】{day_zh}{direction_zh}公車資訊\n更新時間：{now_time}"
 
     # 製作新的 data for postbackaction
@@ -125,11 +211,10 @@ async def query_stop_bus(event):
     template = JINJA_ENV.get_template("bus_flex_message.json.jinja")
     rendered_json = template.render(
         bus_stop_info=bus_stop_info,
-        bus_type_names={
-            "route_83": "83 路公車",
-            "large-sized_bus": "大型校園公車",
-            "middle-sized_bus": "中型校園公車",
-        },
+        stop_name=stop_name,
+        direction_name=direction_zh,
+        refresh_data="@公車/查詢站點與方向" + new_params,
+        bus_type_names=BUS_TYPE_NAMES,
     )
     flex_message = FlexMessage(
         alt_text=info_message,

@@ -38,6 +38,10 @@ def test_config_json_holds_only_public_values(built):
     assert (built / "public" / "js" / "main.js").exists()
     assert (built / "public" / "js" / "theme.js").exists()
     assert not (built / "public" / "config.example.json").exists()
+    assert not (built / "public" / "flex-preview.html").exists()
+    assert not (built / "public" / "flex-preview-data.js").exists()
+    assert not (built / "public" / "flex-preview.css").exists()
+    assert not (built / "public" / "js" / "flex-preview.js").exists()
 
 
 def test_theme_initializes_before_styles_on_both_pages(built):

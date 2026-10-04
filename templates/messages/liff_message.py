@@ -2,7 +2,9 @@ from urllib.parse import quote
 
 from linebot.v3.messaging import FlexContainer, FlexMessage
 
-BRAND_COLOR = "#6F00D2"
+from .flex_theme import bubble, inset, text
+from .friend_message import SHARE_URL
+
 MAX_QUESTION_CHARS = 500
 MAX_SESSION_KEY_CHARS = 64
 PREVIEW_CHARS = 120
@@ -46,71 +48,14 @@ def open_web_chat(
         subtitle = "這個問題本汪會在網頁裡幫你查校園資料，還能看到我正在用哪些工具。"
         label = "在網頁中詢問"
 
-    body_contents = [
-        {"type": "text", "text": subtitle, "size": "sm", "color": "#666666", "wrap": True},
-    ]
+    body_contents = [text(subtitle, color="muted")]
     if question:
-        body_contents.append(
-            {
-                "type": "box",
-                "layout": "vertical",
-                "margin": "md",
-                "paddingAll": "8px",
-                "backgroundColor": "#EDE7F6",
-                "cornerRadius": "6px",
-                "contents": [
-                    {
-                        "type": "text",
-                        "text": question[:PREVIEW_CHARS],
-                        "size": "sm",
-                        "color": "#333333",
-                        "wrap": True,
-                        "maxLines": 3,
-                    }
-                ],
-            }
-        )
+        body_contents.append(inset([text(question[:PREVIEW_CHARS], maxLines=3)]))
 
-    bubble = {
-        "type": "bubble",
-        "size": "kilo",
-        "header": {
-            "type": "box",
-            "layout": "vertical",
-            "backgroundColor": BRAND_COLOR,
-            "contents": [
-                {
-                    "type": "text",
-                    "text": title,
-                    "color": "#FFFFFF",
-                    "weight": "bold",
-                    "size": "md",
-                    "wrap": True,
-                }
-            ],
-        },
-        "body": {
-            "type": "box",
-            "layout": "vertical",
-            "spacing": "sm",
-            "contents": body_contents,
-        },
-        "footer": {
-            "type": "box",
-            "layout": "vertical",
-            "contents": [
-                {
-                    "type": "button",
-                    "style": "primary",
-                    "color": BRAND_COLOR,
-                    "height": "sm",
-                    "action": {
-                        "type": "uri",
-                        "label": label,
-                        "uri": liff_url(liff_id, question, session_key),
-                    },
-                }
-            ],
-        },
-    }
-    return FlexMessage(alt_text=title, contents=FlexContainer.from_dict(bubble))
+    actions = [
+        {"type": "uri", "label": label, "uri": liff_url(liff_id, question, session_key)},
+    ]
+    if greeting:
+        actions.append({"type": "uri", "label": "分享給 LINE 好友", "uri": SHARE_URL})
+    card = bubble(title, body_contents, actions)
+    return FlexMessage(alt_text=title, contents=FlexContainer.from_dict(card))
