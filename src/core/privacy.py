@@ -5,4 +5,4 @@
 前端送出同意時帶的是畫面上顯示的版本，和後端不一致（前後端尚未同步部署）時後端回 409，不會記錯版本。
 """
 
-PRIVACY_POLICY_VERSION = "2"
+PRIVACY_POLICY_VERSION = "3"
