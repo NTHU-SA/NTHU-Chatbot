@@ -5,14 +5,16 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
+import sys
 from urllib.parse import urlsplit
 
 import httpx
 from agents import function_tool
-from trafilatura import extract
-from trafilatura.utils import load_html
 
 from src.infrastructure.ai.run_state import begin_external_call
+from src.infrastructure.ai.webpage_parser import PRUNE_XPATH as PRUNE_XPATH
+from src.infrastructure.ai.webpage_parser import TRUNCATION_NOTE as TRUNCATION_NOTE
+from src.infrastructure.ai.webpage_parser import _extract_content as _extract_content
 
 VISIT_WEBPAGE = "visit_webpage"
 VISIT_WEBPAGE_TITLE = "讀取清大網頁內文"
@@ -21,14 +23,7 @@ MAX_URL_CHARS = 2048
 MAX_PAGE_BYTES = 2 * 1024 * 1024
 MAX_REDIRECTS = 3
 PAGE_TIMEOUT_SECONDS = 20
-TRUNCATION_NOTE = "\n\n[已截斷：網頁內文過長，請勿推測未讀取的部分。]"
-PRUNE_XPATH = [
-    "//script | //style | //nav | //footer | //aside | //form | //iframe | //noscript",
-    "//header[not(ancestor::article or ancestor::main)]",
-    "//*[@hidden or @aria-hidden='true']",
-    "//*[@role='navigation' or @role='banner' or @role='contentinfo' "
-    "or @role='complementary' or @role='dialog']",
-]
+PARSER_WORKER_MODULE = "src.infrastructure.ai.webpage_parser"
 
 
 def _validated_url(value: str) -> httpx.URL:
@@ -100,6 +95,7 @@ async def _fetch_html(url: httpx.URL) -> bytes | str:
         headers={
             "User-Agent": "NTHU-Chatbot/visit_webpage",
             "Accept": "text/html, application/xhtml+xml",
+            "Accept-Encoding": "identity",
         },
     ) as client:
         for redirects in range(MAX_REDIRECTS + 1):
@@ -118,8 +114,23 @@ async def _fetch_html(url: httpx.URL) -> bytes | str:
                 media_type = content_type.split(";", 1)[0].strip()
                 if media_type not in ("text/html", "application/xhtml+xml"):
                     raise ValueError("只支援 HTML 網頁內文，不支援 PDF、圖片或其他附件。")
+                if (
+                    response.headers.get("content-encoding", "identity").strip().lower()
+                    != "identity"
+                ):
+                    raise ValueError("網頁使用不支援的內容編碼，無法讀取。")
+                content_length = response.headers.get("content-length")
+                if content_length is not None:
+                    try:
+                        length = int(content_length)
+                    except ValueError as error:
+                        raise ValueError("網頁回應長度無效，無法讀取。") from error
+                    if length < 0:
+                        raise ValueError("網頁回應長度無效，無法讀取。")
+                    if length > MAX_PAGE_BYTES:
+                        raise ValueError("網頁檔案過大，無法讀取。")
                 content = bytearray()
-                async for chunk in response.aiter_bytes():
+                async for chunk in response.aiter_raw(chunk_size=64 * 1024):
                     if len(content) + len(chunk) > MAX_PAGE_BYTES:
                         raise ValueError("網頁檔案過大，無法讀取。")
                     content.extend(chunk)
@@ -129,30 +140,43 @@ async def _fetch_html(url: httpx.URL) -> bytes | str:
     raise ValueError("無法讀取網頁內文。")
 
 
-def _extract_content(html: bytes | str, max_chars: int) -> str:
-    tree = load_html(html)
-    if tree is None:
-        raise ValueError("找不到可讀取的網頁內文；頁面可能需要登入或 JavaScript 才能顯示。")
-    # precision 模式會移除 header；文章內的標題仍是有用的內文。
-    for header in tree.xpath("//article//header | //main//header"):
-        header.tag = "div"
-    text = extract(
-        tree,
-        output_format="txt",
-        include_comments=False,
-        include_links=False,
-        include_images=False,
-        include_tables=True,
-        favor_precision=True,
-        prune_xpath=PRUNE_XPATH,
+async def _extract_in_worker(html: bytes | str, max_chars: int) -> str:
+    payload = f"{max_chars} {'text' if isinstance(html, str) else 'bytes'}\n".encode()
+    payload += html.encode("utf-8") if isinstance(html, str) else html
+    spawning = asyncio.create_task(
+        asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            PARSER_WORKER_MODULE,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
     )
-    if not text or not text.strip():
-        raise ValueError("找不到可讀取的網頁內文；頁面可能需要登入或 JavaScript 才能顯示。")
-    text = "\n".join(" ".join(line.split()) for line in text.splitlines()).strip()
-    if len(text) > max_chars:
-        note = TRUNCATION_NOTE[:max_chars]
-        text = text[: max_chars - len(note)].rstrip() + note
-    return text
+    worker = None
+    communication = None
+    try:
+        worker = await asyncio.shield(spawning)
+        communication = asyncio.create_task(worker.communicate(payload))
+        output, _ = await asyncio.shield(communication)
+        if worker.returncode != 0 or output[:2] not in (b"O\n", b"E\n"):
+            raise ValueError("無法解析網頁內文。")
+        message = output[2:].decode("utf-8")
+        if output.startswith(b"E\n"):
+            raise ValueError(message)
+        return message
+    finally:
+        if worker is None:
+            worker = await spawning
+        if worker.returncode is None:
+            try:
+                worker.kill()
+            except ProcessLookupError:
+                pass
+        if communication is None:
+            await worker.communicate()
+        else:
+            await communication
 
 
 def build_visit_webpage_tool(max_chars: int, on_error):
@@ -170,7 +194,7 @@ def build_visit_webpage_tool(max_chars: int, on_error):
         try:
             async with asyncio.timeout(PAGE_TIMEOUT_SECONDS):
                 html = await _fetch_html(target)
-                return await asyncio.to_thread(_extract_content, html, max_chars)
+                return await _extract_in_worker(html, max_chars)
         except TimeoutError as error:
             raise ValueError("網頁讀取逾時，請稍後再試；不要立即重送相同請求。") from error
         except (httpx.RequestError, OSError) as error:

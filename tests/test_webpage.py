@@ -45,6 +45,28 @@ HTML = f"""<!DOCTYPE html><html><head>
 <footer>頁尾版權雜訊 聯絡地址</footer></body></html>"""
 
 
+class ChunkedStream(httpx.AsyncByteStream):
+    def __init__(self, *chunks):
+        self.chunks = chunks
+        self.read_count = 0
+
+    async def __aiter__(self):
+        for chunk in self.chunks:
+            self.read_count += 1
+            yield chunk
+
+    async def aclose(self):
+        pass
+
+
+def streamed_html(content=HTML.encode(), *, headers=None):
+    return httpx.Response(
+        200,
+        headers=headers or {"Content-Type": "text/html; charset=utf-8"},
+        stream=httpx.ByteStream(content),
+    )
+
+
 @pytest.fixture
 def run_state():
     state = RunState(max_tool_calls=2, max_web_searches=0)
@@ -63,9 +85,7 @@ def mock_web(monkeypatch):
         response = responses.get(str(request.url))
         if isinstance(response, Exception):
             raise response
-        return response or httpx.Response(
-            200, headers={"Content-Type": "text/html; charset=utf-8"}, text=HTML
-        )
+        return response or streamed_html()
 
     monkeypatch.setattr(webpage, "PublicWebTransport", lambda: httpx.MockTransport(handler))
     return calls, responses
@@ -168,6 +188,7 @@ async def test_fetch_returns_plain_body_and_marks_external_data(mock_web, run_st
     assert "十月十日" in text and "雜訊" not in text
     assert not text.startswith("{")
     assert calls[0].headers["accept"] == "text/html, application/xhtml+xml"
+    assert calls[0].headers["accept-encoding"] == "identity"
     assert run_state.tainted
     assert run_state.tool_calls == 1 and run_state.web_searches == 0
 
@@ -221,41 +242,97 @@ async def test_non_html_is_rejected(content_type, mock_web):
 
 
 async def test_download_size_is_bounded(mock_web, monkeypatch):
-    monkeypatch.setattr(webpage, "MAX_PAGE_BYTES", 32)
-    assert "網頁檔案過大" in await invoke()
-
-
-async def test_decompressed_size_is_bounded(mock_web, monkeypatch):
     _, responses = mock_web
-    monkeypatch.setattr(webpage, "MAX_PAGE_BYTES", 256)
+    monkeypatch.setattr(webpage, "MAX_PAGE_BYTES", 32)
+    stream = ChunkedStream(b"x" * 65536, b"not read")
+    responses[URL] = httpx.Response(200, headers={"Content-Type": "text/html"}, stream=stream)
+    assert "網頁檔案過大" in await invoke()
+    assert stream.read_count == 1
+
+
+@pytest.mark.parametrize("encoding", ["gzip", "deflate", "br", "GZIP", "identity, gzip"])
+async def test_compressed_html_is_rejected_before_reading(mock_web, encoding):
+    _, responses = mock_web
     compressed = gzip.compress(("<html><body>" + "x" * 10000 + "</body></html>").encode())
-    assert len(compressed) < webpage.MAX_PAGE_BYTES
+    stream = ChunkedStream(compressed)
     responses[URL] = httpx.Response(
         200,
-        headers={"Content-Type": "text/html", "Content-Encoding": "gzip"},
-        content=compressed,
+        headers={"Content-Type": "text/html", "Content-Encoding": encoding},
+        stream=stream,
+    )
+    assert "不支援的內容編碼" in await invoke()
+    assert stream.read_count == 0
+
+
+async def test_identity_content_encoding_is_accepted(mock_web):
+    _, responses = mock_web
+    responses[URL] = streamed_html(
+        headers={"Content-Type": "text/html", "Content-Encoding": "identity"}
+    )
+    assert "校園活動報名資訊" in await invoke()
+
+
+async def test_declared_download_size_is_bounded_before_reading(mock_web, monkeypatch):
+    _, responses = mock_web
+    monkeypatch.setattr(webpage, "MAX_PAGE_BYTES", 32)
+    stream = ChunkedStream(HTML.encode())
+    responses[URL] = httpx.Response(
+        200,
+        headers={"Content-Type": "text/html", "Content-Length": "33"},
+        stream=stream,
     )
     assert "網頁檔案過大" in await invoke()
+    assert stream.read_count == 0
+
+
+async def test_inaccurate_content_length_cannot_bypass_raw_limit(mock_web, monkeypatch):
+    _, responses = mock_web
+    monkeypatch.setattr(webpage, "MAX_PAGE_BYTES", 32)
+    responses[URL] = streamed_html(headers={"Content-Type": "text/html", "Content-Length": "1"})
+    assert "網頁檔案過大" in await invoke()
+
+
+async def test_invalid_content_length_is_rejected(mock_web):
+    _, responses = mock_web
+    responses[URL] = streamed_html(
+        headers={"Content-Type": "text/html", "Content-Length": "invalid"}
+    )
+    assert "網頁回應長度無效" in await invoke()
+
+
+async def test_raw_download_accepts_exact_size_limit(mock_web, monkeypatch):
+    _, responses = mock_web
+    monkeypatch.setattr(webpage, "MAX_PAGE_BYTES", 32)
+    responses[URL] = streamed_html(
+        b"x" * 32, headers={"Content-Type": "text/html", "Content-Length": "32"}
+    )
+    assert await webpage._fetch_html(_validated_url(URL)) == b"x" * 32
+
+
+async def test_raw_download_counts_multiple_chunks(mock_web, monkeypatch):
+    _, responses = mock_web
+    monkeypatch.setattr(webpage, "MAX_PAGE_BYTES", 65536)
+    stream = ChunkedStream(b"x" * 32768, b"x" * 32768, b"x" * 65536, b"not read")
+    responses[URL] = httpx.Response(200, headers={"Content-Type": "text/html"}, stream=stream)
+    with pytest.raises(ValueError, match="網頁檔案過大"):
+        await webpage._fetch_html(_validated_url(URL))
+    assert stream.read_count == 3
 
 
 async def test_html_encoding_from_header_is_honored(mock_web):
     _, responses = mock_web
-    responses[URL] = httpx.Response(
-        200,
+    responses[URL] = streamed_html(
+        ("<html><body>" + BODY + "</body></html>").encode("big5"),
         headers={"Content-Type": "text/html; charset=big5"},
-        content=("<html><body>" + BODY + "</body></html>").encode("big5"),
     )
     assert "校園活動報名資訊" in await invoke()
 
 
 async def test_html_encoding_from_meta_is_honored(mock_web):
     _, responses = mock_web
-    responses[URL] = httpx.Response(
-        200,
+    responses[URL] = streamed_html(
+        ('<html><head><meta charset="big5"></head><body>' + BODY + "</body></html>").encode("big5"),
         headers={"Content-Type": "text/html"},
-        content=('<html><head><meta charset="big5"></head><body>' + BODY + "</body></html>").encode(
-            "big5"
-        ),
     )
     assert "校園活動報名資訊" in await invoke()
 
