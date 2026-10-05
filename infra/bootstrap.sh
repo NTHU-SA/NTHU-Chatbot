@@ -5,8 +5,9 @@
 #   bash infra/bootstrap.sh infra/environments/staging.conf
 #   bash infra/bootstrap.sh infra/environments/prod.conf
 #   LINE_LOGIN_CHANNEL_ID=... LIFF_ID=... bash infra/bootstrap.sh ...   # 第一次建立或更換 LINE 頻道時
+#   AUTH0_CLIENT_ID=... bash infra/bootstrap.sh ...                       # 第一次啟用或更換 Auth0 Application 時
 #
-# LINE 的 ID 不寫在 repo：由執行者以環境變數注入；沒給時沿用 Cloud Run 服務上現有的值。
+# LINE 的 ID 與 Auth0 Client ID 不寫在 repo：由執行者以環境變數注入；沒給時沿用 Cloud Run 服務上現有的值。
 #
 # staging 與 prod 可以在同一個 GCP 專案：資料庫、Secret、SA、WIF pool、Cloud Run 服務與 Hosting 網站
 # 都依 conf 分開命名，權限也只授予自己那一份（Firestore 以 IAM condition 限定資料庫、
@@ -44,8 +45,12 @@ WIF_POOL="${WIF_POOL:-github-actions}"
 FIRESTORE_DATABASE="${FIRESTORE_DATABASE:-(default)}"
 SECRET_SUFFIX="${SECRET_SUFFIX:-}"
 WIF_PROVIDER="${WIF_PROVIDER:-github}"
-# API 只允許 LIFF 前端（Firebase Hosting）的兩個預設網域跨站呼叫
+# API 只允許前端（Firebase Hosting）的兩個預設網域與自訂網域（CUSTOM_DOMAIN，選填）跨站呼叫
 FRONTEND_ORIGINS="https://${HOSTING_SITE}.web.app,https://${HOSTING_SITE}.firebaseapp.com"
+if [[ -n "${CUSTOM_DOMAIN:-}" ]]; then
+  FRONTEND_ORIGINS+=",https://${CUSTOM_DOMAIN}"
+fi
+FRONTEND_URL="https://${CUSTOM_DOMAIN:-${HOSTING_SITE}.web.app}/"
 MCP_SERVER_URL="${MCP_SERVER_URL:-https://api.nthusa.tw/mcp}"
 OPENAI_USE_RESPONSES_API="${OPENAI_USE_RESPONSES_API:-true}"
 REASONING_SUMMARY="${REASONING_SUMMARY:-true}"
@@ -76,6 +81,15 @@ LIFF_ID="${LIFF_ID:-$(service_env LIFF_ID)}"
 if [[ -z "$LINE_LOGIN_CHANNEL_ID" || -z "$LIFF_ID" ]]; then
   echo "第一次建立服務：請以環境變數提供 LINE_LOGIN_CHANNEL_ID 與 LIFF_ID" >&2
   exit 1
+fi
+# Auth0（一般瀏覽器登入）：conf 有 AUTH0_DOMAIN / AUTH0_AUDIENCE 且有 Client ID 才啟用。
+# --set-env-vars 會整組取代，所以每次都要帶上；沒有 Client ID 時不設定（後端停用 Auth0）
+if [[ -n "${AUTH0_DOMAIN:-}" ]]; then
+  : "${AUTH0_AUDIENCE:?${ENV_FILE} 有 AUTH0_DOMAIN 時也要設定 AUTH0_AUDIENCE}"
+  AUTH0_CLIENT_ID="${AUTH0_CLIENT_ID:-$(service_env AUTH0_CLIENT_ID)}"
+  if [[ -z "$AUTH0_CLIENT_ID" ]]; then
+    echo "沒有 AUTH0_CLIENT_ID：這次不啟用 Auth0（以環境變數提供後重跑）" >&2
+  fi
 fi
 
 step "啟用 API"
@@ -276,6 +290,9 @@ env_vars+=";LINE_LOGIN_CHANNEL_ID=${LINE_LOGIN_CHANNEL_ID}"
 env_vars+=";LIFF_ID=${LIFF_ID};OPENAI_MODEL=${OPENAI_MODEL};OPENAI_USE_RESPONSES_API=${OPENAI_USE_RESPONSES_API}"
 env_vars+=";REASONING_SUMMARY=${REASONING_SUMMARY};MCP_SERVER_URL=${MCP_SERVER_URL}"
 env_vars+=";CORS_ALLOWED_ORIGINS=${FRONTEND_ORIGINS};WEB_SEARCH_ENABLED=${WEB_SEARCH_ENABLED}"
+if [[ -n "${AUTH0_DOMAIN:-}" && -n "${AUTH0_CLIENT_ID:-}" ]]; then
+  env_vars+=";AUTH0_DOMAIN=${AUTH0_DOMAIN};AUTH0_AUDIENCE=${AUTH0_AUDIENCE};AUTH0_CLIENT_ID=${AUTH0_CLIENT_ID}"
+fi
 secret_vars="OPENAI_API_KEY=${SECRET_OPENAI}:latest,LINE_CHANNEL_SECRET=${SECRET_LINE_SECRET}:latest"
 secret_vars+=",LINE_CHANNEL_ACCESS_TOKEN=${SECRET_LINE_TOKEN}:latest"
 service_flags=(
@@ -328,10 +345,16 @@ fi
 url="$("${G[@]}" run services describe "$SERVICE" --region="$REGION" --format='value(status.url)')"
 step "完成"
 echo "服務網址：${url}"
-echo "LINE Developers：Webhook URL = ${url}/callback；LIFF Endpoint URL = https://${HOSTING_SITE}.web.app/"
+echo "LINE Developers：Webhook URL = ${url}/callback；LIFF Endpoint URL = ${FRONTEND_URL}"
+if [[ -n "${AUTH0_DOMAIN:-}" ]]; then
+  echo "Auth0 Application（SPA）：Allowed Callback / Logout URLs = ${FRONTEND_URL}；Allowed Web Origins = ${FRONTEND_URL%/}"
+fi
 echo "conf 的 API_ORIGIN 應為：${url}（staging 可用 https://${SERVICE}-${project_number}.${REGION}.run.app）"
 echo "GitHub repo variables（Settings → Secrets and variables → Actions → Variables，不是機密）："
 echo "  GCP_WIF_PROVIDER_<ENV>=${WIF_PROVIDER_NAME}"
 echo "  GCP_HOSTING_SA_<ENV>=${HOSTING_SA}"
 echo "  LIFF_ID_<ENV>=${LIFF_ID}"
+if [[ -n "${AUTH0_CLIENT_ID:-}" ]]; then
+  echo "  AUTH0_CLIENT_ID_<ENV>=${AUTH0_CLIENT_ID}"
+fi
 echo "監測與告警：ALERT_EMAIL=you@example.com bash infra/monitoring.sh ${ENV_FILE}"
