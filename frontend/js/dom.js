@@ -29,13 +29,13 @@ export const el = {
   consentStale: $("consentStale"),
   deleteDataBtn: $("deleteDataBtn"),
   profileBtn: $("profileBtn"),
+  logoutBtn: $("logoutBtn"),
   scrollBtn: $("scrollBtn"),
   loading: $("loadingMsgs"),
   tplMessage: $("tplMessage"),
 };
 
 export const state = {
-  idToken: null,
   sessions: [],
   current: null, // session id
   busy: false,

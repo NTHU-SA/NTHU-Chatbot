@@ -1,9 +1,9 @@
 // Backend access. The page is served by Firebase Hosting and calls the Cloud Run
-// API directly (CORS); identity comes from the LIFF id_token, which the backend
-// verifies with LINE. No secrets live here — config.json only holds the public
-// LIFF ID and API base URL for this environment.
+// API directly (CORS); identity comes from the LIFF id_token or an Auth0 access
+// token (see auth.js), which the backend verifies. No secrets live here —
+// config.json only holds public IDs and the API base URL for this environment.
 
-import { state } from "./dom.js";
+import { accessToken, authProvider, relogin } from "./auth.js";
 
 let apiBase = "";
 
@@ -18,7 +18,7 @@ export async function loadConfig() {
 export async function api(path, opts = {}) {
   // X-Auth-Provider tells the backend which authenticator verifies the token.
   const headers = Object.assign(
-    { Authorization: `Bearer ${state.idToken}`, "X-Auth-Provider": "line" },
+    { Authorization: `Bearer ${await accessToken()}`, "X-Auth-Provider": authProvider() },
     opts.headers || {});
   if (opts.body && typeof opts.body !== "string") {
     headers["Content-Type"] = "application/json";
@@ -26,12 +26,8 @@ export async function api(path, opts = {}) {
   }
   // credentials: "omit" — auth is the bearer token only, never cookies.
   const res = await fetch(apiBase + path, Object.assign({ credentials: "omit" }, opts, { headers }));
-  if (res.status === 401) {
-    // id_token expired — re-login through LIFF and come back.
-    liff.logout();
-    liff.login({ redirectUri: location.href });
-    throw new Error("re-login");
-  }
+  // Token expired or revoked — log in again and come back (throws "re-login").
+  if (res.status === 401) await relogin();
   if (!res.ok) {
     let detail = res.statusText;
     try { detail = (await res.json()).detail || detail; } catch (_) { /* ignore */ }
