@@ -23,8 +23,8 @@ RUN ln -snf "/usr/share/zoneinfo/$TZ" /etc/localtime && echo "$TZ" > /etc/timezo
 COPY pyproject.toml uv.lock ./
 
 # --locked：uv.lock 與 pyproject.toml 不一致就失敗；每個套件都會比對鎖定檔裡的雜湊。
-# 只裝執行期依賴（不含 dev / test group）
-RUN uv sync --locked --no-default-groups --no-cache
+# 只裝執行期依賴（不含 dev / test group）；--no-build 只接受 wheel，不執行任何套件的建置腳本
+RUN uv sync --locked --no-build --no-default-groups --no-cache
 
 # 將專案程式碼複製到容器
 COPY . .

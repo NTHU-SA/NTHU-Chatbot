@@ -33,11 +33,11 @@ jobs:
           cache-dependency-glob: uv.lock
 
       - name: Install dependencies from uv.lock (hash-verified)
-        run: uv sync --locked
+        run: uv sync --locked --no-build
 
       # Same hooks as local pre-commit: isort, Black, Ruff and the uv.lock check
       - name: Format and lint checks
-        run: uv run --no-sync pre-commit run --all-files --show-diff-on-failure
+        run: uv run --no-sync --no-build pre-commit run --all-files --show-diff-on-failure
 
       # Firestore emulator: firebase-tools needs Node, the emulator itself needs Java 21+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

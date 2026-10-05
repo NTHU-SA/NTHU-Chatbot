@@ -104,7 +104,8 @@ async function boot() {
       ? api("/api/me", { method: "POST", body: await clientInfo() })
       : api("/api/me")).then((res) => res.json());
     el.userBox.innerHTML = "";
-    if (me.picture_url) {
+    // Only https avatars (LINE's CDN); anything else is dropped rather than rendered.
+    if (typeof me.picture_url === "string" && me.picture_url.startsWith("https://")) {
       const img = document.createElement("img");
       img.src = me.picture_url;
       img.alt = "";
