@@ -1,9 +1,11 @@
-/* NTHU campus assistant — LIFF chat page (entry point).
+/* NTHU campus assistant — chat page (entry point).
  * Served by Firebase Hosting; talks only to our own Cloud Run API. Identity comes
- * from the LIFF id_token, which the backend verifies with LINE. No secrets live here.
+ * from LIFF inside LINE and from Auth0 in other browsers (auth.js); the backend
+ * verifies every token. No secrets live here.
  */
 
 import { api, loadConfig } from "./api.js";
+import { authProvider, logout, signIn } from "./auth.js";
 import { createSession, loadSessions, openSession, send } from "./chat.js";
 import {
   deleteAllData, finishDeletion, requestConsent, setPolicyVersion,
@@ -22,6 +24,7 @@ function bindUi() {
   el.newBtn.addEventListener("click", () => createSession());
   el.profileBtn.addEventListener("click", () => openProfile().catch(reportError));
   el.deleteDataBtn.addEventListener("click", () => deleteAllData().catch(reportError));
+  el.logoutBtn.addEventListener("click", () => logout().catch(reportError));
   el.composer.addEventListener("submit", (e) => { e.preventDefault(); send(el.input.value); });
   el.input.addEventListener("input", () => { autosize(); updateControls(); });
   el.input.addEventListener("keydown", (e) => {
@@ -92,20 +95,14 @@ async function boot() {
   try {
     const cfg = await loadConfig();
     setPolicyVersion(cfg.privacyPolicyVersion);
-    await liff.init({ liffId: cfg.liffId });
-    if (!liff.isLoggedIn()) {
-      liff.login({ redirectUri: location.href });
-      return;
-    }
-    state.idToken = liff.getIDToken();
-    if (!state.idToken) {
-      // Scope openid missing or stale session — force a fresh login.
-      liff.logout();
-      liff.login({ redirectUri: location.href });
-      return;
-    }
+    if (!(await signIn(cfg))) return; // redirecting to a login page
+    const line = authProvider() === "line";
+    el.logoutBtn.hidden = line; // inside LINE, leaving is closing the window
 
-    const me = await (await api("/api/me", { method: "POST", body: await clientInfo() })).json();
+    // LIFF environment info is only meaningful (and only accepted) for LINE sign-ins.
+    const me = await (line
+      ? api("/api/me", { method: "POST", body: await clientInfo() })
+      : api("/api/me")).then((res) => res.json());
     el.userBox.innerHTML = "";
     if (me.picture_url) {
       const img = document.createElement("img");
@@ -113,7 +110,7 @@ async function boot() {
       img.alt = "";
       el.userBox.append(img);
     }
-    el.userBox.append(document.createTextNode(me.display_name || "LINE 使用者"));
+    el.userBox.append(document.createTextNode(me.display_name || (line ? "LINE 使用者" : "使用者")));
 
     // AI chat needs consent to the current privacy policy (the backend enforces it too).
     hideOverlay();
