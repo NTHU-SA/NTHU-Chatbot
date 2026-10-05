@@ -88,6 +88,8 @@ async function clientInfo() {
 }
 
 async function boot() {
+  // liff.isInClient() works before liff.init(); see the safe-area note in style.css.
+  if (liff.isInClient()) document.documentElement.classList.add("in-line-client");
   showOverlay("連線中…");
   try {
     const cfg = await loadConfig();
