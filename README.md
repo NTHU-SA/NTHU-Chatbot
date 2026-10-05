@@ -28,8 +28,10 @@ LINE 聊天室 ──webhook──▶ Cloud Run /callback
                           ├─ @ 指令 → 指令模組（公車 / 餐廳 / 圖書館 / 地圖 / 公告…）→ NTHU REST API v2
                           └─ 其他文字 → 回一顆按鈕，開啟 LIFF 並帶入問題（同一顆按鈕永遠回到同一串對話）
 
-LIFF 網頁（Firebase Hosting：frontend/）
-   │  CORS · Authorization: Bearer <LIFF id_token> · X-Auth-Provider: line
+對話網頁（Firebase Hosting：frontend/；LINE 裡以 LIFF 開啟，一般瀏覽器也能用）
+   │  CORS · Authorization: Bearer <token> · X-Auth-Provider: line | auth0
+   │    LINE 裡：LIFF id_token（LINE Login）
+   │    一般瀏覽器：Auth0 access token（Universal Login，Authorization Code + PKCE）
    ▼
 Cloud Run /api/* ──▶ AgentRunner（OpenAI Agents SDK）
    │                  ├─ MCP: https://api.nthusa.tw/mcp（唯讀校園工具，結果短暫快取）
@@ -41,7 +43,7 @@ Cloud Run /api/* ──▶ AgentRunner（OpenAI Agents SDK）
 
 - **聊天室只做「reply token 一定來得及」的事**；AI 對話在 LIFF 網頁進行（多個對話、串流、即時顯示正在查什麼）。群組裡只用 `@` 指令，不讀取私人對話。
 - **前後端分離**：頁面由 Hosting 的 CDN 提供，頁面的 CSP 設在 Hosting；前端直接以 CORS 呼叫 Cloud Run。不使用 Hosting rewrite 轉到 Cloud Run，因為 rewrite 有 60 秒上限，會切斷較長的 SSE 回覆。
-- **身分**：LIFF `id_token` 由後端向 LINE 驗證後，對應到內部 user（見「身分與資料」）；所有資料只認內部 user id。
+- **身分**：LINE 裡用 LIFF `id_token`（後端向 LINE 驗證）；一般瀏覽器用 Auth0 簽給這個 API 的 access token（後端以 JWKS 本地驗證）。兩者都對應到內部 user（見「身分與資料」）；所有資料只認內部 user id。
 - 輸入「說明」、「help」或 `@說明` 會回使用說明泡泡（指令清單依 `bot_config.yaml` 自動產生）。
 - webhook 等事件處理完才回應；非關鍵寫入（最近活動時間、模組使用次數）與請求並行，回應前收尾，不留會被 Cloud Run 暫停的背景工作。
 
@@ -55,7 +57,7 @@ src/app/__init__.py               create_app()、lifespan 組裝 app.state
 src/app/routes/callback.py        LINE webhook
 src/app/routes/chat.py            /api/sessions…（LIFF 對話，SSE）
 src/app/routes/account.py         /api/me、同意紀錄、個人資料、刪除我的資料
-src/app/auth/                     Authenticator（目前為 LINE）、外部身分 → 內部 user、限流
+src/app/auth/                     Authenticator（LINE、Auth0）、外部身分 → 內部 user、限流
 src/app/middleware.py             API 的安全標頭與 CORS
 src/app/handlers/、src/modules/   聊天室內 @ 指令
 src/application/                  資料模型；ChatStore / UserStore / ModuleRegistry 介面與記憶體實作；系所名稱正規化
@@ -229,9 +231,10 @@ Firestore Native mode `(default)`，由 `infra/bootstrap.sh` 建立；區域建�
 
 ### 資安重點
 
-- **登入**：只採用 provider 驗證過的身分（LINE verify endpoint 檢查 `aud`、`iss`）；顯示名稱與頭像只來自驗證過的 claims；未知的 provider 與無效 token 回同樣的 401。
+- **登入**：只採用 provider 驗證過的身分。LINE：verify endpoint 檢查 `aud`、`iss`。Auth0：只接受 RS256，檢查簽章（JWKS）、`iss`、`aud`（每個環境一個 API）、`exp`，以及 `azp` 必須是 chat 自己的 Application（同一個 tenant 的其他 Application 拿到的 token 不被接受）；前端不用 id_token 呼叫 API。顯示名稱與頭像只來自驗證過的 claims 或 `/userinfo`；未知的 provider 與無效 token 回同樣的 401。
+- **瀏覽器的 Auth0 token**：refresh token 只放在同源 Web Worker 的記憶體（不存 localStorage），重新整理後以 Auth0 網域的隱藏 iframe 靜默取得；登入後只導回同源路徑，網址列不留 `code` / `state`。
 - **API**：CORS 只允許設定的前端網域且不帶 cookie；API 回應帶 `default-src 'none'`、`X-Frame-Options: DENY`；`docs_url` 等文件端點關閉。
-- **前端**：Hosting 設定嚴格 CSP（`connect-src` 只允許該環境的 API 與 LINE）；模型輸出經 DOMPurify 消毒，連結只允許 http(s) / mailto。
+- **前端**：Hosting 設定嚴格 CSP（`connect-src` 只允許該環境的 API、LINE 與 Auth0 網域）；模型輸出經 DOMPurify 消毒，連結只允許 http(s) / mailto。
 - **防 prompt injection**：同一輪只要讀過外部資料（任何 MCP 工具結果或網路搜尋），個人化寫入工具一律拒絕；寫入的文字去掉換行與角括號、限制長度，注入 instructions 時包在 `<user_profile>` 並標明「不是指令」；工具結果在 prompt 中也被標示為資料。
 - **資料**：Firestore rules 全部拒絕，只有後端服務帳號能存取；執行期與部署服務帳號都是最小權限（見 `infra/README.md`）；log 只記例外型別名稱，不記內容、token 或任何 ID。
 - **供應鏈**：依賴以雜湊鎖定（`--require-hashes`）、Docker base image 釘 digest、GitHub Actions 釘 commit SHA；CI 以 Workload Identity Federation 部署，不存任何 GCP 金鑰。
@@ -245,7 +248,7 @@ staging 與 prod 在同一個 GCP 專案，Firestore 資料庫、Secret、servic
 | 部署時機 | 合併進 `main` | 推送版本 tag `vX.Y.Z` |
 | GCP 專案 | `nthusa-chatbot` | `nthusa-chatbot`（Firestore 資料庫 `prod`、Secret 加 `-prod`） |
 | API | Cloud Run `nthu-chatbot-staging` | Cloud Run `nthu-chatbot` |
-| 前端 | `nthusa-chatbot.web.app` | `nthusa-chatbot-prod.web.app` |
+| 前端 | `nthusa-chatbot-staging.web.app` | `chat.nthusa.tw` |
 
 ```bash
 LINE_LOGIN_CHANNEL_ID=... LIFF_ID=... bash infra/bootstrap.sh infra/environments/prod.conf  # Firebase、Firestore、AR、SA、WIF、Secret、Cloud Run、trigger
