@@ -65,7 +65,7 @@ Auth0 Dashboard（每個環境各一次）：
 - post-login Action（例如 allowlist）會套用到 tenant 裡所有 Application，必須以 `event.client.client_id` 限定範圍，否則會擋住 chat 的使用者。
 - 不要對 chat 的使用者做 Auth0 帳號連結：連結後被併入的身分 `sub` 會改成主帳號的，chat 會把他當成另一個人。chat 的帳號連結在後端做（內部 user id）。
 - 目前 Auth0 登入（provider `auth0`）與 LIFF 登入（provider `line`）是**不同的內部 user**，對話不互通。之後要讓兩者對到同一人（後續 PR），前提是 LINE connection 的 LINE Login channel 和 bot 在同一個 LINE Provider，兩邊的 LINE user ID 才會相同。
-- 隱私權政策目前只說明 LINE 帳號資料：設定 `AUTH0_CLIENT_ID` 啟用 Auth0 之前，必須先更新 `privacy.html` 並遞增 `PRIVACY_POLICY_VERSION`。
+- 隱私權政策（第 3 版起）已說明以 Google 經 Auth0 登入時的資料；之後新增其他登入方式（例如 GitHub）時，要先更新 `privacy.html` 並遞增 `PRIVACY_POLICY_VERSION`。
 
 ## 網域
 
