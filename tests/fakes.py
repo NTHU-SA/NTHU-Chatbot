@@ -79,13 +79,13 @@ class FakeRunner:
         yield AgentEvent("thinking", {"delta": "先查南大方向的下一班車"})
         yield AgentEvent(
             "tool_call_start",
-            {"call_id": "c1", "name": "get_next_buses", "args": {"route": "nanda"}},
+            {"call_id": "c1", "name": "get_bus_schedule", "args": {"route": "nanda"}},
         )
         yield AgentEvent(
             "tool_call_end",
             {
                 "call_id": "c1",
-                "name": "get_next_buses",
+                "name": "get_bus_schedule",
                 "ok": True,
                 "duration_ms": 12,
                 "result_preview": "{}",
@@ -99,7 +99,7 @@ class FakeRunner:
                 "content": "下一班 17:00",
                 "tool_calls": [
                     {
-                        "name": "get_next_buses",
+                        "name": "get_bus_schedule",
                         "args": {"route": "nanda"},
                         "result_preview": "{}",
                         "duration_ms": 12,

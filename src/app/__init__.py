@@ -34,7 +34,7 @@ from src.infrastructure.firebase.user_store import FirestoreUserStore
 async def _fetch_departments():
     from src.utils import nthuapi
 
-    return await nthuapi.get("/departments/")
+    return await nthuapi.get("/directory")
 
 
 @asynccontextmanager

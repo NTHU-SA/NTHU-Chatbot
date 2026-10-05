@@ -25,6 +25,13 @@ OUTPUT = ROOT / "frontend" / "flex-preview-data.js"
 PREVIEW_LIFF_ID = "0000000000-preview"
 
 
+def _bus_schedule(stop: str, arrive_time: str, **departure) -> dict:
+    return {
+        "dep_info": departure,
+        "stops_time": [{"stop": stop, "arrive_time": arrive_time}],
+    }
+
+
 async def build_samples() -> list[dict]:
     samples = []
 
@@ -73,30 +80,33 @@ async def build_samples() -> list[dict]:
             "get",
             new=AsyncMock(
                 return_value=[
-                    {
-                        "bus_type": "large-sized_bus",
-                        "line": "red",
-                        "arrive_time": "08:10",
-                        "dep_stop": "校門口",
-                        "dep_time": "08:00",
-                        "description": "往南大校區",
-                    },
-                    {
-                        "bus_type": "middle-sized_bus",
-                        "line": "green",
-                        "arrive_time": "08:25",
-                        "dep_stop": "校門口",
-                        "dep_time": "08:15",
-                        "description": "經綜二館",
-                    },
-                    {
-                        "bus_type": "route_83",
-                        "line": "route_1",
-                        "arrive_time": "08:40",
-                        "dep_stop": "清華大學",
-                        "dep_time": "08:30",
-                        "description": "示範班次，非即時資訊",
-                    },
+                    _bus_schedule(
+                        "校門口",
+                        "08:10",
+                        bus_type="large-sized_bus",
+                        line="main_red",
+                        dep_stop="校門口",
+                        time="08:00",
+                        description="往南大校區",
+                    ),
+                    _bus_schedule(
+                        "校門口",
+                        "08:25",
+                        bus_type="middle-sized_bus",
+                        line="main_green",
+                        dep_stop="校門口",
+                        time="08:15",
+                        description="經綜二館",
+                    ),
+                    _bus_schedule(
+                        "校門口",
+                        "08:40",
+                        bus_type="route_83",
+                        line="nanda_route_1",
+                        dep_stop="清華大學",
+                        time="08:30",
+                        description="示範班次，非即時資訊",
+                    ),
                 ]
             ),
         ),
@@ -113,9 +123,9 @@ async def build_samples() -> list[dict]:
         messages,
     )
     for key, line, vehicle, title in [
-        ("bus-red", "red", "middle-sized_bus", "紅線 · 校本部"),
-        ("bus-green", "green", "middle-sized_bus", "綠線 · 校本部"),
-        ("bus-blue", "route_2", "large-sized_bus", "藍線 · 南大路線二"),
+        ("bus-red", "main_red", "middle-sized_bus", "紅線 · 校本部"),
+        ("bus-green", "main_green", "middle-sized_bus", "綠線 · 校本部"),
+        ("bus-blue", "nanda_route_2", "large-sized_bus", "藍線 · 南大路線二"),
         ("bus-unknown", "", "large-sized_bus", "路線待確認"),
     ]:
         with (
@@ -123,18 +133,16 @@ async def build_samples() -> list[dict]:
                 bus.nthuapi,
                 "get",
                 new=AsyncMock(
-                    side_effect=[
-                        [
-                            {
-                                "bus_type": vehicle,
-                                "line": line,
-                                "arrive_time": "09:10",
-                                "dep_stop": "北校門口",
-                                "dep_time": "09:00",
-                                "description": "示範班次",
-                            }
-                        ],
-                        [],
+                    return_value=[
+                        _bus_schedule(
+                            "綜二館",
+                            "09:10",
+                            bus_type=vehicle,
+                            line=line,
+                            dep_stop="北校門口",
+                            time="09:00",
+                            description="示範班次",
+                        )
                     ]
                 ),
             ),
@@ -144,7 +152,7 @@ async def build_samples() -> list[dict]:
             messages = await bus.query_stop_bus(
                 SimpleNamespace(params={"stop_name": "綜二館", "direction": "up"})
             )
-        add(key, title, "依實際路線欄位呈現；無法對上時刻表時不猜測路線。", messages)
+        add(key, title, "依實際路線欄位呈現；未提供路線時不依車種猜測。", messages)
 
     with patch.object(
         library.nthuapi,

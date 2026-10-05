@@ -15,7 +15,7 @@ from src.utils import nthuapi
 
 @command_handler.add_default_menu()
 async def list_quick_reply(event):
-    map_data = await nthuapi.get("/locations/")
+    map_data = await nthuapi.get("/locations")
     if not map_data:
         return [TextMessage(text="目前沒有地點資料，請稍後再試")]
     quick_replies = []
@@ -43,7 +43,7 @@ async def handle_location_command(event):
     if not query:
         return [TextMessage(text="請提供要查詢的地點名稱")]
     query = query.replace("_space_", " ")
-    map_data = await nthuapi.get("/locations/search", params={"query": query})
+    map_data = await nthuapi.get("/locations", params={"name": query, "fuzzy": True})
     if not map_data:
         return [TextMessage(text="找不到地點資料")]
     exact_matches = [location for location in map_data if location["name"] == query]
