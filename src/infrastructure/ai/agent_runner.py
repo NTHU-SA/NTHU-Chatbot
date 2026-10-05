@@ -69,7 +69,6 @@ MCP_CACHE_TTL = {
     "find_dining": 300,
     "get_energy_usage": 300,
     "search_campus": 3600,
-    "get_bus_stops": 3600,
     "search_courses": 3600,
 }
 MCP_CACHE_MAX_ENTRIES = 256

@@ -5,16 +5,23 @@ BUS_TYPE_NAMES = {
     "large-sized_bus": "大型校園公車",
     "middle-sized_bus": "中型校園公車",
 }
+ROUTE_COLORS = {
+    "main_red": "red",
+    "main_green": "green",
+    "nanda_route_1": "blue",
+    "nanda_route_2": "blue",
+}
+NANDA_ROUTE_NAMES = {"nanda_route_1": "路線一", "nanda_route_2": "路線二"}
 
 
 def route_badge(line: str | None, status: str = "路線待確認", *, compact: bool = False) -> dict:
-    key = "blue" if line in {"route_1", "route_2"} else line
+    key = ROUTE_COLORS.get(line, line)
     route = FLEX_THEME["routes"].get(key or "")
     label = route["label"] if route else status
     if compact and key == "blue":
         label = label.split(" · ", 1)[0]
-    if not compact and line in {"route_1", "route_2"}:
-        label += " · " + {"route_1": "路線一", "route_2": "路線二"}[line]
+    if not compact and line in NANDA_ROUTE_NAMES:
+        label += " · " + NANDA_ROUTE_NAMES[line]
     badge = {
         "type": "box",
         "layout": "vertical",
@@ -49,9 +56,7 @@ def bus_carousel(
 ) -> dict:
     cards = []
     for arrival in arrivals:
-        route = FLEX_THEME["routes"].get(
-            "blue" if arrival.get("line") in {"route_1", "route_2"} else arrival.get("line", "")
-        )
+        route = FLEX_THEME["routes"].get(ROUTE_COLORS.get(arrival.get("line"), ""))
         card = bubble(
             (bus_type_names if bus_type_names is not None else BUS_TYPE_NAMES).get(
                 arrival["bus_type"], "校園公車"
@@ -80,10 +85,8 @@ def bus_carousel(
         )
         card["header"]["spacing"] = FLEX_THEME["spacing"]["item_gap"]
         subtitle = f"{stop_name} · {direction_name}"
-        if arrival.get("line") in {"route_1", "route_2"}:
-            subtitle += (
-                " · 南大專車 · " + {"route_1": "路線一", "route_2": "路線二"}[arrival["line"]]
-            )
+        if arrival.get("line") in NANDA_ROUTE_NAMES:
+            subtitle += " · 南大專車 · " + NANDA_ROUTE_NAMES[arrival["line"]]
         card["header"]["contents"] = [
             {
                 "type": "box",

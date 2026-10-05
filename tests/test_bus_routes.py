@@ -1,5 +1,4 @@
 import copy
-from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -8,9 +7,6 @@ import pytest
 from src.modules.bus import bus
 from templates.messages.bus_message import bus_carousel
 from templates.messages.flex_theme import FLEX_THEME
-
-QUERY = {"day": "current", "bus_type": "all", "direction": "up"}
-NOW = datetime(2026, 10, 5, 8, 0, tzinfo=UTC)
 
 
 def arrival(**changes):
@@ -27,10 +23,10 @@ def arrival(**changes):
 @pytest.mark.parametrize(
     "line, family, suffix",
     [
-        ("red", "red", "紅線"),
-        ("green", "green", "綠線"),
-        ("route_1", "blue", "路線一"),
-        ("route_2", "blue", "路線二"),
+        ("main_red", "red", "紅線"),
+        ("main_green", "green", "綠線"),
+        ("nanda_route_1", "blue", "路線一"),
+        ("nanda_route_2", "blue", "路線二"),
     ],
 )
 def test_route_cards_use_semantic_color_and_text_label(line, family, suffix):
@@ -63,89 +59,143 @@ def test_unknown_route_is_neutral_not_inferred_from_bus_type():
         assert badge["contents"][0]["color"] == FLEX_THEME["colors"]["muted"]
 
 
-async def test_matching_departures_normalizes_time_and_does_not_mutate_sources():
-    arrivals = [arrival(), arrival(dep_time="08:20", bus_type="large-sized_bus")]
-    schedules = [
-        {
-            "time": "8:05",
-            "line": "red",
-            "dep_stop": "校門",
-            "bus_type": "middle-sized_bus",
-            "description": "",
-        },
-        {
-            "time": "8:20",
-            "line": "route_2",
-            "dep_stop": "校門",
-            "bus_type": "large-sized_bus",
-            "description": "",
-        },
-    ]
-    originals = copy.deepcopy((arrivals, schedules))
-    with patch.object(bus.nthuapi, "get", new=AsyncMock(return_value=schedules)) as get:
-        result = await bus._with_route_labels(arrivals, QUERY, NOW)
-    assert [item["line"] for item in result] == ["red", "route_2"]
-    assert (arrivals, schedules) == originals
-    get.assert_awaited_once_with(
-        "/buses/schedules",
-        params={
-            "bus_type": "all",
-            "day": "weekday",
-            "direction": "up",
-            "time": "08:05",
-            "limits": bus.ROUTE_LOOKUP_LIMIT,
-        },
-        cache=False,
-    )
-
-
-async def test_known_routes_do_not_make_an_extra_request():
-    arrivals = [arrival(line="green")]
-    with patch.object(bus.nthuapi, "get", new=AsyncMock()) as get:
-        result = await bus._with_route_labels(arrivals, QUERY, NOW)
-    get.assert_not_awaited()
-    assert result == arrivals and result[0] is not arrivals[0]
-
-
-async def test_ambiguous_or_missing_departures_remain_unknown():
-    schedules = [
-        {
+def detailed_schedule(line="main_red"):
+    return {
+        "dep_info": {
             "time": "8:05",
             "line": line,
             "dep_stop": "校門",
             "bus_type": "middle-sized_bus",
             "description": "",
-        }
-        for line in ("red", "green")
-    ]
-    with patch.object(bus.nthuapi, "get", new=AsyncMock(return_value=schedules)):
-        result = await bus._with_route_labels(
-            [arrival(), arrival(dep_stop="綜二"), arrival(dep_time="invalid")], QUERY, NOW
-        )
-    assert all("line" not in item for item in result)
+        },
+        "stops_time": [
+            {"stop": "北校門口", "arrive_time": "08:05"},
+            {"stop": "綜二館", "arrive_time": "08:10"},
+        ],
+    }
 
 
-async def test_lookup_failure_is_logged_and_visible_without_losing_arrival_data():
-    with (
-        patch.object(bus.nthuapi, "get", new=AsyncMock(side_effect=ValueError("unavailable"))),
-        patch.object(bus.logger, "warning") as warning,
-    ):
-        result = await bus._with_route_labels([arrival()], QUERY, NOW)
-    warning.assert_called_once()
-    assert result[0]["arrive_time"] == "08:10"
+def test_selected_stop_time_and_canonical_lines_are_preserved_without_mutation():
+    schedules = [detailed_schedule("main_red"), detailed_schedule("nanda_route_2")]
+    original = copy.deepcopy(schedules)
+    result = bus._stop_arrivals(schedules, "綜二館")
+    assert [item["line"] for item in result] == ["main_red", "nanda_route_2"]
+    assert all(item["dep_time"] == "8:05" and item["arrive_time"] == "08:10" for item in result)
+    result[0]["description"] = "changed"
+    assert schedules == original
+
+
+def test_missing_route_is_not_inferred_from_vehicle_type():
+    schedule = detailed_schedule()
+    del schedule["dep_info"]["line"]
+    result = bus._stop_arrivals([schedule], "綜二館")
+    assert result[0]["line"] == ""
     card = bus_carousel(result, "綜二館", "上山", "@公車")["contents"][0]
-    assert card["header"]["contents"][0]["contents"][1]["contents"][0]["text"] == "路線暫無資料"
+    assert card["header"]["contents"][0]["contents"][1]["contents"][0]["text"] == "路線待確認"
 
 
-async def test_weekend_lookup_uses_timetable_day_and_earliest_departure():
-    with patch.object(bus.nthuapi, "get", new=AsyncMock(return_value=[])) as get:
-        await bus._with_route_labels(
-            [arrival(dep_time="09:20"), arrival(dep_time="08:05")],
-            QUERY,
-            datetime(2026, 10, 4, 8, 0),
+def test_missing_selected_stop_is_an_explicit_error():
+    with pytest.raises(ValueError, match="omitted the requested stop"):
+        bus._stop_arrivals([detailed_schedule()], "不存在的站")
+
+
+@pytest.mark.parametrize("response", [None, {}, {"schedules": []}])
+def test_invalid_schedule_response_is_an_explicit_error(response):
+    with pytest.raises(ValueError, match="Invalid bus schedule response"):
+        bus._stop_arrivals(response, "綜二館")
+
+
+async def test_canonical_filters_use_one_uncached_request_and_keep_in_transit_buses():
+    with patch.object(
+        bus.nthuapi, "get", new=AsyncMock(return_value=[detailed_schedule("nanda_route_2")])
+    ) as get:
+        messages = await bus.query_stop_bus(
+            SimpleNamespace(
+                params={
+                    "stop_name": "綜二館",
+                    "route": "nanda",
+                    "day": "weekday",
+                    "direction": "down",
+                    "time": "08:08",
+                    "limit": "2",
+                }
+            )
         )
-    assert get.await_args.kwargs["params"]["day"] == "weekend"
-    assert get.await_args.kwargs["params"]["time"] == "08:05"
+    get.assert_awaited_once_with(
+        "/buses/schedule",
+        params={
+            "route": "nanda",
+            "day": "weekday",
+            "direction": "down",
+            "time": "08:08",
+            "limit": 2,
+            "stop": "綜二館",
+            "details": True,
+        },
+        cache=False,
+    )
+    card = messages[1].contents.contents[0]
+    assert card.body.contents[0].contents[1].text == "08:10"
+    assert "8:05" in card.footer.contents[1].text
+    assert "路線二" in card.header.contents[1].text
+
+
+async def test_legacy_postback_filters_are_translated_to_canonical_query_parameters():
+    with patch.object(bus.nthuapi, "get", new=AsyncMock(return_value=[])) as get:
+        await bus.query_stop_bus(
+            SimpleNamespace(params={"stop_name": "綜二館", "bus_type": "main", "limits": "99"})
+        )
+    assert get.await_args.kwargs["params"]["route"] == "main"
+    assert get.await_args.kwargs["params"]["limit"] == 12
+    assert "bus_type" not in get.await_args.kwargs["params"]
+    assert "limits" not in get.await_args.kwargs["params"]
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{"route": "red"}, {"day": "monday"}, {"direction": "left"}, {"limit": "invalid"}],
+)
+async def test_invalid_bus_filters_are_reported_without_calling_api(params):
+    with patch.object(bus.nthuapi, "get", new=AsyncMock()) as get:
+        messages = await bus.query_stop_bus(
+            SimpleNamespace(params={"stop_name": "綜二館", **params})
+        )
+    get.assert_not_awaited()
+    assert messages[0].type == "text"
+
+
+async def test_invalid_schedule_is_logged_and_reported_by_command_handler():
+    from src.app.handlers.command_handler import command_handler
+    from src.app.handlers.command_handler import logger as command_logger
+
+    with (
+        patch.object(bus.nthuapi, "get", new=AsyncMock(return_value=[detailed_schedule()])),
+        patch.object(command_logger, "error") as error,
+    ):
+        result = await command_handler.process_message(
+            "@公車/查詢站點與方向 stop_name=台積館", "user"
+        )
+    error.assert_called_once()
+    assert result == "處理訊息時發生錯誤，請稍後再試。"
+
+
+async def test_all_directions_are_labeled_and_canonical_filters_override_legacy_aliases():
+    with patch.object(bus.nthuapi, "get", new=AsyncMock(return_value=[detailed_schedule()])) as get:
+        messages = await bus.query_stop_bus(
+            SimpleNamespace(
+                params={
+                    "stop_name": "綜二館",
+                    "direction": "all",
+                    "route": "main",
+                    "bus_type": "nanda",
+                    "limit": "1",
+                    "limits": "10",
+                }
+            )
+        )
+    assert "雙向" in messages[0].text
+    assert get.await_args.kwargs["params"]["route"] == "main"
+    assert get.await_args.kwargs["params"]["limit"] == 1
 
 
 def test_direction_card_keeps_existing_postbacks_and_quick_replies():

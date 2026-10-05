@@ -1,6 +1,4 @@
-import re
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote
 
 from jinja2 import Environment, FileSystemLoader
 from linebot.v3.messaging import (
@@ -13,7 +11,6 @@ from linebot.v3.messaging import (
     TextMessage,
 )
 
-from log import logger
 from src.app.handlers.command_handler import command_handler
 from src.utils import announcecrawler, nthuapi
 from templates.messages.bus_message import BUS_TYPE_NAMES, bus_carousel, bus_direction_bubble
@@ -21,85 +18,29 @@ from templates.messages.bus_message import BUS_TYPE_NAMES, bus_carousel, bus_dir
 STATIC_URL = "https://data.nthusa.tw"
 JINJA_ENV = Environment(loader=FileSystemLoader("src/modules/bus/templates"))
 JINJA_ENV.globals["bus_carousel"] = bus_carousel
-ROUTE_LOOKUP_LIMIT = 300
 
 
-def _departure_minutes(value: str | None) -> int | None:
-    if not isinstance(value, str):
-        return None
-    match = re.fullmatch(r"(\d{1,2}):(\d{2})", value.strip())
-    if not match:
-        return None
-    hour, minute = map(int, match.groups())
-    return hour * 60 + minute if hour < 24 and minute < 60 else None
-
-
-def _departure_key(item: dict, time_field: str) -> tuple:
-    return (
-        _departure_minutes(item.get(time_field)),
-        item.get("dep_stop"),
-        item.get("bus_type"),
-        (item.get("description") or "").strip(),
-    )
-
-
-async def _with_route_labels(arrivals: list[dict], query: dict, now: datetime) -> list[dict]:
-    """Stop responses omit line; match exact departures, never infer it from vehicle size."""
-    result = [dict(item) for item in arrivals]
-    missing = [item for item in result if not item.get("line")]
-    if not missing:
-        return result
-    departures = [
-        minutes
-        for item in missing
-        if (minutes := _departure_minutes(item.get("dep_time"))) is not None
-    ]
-    if not departures:
-        logger.warning("Bus route lookup skipped: no valid departure times")
-        return result
-    earliest = min(departures)
-    day = query["day"]
-    if day == "current":
-        day = "weekend" if now.weekday() >= 5 else "weekday"
-    try:
-        schedules = await nthuapi.get(
-            "/buses/schedules",
-            params={
-                "bus_type": query["bus_type"],
-                "day": day,
-                "direction": query["direction"],
-                "time": f"{earliest // 60:02d}:{earliest % 60:02d}",
-                "limits": ROUTE_LOOKUP_LIMIT,
-            },
-            cache=False,
-        )
-    except ValueError:
-        logger.warning("Bus route lookup unavailable; retaining arrival information")
-        for item in missing:
-            item["route_status"] = "路線暫無資料"
-        return result
+def _stop_arrivals(schedules: list[dict], stop_name: str) -> list[dict]:
+    """Convert canonical detailed schedules to the existing arrival-card view model."""
     if not isinstance(schedules, list):
-        logger.warning("Bus route lookup returned an invalid response")
-        for item in missing:
-            item["route_status"] = "路線暫無資料"
-        return result
-    lines_by_departure: dict[tuple, set[str]] = {}
+        raise ValueError("Invalid bus schedule response")
+    arrivals = []
     for schedule in schedules:
-        if not schedule or not schedule.get("line"):
-            continue
-        key = _departure_key(schedule, "time")
-        if key[0] is not None:
-            lines_by_departure.setdefault(key, set()).add(schedule["line"])
-    unresolved = 0
-    for item in missing:
-        lines = lines_by_departure.get(_departure_key(item, "dep_time"), set())
-        if len(lines) == 1:
-            item["line"] = next(iter(lines))
-        else:
-            unresolved += 1
-    if unresolved:
-        logger.warning("Bus route lookup could not uniquely identify {} arrivals", unresolved)
-    return result
+        departure = schedule["dep_info"]
+        stop = next((item for item in schedule["stops_time"] if item["stop"] == stop_name), None)
+        if stop is None:
+            raise ValueError("Bus schedule omitted the requested stop")
+        arrivals.append(
+            {
+                "arrive_time": stop["arrive_time"],
+                "dep_time": departure["time"],
+                "dep_stop": departure["dep_stop"],
+                "description": departure["description"],
+                "bus_type": departure["bus_type"],
+                "line": departure.get("line", ""),
+            }
+        )
+    return arrivals
 
 
 @command_handler.add_command_with_menu(
@@ -144,7 +85,7 @@ def select_route(params):
 
 @command_handler.add_command("選擇站點")
 async def select_stops(events):
-    stops_data = await nthuapi.get("/buses/info/stops")
+    stops_data = await nthuapi.get("/buses/stops")
     params = events.params
     direction = params.get("direction", "up")
     if not stops_data:
@@ -177,29 +118,36 @@ async def query_stop_bus(event):
         return [TextMessage(text="🤔 站點名稱錯誤，請重新選擇")]
 
     try:
-        limits = min(12, max(1, int(params.get("limits", 5))))
+        limit = min(12, max(1, int(params.get("limit", params.get("limits", 5)))))
     except TypeError, ValueError:
         return [TextMessage(text="班次數量必須是整數，請重新查詢")]
 
     query_params = {
         "day": params.get("day", "current"),
-        "limits": limits,
-        "bus_type": params.get("bus_type", "all"),
+        "limit": limit,
+        "route": params.get("route", params.get("bus_type", "all")),
         "direction": params.get("direction", "up"),
+        "stop": stop_name,
+        "details": True,
     }
-    bus_stop_info = await nthuapi.get(
-        f"/buses/stops/{quote(stop_name, safe='')}", params=query_params, cache=False
-    )
-    bus_stop_info = [item for item in bus_stop_info or [] if item][:limits]
+    if query_params["route"] not in {"all", "main", "nanda"}:
+        return [TextMessage(text="未知的公車路線，請重新選擇")]
+    if query_params["day"] not in {"current", "weekday", "weekend"}:
+        return [TextMessage(text="未知的公車營運日，請重新選擇")]
+    if query_params["direction"] not in {"all", "up", "down"}:
+        return [TextMessage(text="未知的公車方向，請重新選擇")]
+    if params.get("time"):
+        query_params["time"] = params["time"]
+    schedules = await nthuapi.get("/buses/schedule", params=query_params, cache=False)
+    bus_stop_info = _stop_arrivals(schedules, stop_name)[:limit]
 
     if not bus_stop_info:
         return [TextMessage(text=f"🚌 抱歉，目前 {stop_name} 站點沒有公車資訊")]
 
     now = datetime.now(timezone(timedelta(hours=8)))
-    bus_stop_info = await _with_route_labels(bus_stop_info, query_params, now)
     day_mapping = {"current": "即時", "weekday": "平日", "weekend": "假日"}
     day_zh = day_mapping.get(query_params["day"], "")
-    direction_zh = "上山" if query_params["direction"] == "up" else "下山"
+    direction_zh = {"up": "上山", "down": "下山", "all": "雙向"}[query_params["direction"]]
     now_time = now.strftime("%Y-%m-%d %H:%M:%S")
     info_message = f"🚌 【{stop_name}】{day_zh}{direction_zh}公車資訊\n更新時間：{now_time}"
 

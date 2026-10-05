@@ -18,7 +18,7 @@ def fake_api(module, return_value=None):
 
 
 # -- bus --
-async def test_bus_stop_picker_uses_v2_names_without_mutating_cached_data():
+async def test_bus_stop_picker_uses_canonical_endpoint_without_mutating_cached_data():
     stops = [
         {"name": "North Gate", "name_en": "North Gate", "latitude": "24.79", "longitude": "120.99"}
     ]
@@ -26,60 +26,57 @@ async def test_bus_stop_picker_uses_v2_names_without_mutating_cached_data():
     with fake_api(bus, stops) as get:
         messages = await bus.select_stops(command(direction="down"))
 
-    get.assert_awaited_once_with("/buses/info/stops")
+    get.assert_awaited_once_with("/buses/stops")
     action = messages[0].quick_reply.items[0].action
     assert action.label == "North Gate"
     assert "stop_name=North Gate direction=down" in action.data
     assert stops == original
 
 
-async def test_bus_arrivals_use_flat_v2_fields_and_escape_json():
-    arrivals = [
-        None,
+async def test_bus_arrivals_use_detailed_schedules_and_escape_json():
+    schedules = [
         {
-            "arrive_time": "12:05",
-            "dep_time": "12:00",
-            "dep_stop": 'North "Gate"',
-            "description": "First line\nSecond line",
-            "bus_type": "large-sized_bus",
+            "dep_info": {
+                "time": "12:00",
+                "dep_stop": 'North "Gate"',
+                "description": "First line\nSecond line",
+                "bus_type": "large-sized_bus",
+                "line": "main_red",
+            },
+            "stops_time": [
+                {"stop": "Other Stop", "arrive_time": "12:01"},
+                {"stop": "North Gate", "arrive_time": "12:05"},
+            ],
         },
     ]
-    with patch.object(
-        bus.nthuapi,
-        "get",
-        new=AsyncMock(
-            side_effect=[
-                arrivals,
-                [
-                    {
-                        "time": "12:00",
-                        "dep_stop": 'North "Gate"',
-                        "description": "First line\nSecond line",
-                        "bus_type": "large-sized_bus",
-                        "line": "red",
-                    }
-                ],
-            ]
-        ),
-    ) as get:
+    original = copy.deepcopy(schedules)
+    with fake_api(bus, schedules) as get:
         messages = await bus.query_stop_bus(command(stop_name="North Gate"))
 
-    assert get.await_count == 2
-    assert get.await_args_list[0].args == ("/buses/stops/North%20Gate",)
-    assert get.await_args_list[0].kwargs == {
-        "params": {"day": "current", "limits": 5, "bus_type": "all", "direction": "up"},
-        "cache": False,
-    }
+    get.assert_awaited_once_with(
+        "/buses/schedule",
+        params={
+            "day": "current",
+            "limit": 5,
+            "route": "all",
+            "direction": "up",
+            "stop": "North Gate",
+            "details": True,
+        },
+        cache=False,
+    )
+    assert schedules == original
     assert len(messages) == 2
     bubbles = messages[1].contents.contents
     assert len(bubbles) == 1
+    assert bubbles[0].body.contents[0].contents[1].text == "12:05"
     assert 'North "Gate"' in bubbles[0].footer.contents[0].text
     assert "12:00" in bubbles[0].footer.contents[1].text
     assert bubbles[0].footer.contents[2].text == "First line\nSecond line"
 
 
-async def test_bus_null_arrivals_return_text_instead_of_empty_carousel():
-    with fake_api(bus, [None]):
+async def test_bus_empty_schedules_return_text_instead_of_empty_carousel():
+    with fake_api(bus, []):
         messages = await bus.query_stop_bus(command(stop_name="North Gate"))
     assert len(messages) == 1
     assert messages[0].type == "text"
@@ -92,7 +89,7 @@ async def test_library_space_preserves_zero_and_escapes_zone_names():
     ]
     with fake_api(library, spaces) as get:
         messages = await library.lib_space_flex_message(command())
-    get.assert_awaited_once_with("/libraries/space", cache=False)
+    get.assert_awaited_once_with("/libraries/spaces", cache=False)
     row = messages[0].contents.body.contents[1]
     assert row.contents[0].text == 'Room "A"'
     assert row.contents[1].text == "0"
@@ -112,6 +109,7 @@ async def test_library_rss_accepts_command_event_and_does_not_mutate_cache():
         first = await library.rss(command(type="branches", page="1"))
         second = await library.rss(command(type="branches", page="1"))
     assert get.await_count == 2
+    get.assert_awaited_with("/libraries/rss/branches")
     assert entries == original
     assert first[0].to_dict() == second[0].to_dict()
     assert "type=branches" in first[1].contents.footer.contents[0].action.data
@@ -148,7 +146,7 @@ async def test_dining_weekend_filters_by_schedule_and_flattens_buildings():
     buildings = [{"building": "Food Court", "restaurants": restaurants}, {"building": "Empty"}]
     with fake_api(dining, buildings) as get:
         messages = await dining.weekend_restaurants_command(command(schedule="saturday"))
-    get.assert_awaited_once_with("/dining/", params={"schedule": "saturday"}, cache=True)
+    get.assert_awaited_once_with("/dining", params={"schedule": "saturday"}, cache=True)
     card = messages[0].contents.contents[0]
     assert "10:00-14:00" in card.body.contents[0].text
     assert "09:00-17:00" not in card.body.contents[0].text
@@ -157,9 +155,43 @@ async def test_dining_weekend_filters_by_schedule_and_flattens_buildings():
 
 
 async def test_dining_random_restaurant_handles_empty_buildings():
-    with fake_api(dining, [{"building": "Empty", "restaurants": []}]):
+    with fake_api(dining, [{"building": "Empty", "restaurants": []}]) as get:
         messages = await dining.handle_random_restaurant(command())
+    get.assert_awaited_once_with("/dining")
     assert messages[0].type == "text"
+
+
+async def test_dining_directory_and_building_lookup_use_canonical_endpoint():
+    buildings = [
+        {
+            "building": "Food Court",
+            "restaurants": [
+                {
+                    "area": "Food Court",
+                    "name": "Cafe",
+                    "phone": "",
+                    "note": "",
+                    "image": None,
+                    "schedule": {"weekday": "09:00-17:00"},
+                }
+            ],
+        }
+    ]
+    original = copy.deepcopy(buildings)
+    with fake_api(dining, buildings) as get:
+        directory = await dining.handle_building_directory(command())
+        restaurants = await dining.building_restaurant_command(command(building_name="Food Court"))
+    assert get.await_args_list[0].args == ("/dining",)
+    get.assert_awaited_with("/dining", params={"building_name": "Food Court"})
+    assert "building_name=Food Court" in directory[0].quick_reply.items[0].action.data
+    assert restaurants[0].type == "flex"
+    assert buildings == original
+
+
+async def test_dining_today_is_not_cached():
+    with fake_api(dining, []) as get:
+        await dining.weekend_restaurants_command(command(schedule="today"))
+    get.assert_awaited_once_with("/dining", params={"schedule": "today"}, cache=False)
 
 
 # -- announcements --
@@ -196,7 +228,7 @@ async def test_announcement_repeated_calls_handle_nullable_articles_without_muta
         first = await announcecrawler.get("Office", "News")
         second = await announcecrawler.get("Office", "News")
     assert get.await_count == 2
-    get.assert_awaited_with("/announcements/", params=ANNOUNCEMENT_PARAMS)
+    get.assert_awaited_with("/announcements", params=ANNOUNCEMENT_PARAMS)
     assert first.to_dict() == second.to_dict()
     assert boards == original
 
@@ -224,7 +256,7 @@ async def test_announcement_board_name_is_filtered_locally_not_as_article_title(
     ]
     with fake_api(announcecrawler, boards) as get:
         message = await announcecrawler.get("Office", "News")
-    get.assert_awaited_once_with("/announcements/", params=ANNOUNCEMENT_PARAMS)
+    get.assert_awaited_once_with("/announcements", params=ANNOUNCEMENT_PARAMS)
     assert len(message.contents.contents) == 1
     assert message.contents.contents[0].header.contents[0].text == "Bus schedule"
 
@@ -234,7 +266,7 @@ async def test_map_fuzzy_locations_are_returned():
     locations = [{"name": "Main Library", "latitude": "24.79", "longitude": "120.99"}]
     with fake_api(campus_map, locations) as get:
         messages = await campus_map.handle_location_command(command(query="Library"))
-    get.assert_awaited_once_with("/locations/search", params={"query": "Library"})
+    get.assert_awaited_once_with("/locations", params={"name": "Library", "fuzzy": True})
     assert messages[0].title == "Main Library"
     assert messages[0].latitude == 24.79
 
@@ -244,6 +276,35 @@ async def test_map_missing_location_query_does_not_call_api():
         messages = await campus_map.handle_location_command(command())
     get.assert_not_awaited()
     assert messages[0].type == "text"
+
+
+async def test_map_picker_uses_canonical_locations_endpoint():
+    locations = [{"name": "Main Library", "latitude": "24.79", "longitude": "120.99"}]
+    with fake_api(campus_map, locations) as get:
+        messages = await campus_map.list_quick_reply(command())
+    get.assert_awaited_once_with("/locations")
+    assert messages[0].quick_reply.items[0].action.label == "Main Library"
+
+
+async def test_map_exact_matches_still_take_priority_over_fuzzy_results():
+    locations = [
+        {"name": "Main Library Annex", "latitude": "24.80", "longitude": "121.00"},
+        {"name": "Main Library", "latitude": "24.79", "longitude": "120.99"},
+    ]
+    with fake_api(campus_map, locations):
+        messages = await campus_map.handle_location_command(command(query="Main_space_Library"))
+    assert len(messages) == 1
+    assert messages[0].title == "Main Library"
+
+
+async def test_department_directory_fetches_canonical_directory():
+    from src.app import _fetch_departments
+    from src.utils import nthuapi
+
+    units = [{"name": "資訊工程學系", "index": "CS"}]
+    with patch.object(nthuapi, "get", new=AsyncMock(return_value=units)) as get:
+        assert await _fetch_departments() == units
+    get.assert_awaited_once_with("/directory")
 
 
 # -- registration --

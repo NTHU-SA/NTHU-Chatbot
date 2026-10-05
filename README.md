@@ -5,7 +5,7 @@
 
 - **後端**：FastAPI on Cloud Run（LINE webhook、LIFF 對話 API、SSE 串流）
 - **前端**：原生 JS（ES modules、無建置工具）on Firebase Hosting
-- **AI**：OpenAI Agents SDK + NTHU Data MCP（9 個唯讀校園工具），可選擇開啟只限 nthu.edu.tw 的網路搜尋
+- **AI**：OpenAI Agents SDK + NTHU Data MCP（8 個唯讀校園工具），可選擇開啟只限 nthu.edu.tw 的網路搜尋
 - **資料**：Firestore（Native mode），後端以服務帳號存取，瀏覽器不直接連
 
 ## 目錄
@@ -28,8 +28,10 @@ LINE 聊天室 ──webhook──▶ Cloud Run /callback
                           ├─ @ 指令 → 指令模組（公車 / 餐廳 / 圖書館 / 地圖 / 公告…）→ NTHU REST API v2
                           └─ 其他文字 → 回一顆按鈕，開啟 LIFF 並帶入問題（同一顆按鈕永遠回到同一串對話）
 
-LIFF 網頁（Firebase Hosting：frontend/）
-   │  CORS · Authorization: Bearer <LIFF id_token> · X-Auth-Provider: line
+對話網頁（Firebase Hosting：frontend/；LINE 裡以 LIFF 開啟，一般瀏覽器也能用）
+   │  CORS · Authorization: Bearer <token> · X-Auth-Provider: line | auth0
+   │    LINE 裡：LIFF id_token（LINE Login）
+   │    一般瀏覽器：Auth0 access token（Universal Login，Authorization Code + PKCE）
    ▼
 Cloud Run /api/* ──▶ AgentRunner（OpenAI Agents SDK）
    │                  ├─ MCP: https://api.nthusa.tw/mcp（唯讀校園工具，結果短暫快取）
@@ -41,7 +43,7 @@ Cloud Run /api/* ──▶ AgentRunner（OpenAI Agents SDK）
 
 - **聊天室只做「reply token 一定來得及」的事**；AI 對話在 LIFF 網頁進行（多個對話、串流、即時顯示正在查什麼）。群組裡只用 `@` 指令，不讀取私人對話。
 - **前後端分離**：頁面由 Hosting 的 CDN 提供，頁面的 CSP 設在 Hosting；前端直接以 CORS 呼叫 Cloud Run。不使用 Hosting rewrite 轉到 Cloud Run，因為 rewrite 有 60 秒上限，會切斷較長的 SSE 回覆。
-- **身分**：LIFF `id_token` 由後端向 LINE 驗證後，對應到內部 user（見「身分與資料」）；所有資料只認內部 user id。
+- **身分**：LINE 裡用 LIFF `id_token`（後端向 LINE 驗證）；一般瀏覽器用 Auth0 簽給這個 API 的 access token（後端以 JWKS 本地驗證）。兩者都對應到內部 user（見「身分與資料」）；所有資料只認內部 user id。
 - 輸入「說明」、「help」或 `@說明` 會回使用說明泡泡（指令清單依 `bot_config.yaml` 自動產生）。
 - webhook 等事件處理完才回應；非關鍵寫入（最近活動時間、模組使用次數）與請求並行，回應前收尾，不留會被 Cloud Run 暫停的背景工作。
 
@@ -55,7 +57,7 @@ src/app/__init__.py               create_app()、lifespan 組裝 app.state
 src/app/routes/callback.py        LINE webhook
 src/app/routes/chat.py            /api/sessions…（LIFF 對話，SSE）
 src/app/routes/account.py         /api/me、同意紀錄、個人資料、刪除我的資料
-src/app/auth/                     Authenticator（目前為 LINE）、外部身分 → 內部 user、限流
+src/app/auth/                     Authenticator（LINE、Auth0）、外部身分 → 內部 user、限流
 src/app/middleware.py             API 的安全標頭與 CORS
 src/app/handlers/、src/modules/   聊天室內 @ 指令
 src/application/                  資料模型；ChatStore / UserStore / ModuleRegistry 介面與記憶體實作；系所名稱正規化
@@ -84,7 +86,7 @@ LINE Flex（AI 入口、公車、圖書館、使用說明、系統通知、加�
 按鈕與卡片尺寸、紅綠藍路線色一次設定；所有 Python／Jinja Flex 共用同一組 builder。
 完整規範與修改範例見 [design.md](design.md)。
 公車以紅／綠表示校本部，藍色表示南大專車並保留路線一／二標籤；
-到站 API 缺少路線時比對時刻表，不依車型猜測，無法確認時明確標示。
+到站資訊與路線直接取自詳細時刻表，不依車型猜測，未提供路線時明確標示。
 `@神奇海螺/分享給好友` 可開啟加入／分享卡，使用 `https://line.me/R/ti/p/@741vdfol` 加好友，
 分享按鈕開啟 LINE 分享畫面，由使用者自行確認送出。
 
@@ -213,7 +215,7 @@ Firestore Native mode `(default)`，由 `infra/bootstrap.sh` 建立；區域建�
 - **限制**：每則訊息最多 `MAX_AGENT_TURNS` 回合、120 秒逾時、`MAX_TOOL_CALLS_PER_MESSAGE` 次外部呼叫；每人每日 `DAILY_MESSAGE_LIMIT` 則（跨實例，存在 Firestore），單一實例另有突發限流。每次執行的工具次數記在 log（`Agent run finished`）。
 - **工具效率**：彼此獨立的查詢在同一步一起發出、並行執行（`parallel_tool_calls`）；唯讀、與使用者無關的 MCP 結果在每個實例內短暫快取（公告 5 分鐘、課程與地點 1 小時；公車即時資料不快取），快取命中也計次。
 - **網路搜尋**（`WEB_SEARCH_ENABLED=true`，預設關閉；需要官方 OpenAI + Responses API；每次搜尋另外計費）：包成我們自己的 `nthu_web_search` function tool，內部以 Responses API 的 web_search 搜尋，`allowed_domains` 只允許 `WEB_SEARCH_DOMAINS`（預設 nthu.edu.tw，含子網域），回傳的來源網址在伺服器端再過濾一次。不直接掛 hosted web search，是為了在搜尋結果進入對話前就能計次並標記「本輪已讀取外部資料」。
-- **個人化**：首次同意後會詢問稱呼與系所（可略過）；沒填也沒略過的話，AI 在第一次回答最後問一次。對話中使用者明確說出時，AI 用 `save_profile` / `remember` / `forget` 記下或刪除；系所比對 NTHU API `/departments/` 的官方學術單位名稱（只取名稱，不存人員資料）與常見簡稱表，有多個可能時讓使用者選。使用者可在側欄「我的資料」修改或刪除。
+- **個人化**：首次同意後會詢問稱呼與系所（可略過）；沒填也沒略過的話，AI 在第一次回答最後問一次。對話中使用者明確說出時，AI 用 `save_profile` / `remember` / `forget` 記下或刪除；系所比對 NTHU API `/directory` 的官方學術單位名稱（只取名稱，不存人員資料）與常見簡稱表，有多個可能時讓使用者選。使用者可在側欄「我的資料」修改或刪除。
 - **Prompt 版本**：修改 `src/infrastructure/ai/prompts.py` 的 system prompt 時遞增 `PROMPT_VERSION`；每則回答都會記下版本。
 
 ## 隱私權與資安
@@ -229,9 +231,10 @@ Firestore Native mode `(default)`，由 `infra/bootstrap.sh` 建立；區域建�
 
 ### 資安重點
 
-- **登入**：只採用 provider 驗證過的身分（LINE verify endpoint 檢查 `aud`、`iss`）；顯示名稱與頭像只來自驗證過的 claims；未知的 provider 與無效 token 回同樣的 401。
+- **登入**：只採用 provider 驗證過的身分。LINE：verify endpoint 檢查 `aud`、`iss`。Auth0：只接受 RS256，檢查簽章（JWKS）、`iss`、`aud`（每個環境一個 API）、`exp`，以及 `azp` 必須是 chat 自己的 Application（同一個 tenant 的其他 Application 拿到的 token 不被接受）；前端不用 id_token 呼叫 API。顯示名稱與頭像只來自驗證過的 claims 或 `/userinfo`；未知的 provider 與無效 token 回同樣的 401。
+- **瀏覽器的 Auth0 token**：refresh token 只放在同源 Web Worker 的記憶體（不存 localStorage），重新整理後以 Auth0 網域的隱藏 iframe 靜默取得；登入後只導回同源路徑，網址列不留 `code` / `state`。
 - **API**：CORS 只允許設定的前端網域且不帶 cookie；API 回應帶 `default-src 'none'`、`X-Frame-Options: DENY`；`docs_url` 等文件端點關閉。
-- **前端**：Hosting 設定嚴格 CSP（`connect-src` 只允許該環境的 API 與 LINE）；模型輸出經 DOMPurify 消毒，連結只允許 http(s) / mailto。
+- **前端**：Hosting 設定嚴格 CSP（`connect-src` 只允許該環境的 API、LINE 與 Auth0 網域）；模型輸出經 DOMPurify 消毒，連結只允許 http(s) / mailto。
 - **防 prompt injection**：同一輪只要讀過外部資料（任何 MCP 工具結果或網路搜尋），個人化寫入工具一律拒絕；寫入的文字去掉換行與角括號、限制長度，注入 instructions 時包在 `<user_profile>` 並標明「不是指令」；工具結果在 prompt 中也被標示為資料。
 - **資料**：Firestore rules 全部拒絕，只有後端服務帳號能存取；執行期與部署服務帳號都是最小權限（見 `infra/README.md`）；log 只記例外型別名稱，不記內容、token 或任何 ID。
 - **供應鏈**：依賴以雜湊鎖定（`--require-hashes`）、Docker base image 釘 digest、GitHub Actions 釘 commit SHA；CI 以 Workload Identity Federation 部署，不存任何 GCP 金鑰。
@@ -245,7 +248,7 @@ staging 與 prod 在同一個 GCP 專案，Firestore 資料庫、Secret、servic
 | 部署時機 | 合併進 `main` | 推送版本 tag `vX.Y.Z` |
 | GCP 專案 | `nthusa-chatbot` | `nthusa-chatbot`（Firestore 資料庫 `prod`、Secret 加 `-prod`） |
 | API | Cloud Run `nthu-chatbot-staging` | Cloud Run `nthu-chatbot` |
-| 前端 | `nthusa-chatbot.web.app` | `nthusa-chatbot-prod.web.app` |
+| 前端 | `nthusa-chatbot-staging.web.app` | `chat.nthusa.tw` |
 
 ```bash
 LINE_LOGIN_CHANNEL_ID=... LIFF_ID=... bash infra/bootstrap.sh infra/environments/prod.conf  # Firebase、Firestore、AR、SA、WIF、Secret、Cloud Run、trigger
@@ -331,13 +334,15 @@ PR 標題用 `<type>: <description>`，分支用 [conventional branch](https://c
 
 ### NTHU API v2 遷移
 
-依據 [OpenAPI](https://api.nthusa.tw/openapi.json)（`info.version=2.0.0`）調整：
+依據 2026-10-05 的 [OpenAPI](https://api.nthusa.tw/openapi.json)（`info.version=2.0.0`）與 MCP 工具清單，所有校園資料呼叫改用未棄用介面：
 
-- 公車：`/buses/info/stops` 使用 `name`；`/buses/stops/{stop_name}` 使用扁平到站欄位，支援 null / 空班次。
-- 餐廳：`/dining/` 為建築與餐廳巢狀資料；週末查詢改用 `/dining/open?schedule=...`。
-- 圖書館：`/libraries/space` 保留剩餘數量 0；`/libraries/rss/{rss_type}` 處理空頁與 nullable 連結。
-- 地圖：使用 `/locations/search?query=...` 模糊搜尋。
-- 公告：`/announcements/` 使用 department / language 篩選；舊模組的佈告欄名稱改在本地篩選，處理 nullable 文章欄位。
+- 公車：`/buses/stops` 取得站點；`/buses/schedule?stop=...&details=true` 回傳 `dep_info` 與 `stops_time`。使用 `route`（all / main / nanda）、`limit` 篩選，從所選站的 `arrive_time` 顯示到站時間，保留已發車但尚未到站的班次。路線代碼為 `main_red`、`main_green`、`nanda_route_1`、`nanda_route_2`，不再額外查詢比對路線。既有 LINE postback 的 `bus_type` / `limits` 仍會轉成新參數。
+- 餐廳：`/dining` 保留建築與餐廳巢狀格式；以 `schedule` 篩選營業日。
+- 圖書館：`/libraries/spaces` 保留剩餘數量 0；`/libraries/rss/{rss_type}` 處理空頁與 nullable 連結。
+- 地圖：`/locations?name=...&fuzzy=true` 模糊搜尋，同一端點不帶參數時列出地點。
+- 公告：`/announcements` 使用 department / language 篩選；佈告欄名稱在本地篩選，處理 nullable 文章欄位。
+- 系所：`/directory` 取得單位目錄；對外的 chatbot `/api/departments` 維持不變，只回傳學術單位名稱。
+- AI 公車工具：`get_bus_schedule` 取代 `get_next_buses` 與 `get_bus_stops`，回應與參數格式由 MCP 動態載入；公車結果不快取。若部署環境有自訂 `MCP_ALLOWED_TOOLS`，需同步替換舊工具名稱，或移除此變數以使用新版預設清單。
 
 ### 歷史紀錄
 

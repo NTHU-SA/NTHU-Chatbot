@@ -64,8 +64,8 @@ async def test_cacheable_results_are_reused_and_isolated(server, run_state):
 
 async def test_live_bus_data_is_never_cached(server, run_state):
     mcp, calls = server
-    await mcp.call_tool("get_next_buses", {"stop": "a"})
-    await mcp.call_tool("get_next_buses", {"stop": "a"})
+    await mcp.call_tool("get_bus_schedule", {"stop": "綜二館", "day": "current", "details": True})
+    await mcp.call_tool("get_bus_schedule", {"stop": "綜二館", "day": "current", "details": True})
     assert len(calls) == 2
 
 
@@ -98,7 +98,7 @@ async def test_results_are_truncated_before_reaching_the_model(server, run_state
         "call_tool",
         AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="x" * 500)])),
     ):
-        result = await mcp.call_tool("get_next_buses", {})
+        result = await mcp.call_tool("get_bus_schedule", {})
     assert result.content[0].text.startswith("x" * 50)
     assert "已截斷" in result.content[0].text
 
@@ -117,7 +117,7 @@ async def test_tool_budget_counts_cache_hits_and_marks_the_run(server, run_state
 async def test_no_run_state_means_no_limit(server):
     mcp, _ = server
     for _ in range(10):
-        await mcp.call_tool("get_next_buses", {})
+        await mcp.call_tool("get_bus_schedule", {})
     assert not is_tainted()
 
 

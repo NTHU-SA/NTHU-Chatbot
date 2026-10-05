@@ -16,7 +16,7 @@ from src.app.handlers.command_handler import command_handler
 from src.utils import nthuapi
 from templates.messages.flex_theme import carousel_message
 
-DINING_API_ENDPOINT = "/dining/"
+DINING_API_ENDPOINT = "/dining"
 ERROR_MESSAGE = [TextMessage(text="😵‍💫 抱歉，目前無法取得餐廳資料，請稍後再試")]
 
 
@@ -266,7 +266,6 @@ async def weekend_restaurants_command(event):
     schedule = params.get("schedule", "today")
     if schedule not in {"today", "weekday", "saturday", "sunday"}:
         return [TextMessage(text="未知的營業日，請重新選擇")]
-    # 上游已移除 /dining/open，改以 /dining/?schedule= 篩選營業中的餐廳（依大樓分組）
     building_data = await nthuapi.get(
         DINING_API_ENDPOINT, params={"schedule": schedule}, cache=schedule != "today"
     )

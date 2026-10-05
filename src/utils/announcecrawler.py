@@ -33,7 +33,7 @@ async def get(
         "department": department_name,
         "language": language,
     }
-    data = await nthuapi.get("/announcements/", params=params)
+    data = await nthuapi.get("/announcements", params=params)
     wanted = _normalize(announcement_title)
     columns = []
     for board in data or []:

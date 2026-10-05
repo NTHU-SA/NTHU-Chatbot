@@ -297,12 +297,12 @@ def test_send_message_streams_and_persists(client, chat_app, runner):
         "token",
         "done",
     ]
-    assert events[2][1]["name"] == "get_next_buses"
+    assert events[2][1]["name"] == "get_bus_schedule"
     assert events[-1][1]["content"] == "下一班 17:00"
 
     messages = messages_of(client, session_id).json()
     assert [m["role"] for m in messages] == ["user", "assistant"]
-    assert messages[1]["tool_calls"][0]["name"] == "get_next_buses"
+    assert messages[1]["tool_calls"][0]["name"] == "get_bus_schedule"
 
     sessions = client.get("/api/sessions", headers=AUTH).json()
     assert sessions[0]["title"] == "南大公車"

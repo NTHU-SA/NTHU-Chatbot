@@ -42,6 +42,9 @@ def test_memory_store_defaults():
     assert settings.openai_model == "gpt-6-luna"
     assert not settings.openai_use_responses_api
     assert settings.mcp_allowed_tools == DEFAULT_MCP_TOOLS
+    assert "get_bus_schedule" in settings.mcp_allowed_tools
+    assert "get_next_buses" not in settings.mcp_allowed_tools
+    assert "get_bus_stops" not in settings.mcp_allowed_tools
     assert settings.daily_message_limit == 100
     assert settings.max_output_tokens == 2000
     assert settings.max_output_chars == 8000
@@ -56,7 +59,7 @@ def test_parsing_of_optional_values():
             "GOOGLE_CLOUD_PROJECT": "demo",
             "OPENAI_USE_RESPONSES_API": "True",
             "OPENAI_BASE_URL": "https://example.test/v1",
-            "MCP_ALLOWED_TOOLS": " get_next_buses, search_campus ,",
+            "MCP_ALLOWED_TOOLS": " get_bus_schedule, search_campus ,",
             "DAILY_MESSAGE_LIMIT": "5",
             "MCP_TIMEOUT_SECONDS": "12.5",
             "MAX_OUTPUT_TOKENS": "3000",
@@ -66,7 +69,7 @@ def test_parsing_of_optional_values():
     assert settings.chat_store == "firestore"
     assert settings.openai_use_responses_api
     assert settings.openai_base_url == "https://example.test/v1"
-    assert settings.mcp_allowed_tools == ("get_next_buses", "search_campus")
+    assert settings.mcp_allowed_tools == ("get_bus_schedule", "search_campus")
     assert settings.daily_message_limit == 5
     assert settings.mcp_timeout_seconds == 12.5
     assert settings.max_output_tokens == 3000
@@ -163,3 +166,43 @@ def test_cors_origins_are_parsed_and_normalised():
 def test_unsafe_cors_origins_fail_fast(value):
     with pytest.raises(RuntimeError, match="CORS_ALLOWED_ORIGINS"):
         load({**MEMORY, "CORS_ALLOWED_ORIGINS": value})
+
+
+AUTH0 = {
+    "AUTH0_DOMAIN": "Auth.Example.com",
+    "AUTH0_AUDIENCE": "https://chat.example.com/api",
+    "AUTH0_CLIENT_ID": "abcDEF123_-xyz",
+}
+
+
+def test_auth0_is_disabled_by_default():
+    settings = load(MEMORY)
+    assert settings.auth0_domain is None
+    assert settings.auth0_audience is None
+    assert settings.auth0_client_id is None
+
+
+def test_auth0_settings_are_parsed():
+    settings = load({**MEMORY, **AUTH0})
+    assert settings.auth0_domain == "auth.example.com"
+    assert settings.auth0_audience == "https://chat.example.com/api"
+    assert settings.auth0_client_id == "abcDEF123_-xyz"
+
+
+def test_partial_auth0_settings_fail_fast():
+    with pytest.raises(RuntimeError, match="AUTH0_CLIENT_ID"):
+        load({**MEMORY, **AUTH0, "AUTH0_CLIENT_ID": ""})
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("AUTH0_DOMAIN", "https://auth.example.com"),
+        ("AUTH0_DOMAIN", "auth.example.com/"),
+        ("AUTH0_CLIENT_ID", "bad id!"),
+        ("AUTH0_AUDIENCE", "x" * 201),
+    ],
+)
+def test_invalid_auth0_settings_fail_fast(name, value):
+    with pytest.raises(RuntimeError, match=name):
+        load({**MEMORY, **AUTH0, name: value})
