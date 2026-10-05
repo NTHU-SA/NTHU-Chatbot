@@ -77,7 +77,7 @@ async def test_reasoning_summary_is_forwarded_as_thinking():
 
 async def test_tool_calls_are_paired_and_persisted():
     events = [
-        called("c1", "get_next_buses", '{"route":"nanda"}'),
+        called("c1", "get_bus_schedule", '{"route":"nanda"}'),
         output("c1", [{"type": "text", "text": "{}"}]),
         raw("response.output_text.delta", delta="17:00"),
     ]
@@ -85,12 +85,12 @@ async def test_tool_calls_are_paired_and_persisted():
     assert types(out) == ["tool_call_start", "tool_call_end", "token", "done"]
     assert out[0].data == {
         "call_id": "c1",
-        "name": "get_next_buses",
+        "name": "get_bus_schedule",
         "title": None,
         "args": {"route": "nanda"},
     }
     assert out[1].data["ok"]
-    assert out[-1].data["tool_calls"][0]["name"] == "get_next_buses"
+    assert out[-1].data["tool_calls"][0]["name"] == "get_bus_schedule"
 
 
 @pytest.mark.parametrize(
@@ -104,7 +104,7 @@ async def test_tool_calls_are_paired_and_persisted():
 async def test_mcp_tool_titles_are_forwarded_and_persisted(title, annotation_title, expected):
     runner = AgentRunner(make_settings())
     tool = Tool(
-        name="get_next_buses",
+        name="get_bus_schedule",
         title=title,
         inputSchema={"type": "object"},
         annotations=ToolAnnotations(title=annotation_title) if annotation_title else None,
@@ -137,7 +137,7 @@ def test_legacy_tool_calls_without_titles_are_readable():
 async def test_text_before_tool_call_becomes_interim_not_answer():
     events = [
         raw("response.output_text.delta", delta="本汪查一下！"),
-        called("c1", "get_next_buses"),
+        called("c1", "get_bus_schedule"),
         output("c1", "{}"),
         raw("response.output_text.delta", delta="下一班 17:00"),
     ]
@@ -177,7 +177,7 @@ async def test_question_repeated_after_suggest_replies_is_not_duplicated():
 async def test_tool_call_without_final_text_falls_back_to_last_remark():
     events = [
         raw("response.output_text.delta", delta="本汪查一下！"),
-        called("c1", "get_next_buses"),
+        called("c1", "get_bus_schedule"),
         output("c1", "{}"),
     ]
     out = await collect(make_runner(), events, "")
@@ -237,7 +237,7 @@ LONG_TEXT = "這是很長的回答"
     [
         [],
         [raw("response.output_text.delta", delta=LONG_TEXT)],
-        [raw("response.output_text.delta", delta=LONG_TEXT), called("c1", "get_next_buses")],
+        [raw("response.output_text.delta", delta=LONG_TEXT), called("c1", "get_bus_schedule")],
         [
             raw("response.output_text.delta", delta=LONG_TEXT),
             called("s1", "suggest_replies", '{"options": ["北校門", "南門"]}'),

@@ -270,12 +270,12 @@ async def test_messages_store_metadata_and_respect_limit(db, users, chats):
         session.id,
         "assistant",
         "done",
-        [ToolCall(name="get_next_buses", args={"route": "main"})],
+        [ToolCall(name="get_bus_schedule", args={"route": "main"})],
         meta,
     )
     messages = await chats.list_messages(user_id, session.id, 3)
     assert [m.content for m in messages] == ["3", "4", "done"]
-    assert messages[-1].tool_calls[0].name == "get_next_buses"
+    assert messages[-1].tool_calls[0].name == "get_bus_schedule"
     stored = await doc(db, f"conversations/{session.id}/messages/{saved.id}")
     assert stored["model"] == "test-model"
     assert stored["promptVersion"] == "v-test"

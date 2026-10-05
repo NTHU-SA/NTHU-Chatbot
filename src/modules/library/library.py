@@ -43,7 +43,7 @@ LIBRARY_API_ENDPOINT = "/libraries"
     ],
 )
 async def lib_space_flex_message(event):
-    data = await nthuapi.get(LIBRARY_API_ENDPOINT + "/space", cache=False)
+    data = await nthuapi.get(LIBRARY_API_ENDPOINT + "/spaces", cache=False)
     if not data:
         return [TextMessage(text="目前沒有圖書館空間資料，請稍後再試")]
     # 讀取並渲染 Jinja 模板

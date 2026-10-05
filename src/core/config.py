@@ -16,8 +16,7 @@ from src.core.privacy import PRIVACY_POLICY_VERSION
 
 DEFAULT_MCP_TOOLS = (
     "search_campus",
-    "get_next_buses",
-    "get_bus_stops",
+    "get_bus_schedule",
     "search_courses",
     "get_announcements",
     "find_dining",

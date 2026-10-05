@@ -42,6 +42,9 @@ def test_memory_store_defaults():
     assert settings.openai_model == "gpt-6-luna"
     assert not settings.openai_use_responses_api
     assert settings.mcp_allowed_tools == DEFAULT_MCP_TOOLS
+    assert "get_bus_schedule" in settings.mcp_allowed_tools
+    assert "get_next_buses" not in settings.mcp_allowed_tools
+    assert "get_bus_stops" not in settings.mcp_allowed_tools
     assert settings.daily_message_limit == 100
     assert settings.max_output_tokens == 2000
     assert settings.max_output_chars == 8000
@@ -56,7 +59,7 @@ def test_parsing_of_optional_values():
             "GOOGLE_CLOUD_PROJECT": "demo",
             "OPENAI_USE_RESPONSES_API": "True",
             "OPENAI_BASE_URL": "https://example.test/v1",
-            "MCP_ALLOWED_TOOLS": " get_next_buses, search_campus ,",
+            "MCP_ALLOWED_TOOLS": " get_bus_schedule, search_campus ,",
             "DAILY_MESSAGE_LIMIT": "5",
             "MCP_TIMEOUT_SECONDS": "12.5",
             "MAX_OUTPUT_TOKENS": "3000",
@@ -66,7 +69,7 @@ def test_parsing_of_optional_values():
     assert settings.chat_store == "firestore"
     assert settings.openai_use_responses_api
     assert settings.openai_base_url == "https://example.test/v1"
-    assert settings.mcp_allowed_tools == ("get_next_buses", "search_campus")
+    assert settings.mcp_allowed_tools == ("get_bus_schedule", "search_campus")
     assert settings.daily_message_limit == 5
     assert settings.mcp_timeout_seconds == 12.5
     assert settings.max_output_tokens == 3000

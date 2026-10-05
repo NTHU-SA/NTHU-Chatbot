@@ -5,7 +5,7 @@
 
 - **後端**：FastAPI on Cloud Run（LINE webhook、LIFF 對話 API、SSE 串流）
 - **前端**：原生 JS（ES modules、無建置工具）on Firebase Hosting
-- **AI**：OpenAI Agents SDK + NTHU Data MCP（9 個唯讀校園工具），可選擇開啟只限 nthu.edu.tw 的網路搜尋
+- **AI**：OpenAI Agents SDK + NTHU Data MCP（8 個唯讀校園工具），可選擇開啟只限 nthu.edu.tw 的網路搜尋
 - **資料**：Firestore（Native mode），後端以服務帳號存取，瀏覽器不直接連
 
 ## 目錄
@@ -84,7 +84,7 @@ LINE Flex（AI 入口、公車、圖書館、使用說明、系統通知、加�
 按鈕與卡片尺寸、紅綠藍路線色一次設定；所有 Python／Jinja Flex 共用同一組 builder。
 完整規範與修改範例見 [design.md](design.md)。
 公車以紅／綠表示校本部，藍色表示南大專車並保留路線一／二標籤；
-到站 API 缺少路線時比對時刻表，不依車型猜測，無法確認時明確標示。
+到站資訊與路線直接取自詳細時刻表，不依車型猜測，未提供路線時明確標示。
 `@神奇海螺/分享給好友` 可開啟加入／分享卡，使用 `https://line.me/R/ti/p/@741vdfol` 加好友，
 分享按鈕開啟 LINE 分享畫面，由使用者自行確認送出。
 
@@ -213,7 +213,7 @@ Firestore Native mode `(default)`，由 `infra/bootstrap.sh` 建立；區域建�
 - **限制**：每則訊息最多 `MAX_AGENT_TURNS` 回合、120 秒逾時、`MAX_TOOL_CALLS_PER_MESSAGE` 次外部呼叫；每人每日 `DAILY_MESSAGE_LIMIT` 則（跨實例，存在 Firestore），單一實例另有突發限流。每次執行的工具次數記在 log（`Agent run finished`）。
 - **工具效率**：彼此獨立的查詢在同一步一起發出、並行執行（`parallel_tool_calls`）；唯讀、與使用者無關的 MCP 結果在每個實例內短暫快取（公告 5 分鐘、課程與地點 1 小時；公車即時資料不快取），快取命中也計次。
 - **網路搜尋**（`WEB_SEARCH_ENABLED=true`，預設關閉；需要官方 OpenAI + Responses API；每次搜尋另外計費）：包成我們自己的 `nthu_web_search` function tool，內部以 Responses API 的 web_search 搜尋，`allowed_domains` 只允許 `WEB_SEARCH_DOMAINS`（預設 nthu.edu.tw，含子網域），回傳的來源網址在伺服器端再過濾一次。不直接掛 hosted web search，是為了在搜尋結果進入對話前就能計次並標記「本輪已讀取外部資料」。
-- **個人化**：首次同意後會詢問稱呼與系所（可略過）；沒填也沒略過的話，AI 在第一次回答最後問一次。對話中使用者明確說出時，AI 用 `save_profile` / `remember` / `forget` 記下或刪除；系所比對 NTHU API `/departments/` 的官方學術單位名稱（只取名稱，不存人員資料）與常見簡稱表，有多個可能時讓使用者選。使用者可在側欄「我的資料」修改或刪除。
+- **個人化**：首次同意後會詢問稱呼與系所（可略過）；沒填也沒略過的話，AI 在第一次回答最後問一次。對話中使用者明確說出時，AI 用 `save_profile` / `remember` / `forget` 記下或刪除；系所比對 NTHU API `/directory` 的官方學術單位名稱（只取名稱，不存人員資料）與常見簡稱表，有多個可能時讓使用者選。使用者可在側欄「我的資料」修改或刪除。
 - **Prompt 版本**：修改 `src/infrastructure/ai/prompts.py` 的 system prompt 時遞增 `PROMPT_VERSION`；每則回答都會記下版本。
 
 ## 隱私權與資安
@@ -331,13 +331,15 @@ PR 標題用 `<type>: <description>`，分支用 [conventional branch](https://c
 
 ### NTHU API v2 遷移
 
-依據 [OpenAPI](https://api.nthusa.tw/openapi.json)（`info.version=2.0.0`）調整：
+依據 2026-10-05 的 [OpenAPI](https://api.nthusa.tw/openapi.json)（`info.version=2.0.0`）與 MCP 工具清單，所有校園資料呼叫改用未棄用介面：
 
-- 公車：`/buses/info/stops` 使用 `name`；`/buses/stops/{stop_name}` 使用扁平到站欄位，支援 null / 空班次。
-- 餐廳：`/dining/` 為建築與餐廳巢狀資料；週末查詢改用 `/dining/open?schedule=...`。
-- 圖書館：`/libraries/space` 保留剩餘數量 0；`/libraries/rss/{rss_type}` 處理空頁與 nullable 連結。
-- 地圖：使用 `/locations/search?query=...` 模糊搜尋。
-- 公告：`/announcements/` 使用 department / language 篩選；舊模組的佈告欄名稱改在本地篩選，處理 nullable 文章欄位。
+- 公車：`/buses/stops` 取得站點；`/buses/schedule?stop=...&details=true` 回傳 `dep_info` 與 `stops_time`。使用 `route`（all / main / nanda）、`limit` 篩選，從所選站的 `arrive_time` 顯示到站時間，保留已發車但尚未到站的班次。路線代碼為 `main_red`、`main_green`、`nanda_route_1`、`nanda_route_2`，不再額外查詢比對路線。既有 LINE postback 的 `bus_type` / `limits` 仍會轉成新參數。
+- 餐廳：`/dining` 保留建築與餐廳巢狀格式；以 `schedule` 篩選營業日。
+- 圖書館：`/libraries/spaces` 保留剩餘數量 0；`/libraries/rss/{rss_type}` 處理空頁與 nullable 連結。
+- 地圖：`/locations?name=...&fuzzy=true` 模糊搜尋，同一端點不帶參數時列出地點。
+- 公告：`/announcements` 使用 department / language 篩選；佈告欄名稱在本地篩選，處理 nullable 文章欄位。
+- 系所：`/directory` 取得單位目錄；對外的 chatbot `/api/departments` 維持不變，只回傳學術單位名稱。
+- AI 公車工具：`get_bus_schedule` 取代 `get_next_buses` 與 `get_bus_stops`，回應與參數格式由 MCP 動態載入；公車結果不快取。若部署環境有自訂 `MCP_ALLOWED_TOOLS`，需同步替換舊工具名稱，或移除此變數以使用新版預設清單。
 
 ### 歷史紀錄
 
