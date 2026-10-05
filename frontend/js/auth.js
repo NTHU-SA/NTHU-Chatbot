@@ -115,7 +115,15 @@ export async function signIn(cfg) {
 }
 
 export async function accessToken() {
-  return provider === "auth0" ? auth0.getTokenSilently() : liff.getIDToken();
+  if (provider !== "auth0") return liff.getIDToken();
+  try {
+    return await auth0.getTokenSilently();
+  } catch (err) {
+    // A long-lived tab whose session can no longer be renewed fails here, before any
+    // request is sent: recover the same way as a 401 (guarded against redirect loops).
+    if (LOGIN_NEEDED.has(err.error)) return relogin();
+    throw err;
+  }
 }
 
 // Called on 401: the token expired or was revoked. Throws "re-login" when redirecting.
