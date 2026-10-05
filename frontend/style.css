@@ -123,6 +123,10 @@
   --tool-err: #ef9a9a;
 }
 
+/* Inside LINE the native LIFF header already sits below the status bar, but iOS still
+ * reports the status-bar inset, which left an empty strip above the top bar. */
+:root.in-line-client { --sat: 0px; }
+
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }

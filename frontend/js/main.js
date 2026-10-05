@@ -93,6 +93,9 @@ async function clientInfo() {
 async function boot() {
   showOverlay("連線中…");
   try {
+    // liff.isInClient() works before liff.init(); see the safe-area note in style.css.
+    // Inside the try so a failed LIFF SDK load still shows the error and retry button.
+    if (liff.isInClient()) document.documentElement.classList.add("in-line-client");
     const cfg = await loadConfig();
     setPolicyVersion(cfg.privacyPolicyVersion);
     if (!(await signIn(cfg))) return; // redirecting to a login page
