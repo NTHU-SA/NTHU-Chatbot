@@ -50,6 +50,11 @@ from src.infrastructure.ai.personal_tools import (
 from src.infrastructure.ai.prompts import build_instructions
 from src.infrastructure.ai.run_state import RUN, RunState, begin_external_call
 from src.infrastructure.ai.web_search import WEB_SEARCH, WEB_SEARCH_TITLE, build_web_search_tool
+from src.infrastructure.ai.webpage import (
+    VISIT_WEBPAGE,
+    VISIT_WEBPAGE_TITLE,
+    build_visit_webpage_tool,
+)
 
 TOOL_ERROR_PREFIX = "[TOOL_ERROR]"
 SUGGEST_TOOL = "suggest_replies"
@@ -182,10 +187,14 @@ def _usage(result: Any) -> dict[str, int] | None:
 def _instructions(ctx, agent) -> str:
     context = ctx.context if isinstance(getattr(ctx, "context", None), ChatContext) else None
     web_search = any(getattr(tool, "name", "") == WEB_SEARCH for tool in agent.tools)
+    visit_webpage = any(getattr(tool, "name", "") == VISIT_WEBPAGE for tool in agent.tools)
     if context is None:
-        return build_instructions(web_search=web_search)
+        return build_instructions(web_search=web_search, visit_webpage=visit_webpage)
     return build_instructions(
-        profile=context.profile, onboarding=context.onboarding, web_search=web_search
+        profile=context.profile,
+        onboarding=context.onboarding,
+        web_search=web_search,
+        visit_webpage=visit_webpage,
     )
 
 
@@ -237,7 +246,10 @@ class AgentRunner:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._connected = False
-        self._tool_titles: dict[str, str] = {WEB_SEARCH: WEB_SEARCH_TITLE}
+        self._tool_titles: dict[str, str] = {
+            WEB_SEARCH: WEB_SEARCH_TITLE,
+            VISIT_WEBPAGE: VISIT_WEBPAGE_TITLE,
+        }
 
         # 一個共用的 client；官方 OpenAI 或任何 OpenAI 相容端點都可用。
         client = AsyncOpenAI(
@@ -281,7 +293,11 @@ class AgentRunner:
         if settings.reasoning_summary and settings.openai_use_responses_api:
             model_settings.reasoning = Reasoning(summary="auto")
 
-        tools = [suggest_replies, *PERSONAL_TOOL_OBJECTS]
+        tools = [
+            suggest_replies,
+            *PERSONAL_TOOL_OBJECTS,
+            build_visit_webpage_tool(settings.max_tool_output_chars, _tool_error_message),
+        ]
         # 網路搜尋需要官方 OpenAI 的 Responses API（web_search 工具）
         self._web_search = settings.web_search_enabled and settings.openai_use_responses_api
         if settings.web_search_enabled and not self._web_search:

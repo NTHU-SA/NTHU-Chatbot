@@ -130,6 +130,21 @@ async def test_nthu_web_search_has_a_display_title():
     assert out[-1].data["tool_calls"][0]["title"] == "搜尋清大官方網站"
 
 
+async def test_visit_webpage_has_a_display_title_and_reports_failures():
+    out = await collect(
+        make_runner(),
+        [
+            called("c1", "visit_webpage", '{"url":"https://www.nthu.edu.tw/"}'),
+            output("c1", "[TOOL_ERROR] ValueError: 找不到可讀取的網頁內文"),
+        ],
+    )
+    assert out[0].data["title"] == "讀取清大網頁內文"
+    assert out[1].data["title"] == "讀取清大網頁內文"
+    assert not out[1].data["ok"]
+    assert out[-1].data["tool_calls"][0]["title"] == "讀取清大網頁內文"
+    assert not out[-1].data["tool_calls"][0]["ok"]
+
+
 def test_legacy_tool_calls_without_titles_are_readable():
     assert ToolCall.model_validate({"name": "get_next_buses"}).title is None
 

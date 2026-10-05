@@ -5,7 +5,7 @@
 
 - **後端**：FastAPI on Cloud Run（LINE webhook、LIFF 對話 API、SSE 串流）
 - **前端**：原生 JS（ES modules、無建置工具）on Firebase Hosting
-- **AI**：OpenAI Agents SDK + NTHU Data MCP（8 個唯讀校園工具），可選擇開啟只限 nthu.edu.tw 的網路搜尋
+- **AI**：OpenAI Agents SDK + NTHU Data MCP（8 個唯讀校園工具）、只限 nthu.edu.tw 的網頁內文讀取，可選擇開啟網路搜尋
 - **資料**：Firestore（Native mode），後端以服務帳號存取，瀏覽器不直接連
 
 ## 目錄
@@ -36,6 +36,7 @@ LINE 聊天室 ──webhook──▶ Cloud Run /callback
 Cloud Run /api/* ──▶ AgentRunner（OpenAI Agents SDK）
    │                  ├─ MCP: https://api.nthusa.tw/mcp（唯讀校園工具，結果短暫快取）
    │                  ├─ 個人化工具：save_profile / remember / forget
+   │                  ├─ visit_webpage（只讀 nthu.edu.tw 的公開 HTTPS 網頁內文）
    │                  └─ nthu_web_search（選用，只搜 nthu.edu.tw）
    ├─ Firestore：users / identityLookup / conversations / messages …
    └─ SSE ──▶ thinking · interim · tool_call_start / end · suggestions · memory · token · done · error
@@ -61,7 +62,7 @@ src/app/auth/                     Authenticator（LINE、Auth0）、外部身分
 src/app/middleware.py             API 的安全標頭與 CORS
 src/app/handlers/、src/modules/   聊天室內 @ 指令
 src/application/                  資料模型；ChatStore / UserStore / ModuleRegistry 介面與記憶體實作；系所名稱正規化
-src/infrastructure/ai/            AgentRunner、prompt、個人化工具、網路搜尋、單次執行狀態
+src/infrastructure/ai/            AgentRunner、prompt、個人化工具、網路搜尋、網頁內文、單次執行狀態
 src/infrastructure/firebase/      上述介面的 Firestore 實作
 templates/messages/               Flex 訊息（含 LIFF 入口泡泡）
 frontend/                         LIFF 前端與隱私權政策頁
@@ -215,6 +216,7 @@ Firestore Native mode `(default)`，由 `infra/bootstrap.sh` 建立；區域建�
 - **限制**：每則訊息最多 `MAX_AGENT_TURNS` 回合、120 秒逾時、`MAX_TOOL_CALLS_PER_MESSAGE` 次外部呼叫；每人每日 `DAILY_MESSAGE_LIMIT` 則（跨實例，存在 Firestore），單一實例另有突發限流。每次執行的工具次數記在 log（`Agent run finished`）。
 - **工具效率**：彼此獨立的查詢在同一步一起發出、並行執行（`parallel_tool_calls`）；唯讀、與使用者無關的 MCP 結果在每個實例內短暫快取（公告 5 分鐘、課程與地點 1 小時；公車即時資料不快取），快取命中也計次。
 - **網路搜尋**（`WEB_SEARCH_ENABLED=true`，預設關閉；需要官方 OpenAI + Responses API；每次搜尋另外計費）：包成我們自己的 `nthu_web_search` function tool，內部以 Responses API 的 web_search 搜尋，`allowed_domains` 只允許 `WEB_SEARCH_DOMAINS`（預設 nthu.edu.tw，含子網域），回傳的來源網址在伺服器端再過濾一次。不直接掛 hosted web search，是為了在搜尋結果進入對話前就能計次並標記「本輪已讀取外部資料」。
+- **網頁內文**：`visit_webpage(url)` 預設提供，Chat Completions 與 Responses API 都可用，不需開啟付費搜尋。固定只允許 `nthu.edu.tw` 與其子網域的公開 HTTPS 網頁（不受 `WEB_SEARCH_DOMAINS` 影響），逐次檢查重新導向、拒絕內網位址，固定連線到驗證過的 IP 並保留 TLS 網域驗證。使用 Trafilatura 擷取主要內文，去除導覽、頁首頁尾、廣告、留言與 HTML 雜訊，保留段落、清單與表格文字，不回傳額外 metadata。讀取上限 20 秒、2 MiB、3 次重新導向，內文受 `MAX_TOOL_OUTPUT_CHARS` 限制並標示截斷；不支援 PDF、附件或需登入／JavaScript 的內容，失敗會明確回報。呼叫計入外部工具上限，也會阻擋本輪後續個人化寫入；prompt 提醒 agent 不要送非清大網址、猜測網址或重複失敗請求。
 - **個人化**：首次同意後會詢問稱呼與系所（可略過）；沒填也沒略過的話，AI 在第一次回答最後問一次。對話中使用者明確說出時，AI 用 `save_profile` / `remember` / `forget` 記下或刪除；系所比對 NTHU API `/directory` 的官方學術單位名稱（只取名稱，不存人員資料）與常見簡稱表，有多個可能時讓使用者選。使用者可在側欄「我的資料」修改或刪除。
 - **Prompt 版本**：修改 `src/infrastructure/ai/prompts.py` 的 system prompt 時遞增 `PROMPT_VERSION`；每則回答都會記下版本。
 
