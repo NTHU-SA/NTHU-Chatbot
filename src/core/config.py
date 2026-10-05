@@ -67,6 +67,35 @@ def parse_cors_origins(value: str | None) -> tuple[str, ...]:
     return origins
 
 
+_AUTH0_VARIABLES = ("AUTH0_DOMAIN", "AUTH0_AUDIENCE", "AUTH0_CLIENT_ID")
+_CLIENT_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+
+
+def _auth0() -> tuple[str | None, str | None, str | None]:
+    """
+    Auth0（一般瀏覽器登入）：三個值都設定才啟用，全部留空則停用；只設定一部分時啟動失敗。
+
+    都是公開值（網域、API identifier、SPA 的 client ID），不含任何機密。
+    """
+    values = [(os.getenv(name) or "").strip() for name in _AUTH0_VARIABLES]
+    if not any(values):
+        return None, None, None
+    missing = [name for name, value in zip(_AUTH0_VARIABLES, values, strict=True) if not value]
+    if missing:
+        raise RuntimeError("Missing environment variables: " + ", ".join(missing))
+    domain, audience, client_id = values
+    domain = domain.lower()
+    if not _DOMAIN.match(domain):
+        raise RuntimeError(
+            "Invalid AUTH0_DOMAIN, expected a bare host name such as auth.example.com"
+        )
+    if not _CLIENT_ID.match(client_id):
+        raise RuntimeError("Invalid AUTH0_CLIENT_ID")
+    if len(audience) > 200:
+        raise RuntimeError("Invalid AUTH0_AUDIENCE")
+    return domain, audience, client_id
+
+
 def _bool(value: str | None, default: bool) -> bool:
     if value is None or value.strip() == "":
         return default
@@ -124,6 +153,10 @@ class Settings:
     mcp_server_url: str = "https://api.nthusa.tw/mcp"
     mcp_allowed_tools: tuple[str, ...] = DEFAULT_MCP_TOOLS
     mcp_timeout_seconds: float = 30.0
+    # Auth0（一般瀏覽器登入；LIFF 內仍用 LINE）。三個都設定才啟用
+    auth0_domain: str | None = None
+    auth0_audience: str | None = None
+    auth0_client_id: str | None = None
     # LIFF 前端（Firebase Hosting）的網域；API 只允許這些網域跨站呼叫
     cors_allowed_origins: tuple[str, ...] = ()
     # 隱私權政策版本（單一來源在 src/core/privacy.py）；改版後使用者需重新同意才能使用 AI 對話
@@ -179,6 +212,7 @@ class Settings:
         if missing:
             raise RuntimeError("Missing environment variables: " + ", ".join(missing))
 
+        auth0_domain, auth0_audience, auth0_client_id = _auth0()
         return cls(
             line_channel_secret=os.environ["LINE_CHANNEL_SECRET"],
             line_channel_access_token=os.environ["LINE_CHANNEL_ACCESS_TOKEN"],
@@ -192,6 +226,9 @@ class Settings:
             mcp_server_url=os.getenv("MCP_SERVER_URL") or "https://api.nthusa.tw/mcp",
             mcp_allowed_tools=_csv(os.getenv("MCP_ALLOWED_TOOLS"), DEFAULT_MCP_TOOLS),
             mcp_timeout_seconds=_float("MCP_TIMEOUT_SECONDS", 30.0),
+            auth0_domain=auth0_domain,
+            auth0_audience=auth0_audience,
+            auth0_client_id=auth0_client_id,
             cors_allowed_origins=parse_cors_origins(os.getenv("CORS_ALLOWED_ORIGINS")),
             chat_store=chat_store,
             google_cloud_project=os.getenv("GOOGLE_CLOUD_PROJECT") or None,

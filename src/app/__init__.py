@@ -2,7 +2,7 @@
 這個目錄包含整個 line bot 的主要程式碼。
 - `routes`: 處理 API 請求，包含 `/callback`（LINE webhook）、`/api/*`（LIFF 對話）與 `/ping`
 - `handlers`: 聊天室內的 `@` 指令路由
-- `auth`: 登入 token 驗證（目前為 LINE）、外部身分 → 內部 user、限流
+- `auth`: 登入 token 驗證（LIFF 用 LINE、一般瀏覽器用 Auth0）、外部身分 → 內部 user、限流
 - `middleware`: 安全標頭
 LIFF 前端在 repo 根目錄的 `frontend/`，由 Firebase Hosting 提供，透過 CORS 呼叫這裡的 API。
 """
@@ -17,6 +17,7 @@ from linebot.v3.messaging import AsyncApiClient, AsyncMessagingApi, Configuratio
 from linebot.v3.webhook import WebhookParser
 from loguru import logger
 
+from src.app.auth.auth0 import Auth0Authenticator
 from src.app.auth.line import LineLiffAuthenticator
 from src.app.auth.rate_limit import RateLimiter
 from src.app.auth.service import IdentityService
@@ -73,6 +74,10 @@ async def lifespan(app: FastAPI):
             app.state.authenticators = {
                 "line": LineLiffAuthenticator(settings.line_login_channel_id, http),
             }
+            if settings.auth0_domain:
+                app.state.authenticators["auth0"] = Auth0Authenticator(
+                    settings.auth0_domain, settings.auth0_audience, settings.auth0_client_id, http
+                )
             app.state.rate_limiter = RateLimiter()
             app.state.agent_runner = runner
             await runner.start()
