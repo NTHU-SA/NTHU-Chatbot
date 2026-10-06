@@ -1,4 +1,6 @@
-# 環境建置（staging / prod）
+# 部署與維運（staging / prod）
+
+[回到 README](../README.md) · [設定指南](../docs/configuration.md) · [分支與發版](../docs/development.md#分支與發版)
 
 兩個環境放在**同一個 GCP 專案**（`nthusa-chatbot`），但所有資源都分開命名，權限也只授予自己那一份：
 
@@ -26,6 +28,15 @@
 
 staging 用 `cloudbuild.yaml` 建置；prod 用 `cloudbuild.release.yaml`：檢查 tag 等於 `pyproject.toml` 的 version，把 `nthu-chatbot-staging:<commit>` 複製成 `nthu-chatbot:<tag>`，以 digest 部署。staging 沒建過這個 commit（不在 `main` 上）時找不到映像而失敗。
 前端由 CI（`.github/workflows/ci.yml` 的 `deploy-frontend`）部署到 Firebase Hosting；`infra/build_frontend.py` 依環境設定檔產生 `config.json`（只有公開的 LIFF ID、API 網址與 Auth0 設定）和 CSP（`connect-src` 只允許該環境的 API 與 Auth0 網域）。
+
+## 部署流程
+
+- **API**：合併進 `main` → Cloud Build（`cloudbuild.yaml`，專用的最小權限部署 SA）建置映像 → 只更新 staging 的 Cloud Run 映像。推送版本 tag → `cloudbuild.release.yaml` 提升映像並部署 prod。環境變數與 Secret 設定在服務上，每個 revision 自動沿用；`--timeout=180` 必須大於 120 秒的 agent 上限。
+- **前端**：push 到 `main`（staging）或版本 tag（prod）且測試與容器 smoke test 通過後，CI 以 Workload Identity Federation 部署到 Hosting；版本 tag 同樣先檢查版本號與是否在 `main` 上。手動部署在 repo 根目錄用 Git Bash 執行 `bash infra/deploy_frontend.sh infra/environments/<env>.conf`。
+- **監測**：Cloud Run 上的 log 是帶 `severity` 的 JSON，可用 `severity>=ERROR` 篩選；`infra/monitoring.sh` 建立 5xx 與 ERROR log 告警。外部 ping 與選用 GCP uptime check 的設定見下方「`monitoring.sh` 做的事」。
+
+發版、tag 與回滾步驟見[開發指南](../docs/development.md#分支與發版)；
+首次建置環境則依下方的頻道設定、腳本與「建立 prod」操作。
 
 ## LINE 頻道設定（不寫在 repo）
 
@@ -139,7 +150,7 @@ gcloud secrets versions disable <舊版本號> --secret=<name> --project=<PROJEC
 6. `ALERT_EMAIL=... bash infra/monitoring.sh infra/environments/prod.conf`，並把外部 ping 服務指向 prod 的 `/ping`
 7. 確認 bootstrap 印出的服務網址與 `prod.conf` 的 `API_ORIGIN` 相同；在 GitHub repo 設定印出的兩個 variables（`..._PROD`），以及 `LIFF_ID_PROD`。
 8. LINE Developers：Webhook URL 設為 `<服務網址>/callback`、開啟 Use webhook；LIFF Endpoint URL 設為 `https://chat.nthusa.tw/`（網域生效前用 `https://nthusa-chatbot-prod.web.app/`）；用正式 bot 的 token 部署 rich menu（`uv run python -m scripts.rich_menu`）。
-9. 依 README「分支與發版」打第一個版本 tag，觸發 API 與前端的第一次部署，再用 `/ping` 和 LINE 實測。
+9. 依[分支與發版](../docs/development.md#分支與發版)打第一個版本 tag，觸發 API 與前端的第一次部署，再用 `/ping` 和 LINE 實測。
 
 ## 把 staging 校正到同一套設定
 
@@ -157,6 +168,11 @@ done
 ```
 
 ## 驗證
+
+部署後把 API 網址填進 LINE Webhook、Hosting 網址填進 LIFF Endpoint URL，
+再驗證 `/ping`、LINE Verify、指令查詢，以及聊天室提問 → 開啟 LIFF → 串流回覆。
+更新 Secret 後要部署新 revision 才會生效；不得在 Cloud Run 設定 `FIRESTORE_EMULATOR_HOST`。
+建議設定 GCP 與 LLM 供應商的預算告警。
 
 ```bash
 curl -fsS <服務網址>/ping                       # {"message":"pong"}
