@@ -16,7 +16,7 @@
 | --- | --- |
 | 後端 | FastAPI on Cloud Run（LINE webhook、對話 API、SSE 串流） |
 | 前端 | 原生 JS ES modules on Firebase Hosting，無建置工具 |
-| AI | OpenAI Agents SDK + NTHU Data MCP（8 個唯讀校園工具）；可選擇開啟限定校園網域的網路搜尋 |
+| AI | OpenAI Agents SDK + NTHU Data MCP（8 個唯讀校園工具）、清大公開 HTTPS 網頁內文讀取；可選擇開啟限定校園網域的網路搜尋 |
 | 資料 | Firestore Native mode，由後端服務帳號存取，瀏覽器不直接連線 |
 
 ## 快速開始
@@ -55,7 +55,7 @@ LINE 裡測試需要公開 HTTPS 網址與 LINE Developers 設定，詳見
 | --- | --- |
 | [開發指南](docs/development.md) | 本機開發、Firestore emulator、依賴管理、測試、CI、PR 與發版 |
 | [設定指南](docs/configuration.md) | 環境變數、憑證、LINE / LIFF 設定與 Rich Menu |
-| [架構與資料](docs/architecture.md) | 系統資料流、程式分層、身分模型、Firestore 路徑與 AI 對話 |
+| [架構與資料](docs/architecture.md) | 系統資料流、程式分層、身分模型、Firestore 路徑、AI 對話與網頁內文讀取 |
 | [隱私權與資安](docs/privacy-security.md) | 同意與政策版本、資料刪除、登入驗證、瀏覽器與 LLM 防護 |
 | [校園 API](docs/campus-api.md) | NTHU API v2 端點、資料格式、舊 postback 相容與 MCP 工具遷移 |
 | [介面設計](design.md) | 網頁與 LINE Flex 規範、共用主題、預覽與手機端驗收 |

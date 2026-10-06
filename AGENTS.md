@@ -13,6 +13,7 @@ FastAPI 後端、原生 JS / LIFF 前端、OpenAI Agents SDK、NTHU Data MCP 與
 | 本機開發、依賴、測試、PR | [開發指南](docs/development.md) | `pyproject.toml`、`uv.lock`、`tests/`、`.github/workflows/ci.yml` |
 | 環境變數、LINE / LIFF、Rich Menu | [設定指南](docs/configuration.md) | `src/core/config.py`、`.env.template`、`scripts/rich_menu.py` |
 | 路由、登入、資料儲存、AI | [架構與資料](docs/architecture.md) | `src/app/`、`src/application/`、`src/infrastructure/` |
+| AI 網頁內文與搜尋工具 | [網頁內文讀取](docs/architecture.md#網頁內文讀取)、[設定指南](docs/configuration.md#網頁讀取與搜尋) | `src/infrastructure/ai/webpage.py`、`webpage_parser.py`、`web_search.py` |
 | 同意、個人化、資料刪除 | [隱私權與資安](docs/privacy-security.md) | `src/core/privacy.py`、`src/app/routes/account.py`、`frontend/privacy.html` |
 | 校園查詢、API 格式 | [校園 API](docs/campus-api.md) | `src/modules/`、`src/utils/nthuapi.py`、`src/infrastructure/ai/` |
 | 網頁或 LINE Flex | [介面設計](design.md) | `frontend/`、`templates/messages/`、`scripts/build_flex_preview.py` |
@@ -34,6 +35,7 @@ FastAPI 後端、原生 JS / LIFF 前端、OpenAI Agents SDK、NTHU Data MCP 與
 - 所有資料、限流與每日額度只認內部 `userId`，不可改用 LINE ID 或 Auth0 `sub` 當資料主鍵；不得靠 email、名稱或學號自動合併帳號。
 - LINE 與 Auth0 使用各自驗證過的 token。未知 provider 與無效 token 回 401；讀取對話須檢查擁有者，不向前端洩漏內部身分或分析欄位。
 - AI 對話須由後端強制同意目前政策版本；同一輪讀過外部資料後禁止個人化寫入。保留工具呼叫、逾時、輸出長度與每日用量限制，公車即時資料不快取。
+- `visit_webpage` 固定只讀清大公開 HTTPS 網頁，不隨 `WEB_SEARCH_DOMAINS` 放寬。保留重新導向與公開 IP 驗證、連線 IP 固定、TLS 驗證、未壓縮回應檢查，以及下載／解析上限與獨立解析程序的逾時清理；呼叫仍計入外部工具額度並阻擋本輪個人化寫入。
 - 保留刪除流程的 `deleting` / `deleted` 狀態、重試清理與當日額度 carryover，避免並行寫入留下資料或刪除帳號重置額度。
 - log 不記訊息內容、token 或任何 ID；例外只記型別名稱。不可讓 Firestore rules 開放瀏覽器直接存取，亦不可放寬 CORS / CSP 以繞過設定問題。
 - AI 對話在網頁以 SSE 執行，不移入 webhook；前端直接以 CORS 呼叫 Cloud Run，不改成 Hosting rewrite（60 秒上限會截斷串流）。webhook 的並行寫入必須在回應前收尾。

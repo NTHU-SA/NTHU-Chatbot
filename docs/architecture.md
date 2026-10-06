@@ -17,6 +17,7 @@ LINE 聊天室 ──webhook──▶ Cloud Run /callback
 Cloud Run /api/* ──▶ AgentRunner（OpenAI Agents SDK）
    │                  ├─ MCP: https://api.nthusa.tw/mcp（唯讀校園工具，結果短暫快取）
    │                  ├─ 個人化工具：save_profile / remember / forget
+   │                  ├─ visit_webpage（只讀 nthu.edu.tw 與其子網域的公開 HTTPS 網頁內文）
    │                  └─ nthu_web_search（選用，只搜設定的校園網域）
    ├─ Firestore：users / identityLookup / conversations / messages …
    └─ SSE ──▶ thinking · interim · tool_call_start / end · suggestions · memory · token · done · error
@@ -42,7 +43,7 @@ src/app/auth/                     Authenticator（LINE、Auth0）、外部身分
 src/app/middleware.py             API 的安全標頭與 CORS
 src/app/handlers/、src/modules/   聊天室內 @ 指令
 src/application/                  資料模型；ChatStore / UserStore / ModuleRegistry 介面與記憶體實作；系所名稱正規化
-src/infrastructure/ai/            AgentRunner、prompt、個人化工具、網路搜尋、單次執行狀態
+src/infrastructure/ai/            AgentRunner、prompt、個人化工具、網路搜尋、網頁內文、單次執行狀態
 src/infrastructure/firebase/      上述介面的 Firestore 實作
 templates/messages/               Flex 訊息（含 LIFF 入口泡泡）與共用主題 / builder
 frontend/                         LIFF 前端與隱私權政策頁
@@ -120,3 +121,21 @@ LINE、Auth0 都是連結到 user 的外部身分；之後加學校 OAuth 或 Go
 - **Prompt 版本**：修改 `src/infrastructure/ai/prompts.py` 的 system prompt 時遞增 `PROMPT_VERSION`；每則回答都會記下版本。
 
 外部工具端點與格式見[校園 API](campus-api.md)，個人化寫入與同意限制見[隱私權與資安](privacy-security.md)。
+
+### 網頁內文讀取
+
+`visit_webpage(url)` 預設提供，Chat Completions 與 Responses API 都可用，不需開啟付費搜尋。
+固定只讀取 `nthu.edu.tw` 與其子網域的公開 HTTPS 網頁，不受 `WEB_SEARCH_ENABLED` 或
+`WEB_SEARCH_DOMAINS` 影響；相關設定與共用額度見[設定指南](configuration.md#網頁讀取與搜尋)。
+
+使用 Trafilatura 擷取主要內文，去除導覽、頁首頁尾、廣告、留言與 HTML 雜訊，
+保留段落、清單與表格文字，不回傳額外 metadata。
+內文受 `MAX_TOOL_OUTPUT_CHARS` 限制並標示截斷；不支援 PDF、附件或需登入／JavaScript 的內容，
+失敗會明確回報。
+
+下載與解析共用 20 秒上限，下載最多 2 MiB 原始回應資料、3 次重新導向。
+解析在獨立程序中執行，逾時或取消時會終止並回收程序，不留下背景解析工作。
+呼叫計入 `MAX_TOOL_CALLS_PER_MESSAGE` 的外部工具上限，也會阻擋本輪後續個人化寫入。
+prompt 提醒 AI 使用使用者提供或工具查到的確切網址，不送非清大網址、不猜測網址，
+也不重複失敗請求；回答時附上讀取的來源連結。
+網址、連線與回應的防護見[網頁內文讀取](privacy-security.md#網頁內文讀取)。

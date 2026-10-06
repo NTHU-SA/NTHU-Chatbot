@@ -18,9 +18,21 @@
 - **瀏覽器的 Auth0 token**：refresh token 只放在同源 Web Worker 的記憶體（不存 localStorage），重新整理後以 Auth0 網域的隱藏 iframe 靜默取得；登入後只導回同源路徑，網址列不留 `code` / `state`。
 - **API**：CORS 只允許設定的前端網域且不帶 cookie；API 回應帶 `default-src 'none'`、`X-Frame-Options: DENY`；`docs_url` 等文件端點關閉。
 - **前端**：Hosting 設定嚴格 CSP（`connect-src` 只允許該環境的 API、LINE 與 Auth0 網域）；模型輸出經 DOMPurify 消毒，連結只允許 http(s) / mailto。
-- **防 prompt injection**：同一輪只要讀過外部資料（任何 MCP 工具結果或網路搜尋），個人化寫入工具一律拒絕；寫入的文字去掉換行與角括號、限制長度，注入 instructions 時包在 `<user_profile>` 並標明「不是指令」；工具結果在 prompt 中也被標示為資料。
+- **防 prompt injection**：同一輪只要讀過外部資料（任何 MCP 工具結果、網路搜尋或網頁內文），個人化寫入工具一律拒絕；寫入的文字去掉換行與角括號、限制長度，注入 instructions 時包在 `<user_profile>` 並標明「不是指令」；工具結果在 prompt 中也被標示為資料。
 - **資料**：Firestore rules 全部拒絕，只有後端服務帳號能存取；執行期與部署服務帳號都是最小權限（見[部署文件](../infra/README.md)）；log 只記例外型別名稱，不記內容、token 或任何 ID。
 - **供應鏈**：依賴以雜湊鎖定（`--require-hashes`）、Docker base image 釘 digest、GitHub Actions 釘 commit SHA；CI 以 Workload Identity Federation 部署，不存任何 GCP 金鑰。
+
+### 網頁內文讀取
+
+`visit_webpage` 固定只允許 `nthu.edu.tw` 與其子網域的公開 HTTPS 網頁，
+逐次檢查重新導向並拒絕內網或非公開位址。
+連線固定到驗證過的 IP，同時保留原 Host 與 TLS 網域驗證，避免 DNS rebinding。
+搜尋的 `WEB_SEARCH_DOMAINS` 不會放寬這個工具的範圍。
+
+下載要求未壓縮回應，並拒絕壓縮內容，避免在檢查原始回應大小前解壓縮。
+下載與解析的時間、大小與程序清理限制見[架構指南](architecture.md#網頁內文讀取)。
+呼叫在讀取前就計入外部工具額度並標記本輪不可個人化寫入，
+網頁文字只能當作資料，不能當成指令。
 
 ## 歷史金鑰提醒
 

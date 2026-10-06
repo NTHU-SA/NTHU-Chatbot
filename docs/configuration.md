@@ -31,6 +31,18 @@ Firestore 不用金鑰檔：Cloud Run 用執行期服務帳號的 ADC，
 前端本機設定由 `frontend/config.example.json` 複製為 git-ignored 的 `frontend/config.json`。
 部署時由 `infra/build_frontend.py` 產生公開設定與 CSP，詳見[部署與維運](../infra/README.md)。
 
+## 網頁讀取與搜尋
+
+`visit_webpage` 與 `nthu_web_search` 是不同工具，前者讀取已知網址的主要內文，後者查詢搜尋結果：
+
+| 工具 | 啟用與範圍 | 共用限制 |
+| --- | --- | --- |
+| `visit_webpage` | 預設提供，Chat Completions 與 Responses API 都可用；固定只讀 `nthu.edu.tw` 與其子網域的公開 HTTPS HTML，不受 `WEB_SEARCH_ENABLED` / `WEB_SEARCH_DOMAINS` 影響 | 呼叫計入 `MAX_TOOL_CALLS_PER_MESSAGE`，內文受 `MAX_TOOL_OUTPUT_CHARS` 限制 |
+| `nthu_web_search` | `WEB_SEARCH_ENABLED=true` 且使用官方 OpenAI + Responses API 才可用；網域由 `WEB_SEARCH_DOMAINS` 限定（預設 nthu.edu.tw），搜尋另計費 | 計入 `MAX_TOOL_CALLS_PER_MESSAGE`，另受 `MAX_WEB_SEARCHES_PER_MESSAGE` 限制 |
+
+`visit_webpage` 沒有獨立的啟用或網域環境變數；不要以搜尋設定放寬其範圍。
+內容格式、逾時、下載與解析上限見[網頁內文讀取](architecture.md#網頁內文讀取)。
+
 ## LINE Developers 設定
 
 同一個 **Provider** 底下建立兩個 channel（不同 Provider 的 userId 不同，同一個人會變成兩個 user）：

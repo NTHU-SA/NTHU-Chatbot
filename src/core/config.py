@@ -175,7 +175,7 @@ class Settings:
     max_output_chars: int = 8000
     daily_message_limit: int = 100
     max_agent_turns: int = 8
-    # 每則訊息最多幾次外部工具呼叫（MCP + 網路搜尋）
+    # 每則訊息最多幾次外部工具呼叫（MCP + 網路搜尋 + 網頁內文）
     max_tool_calls_per_message: int = 6
     # 網路搜尋（只在官方 OpenAI Responses API 下可用；限定網域）
     web_search_enabled: bool = False
