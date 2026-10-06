@@ -10,7 +10,7 @@
 ```powershell
 uv sync --locked                  # 依 uv.lock 建立 .venv（含 dev 與 test group）
 uv run pre-commit install         # 之後每次 commit 自動跑 isort、Black、Ruff
-Copy-Item .env.template .env      # 填入 LINE、LIFF、LLM 設定
+if (-not (Test-Path .env)) { Copy-Item .env.template .env }  # 填入 LINE、LIFF、LLM 設定
 ```
 
 沒有 GCP 憑證時在 `.env` 設 `CHAT_STORE=memory`（資料不會保存）；要連 Firestore 則先執行
@@ -23,7 +23,7 @@ uv run main.py                    # API 在 http://localhost:5000，健康檢查
 前端是純靜態檔，在另一個終端執行：
 
 ```powershell
-Copy-Item frontend\config.example.json frontend\config.json   # 填入 LIFF ID 與 API 網址（git-ignored）
+if (-not (Test-Path frontend\config.json)) { Copy-Item frontend\config.example.json frontend\config.json }  # 填入 LIFF ID 與 API 網址（git-ignored）
 uv run python -m http.server 5500 --directory frontend
 ```
 

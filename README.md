@@ -27,8 +27,8 @@
 ```powershell
 uv sync --locked
 uv run pre-commit install
-Copy-Item .env.template .env
-Copy-Item frontend\config.example.json frontend\config.json
+if (-not (Test-Path .env)) { Copy-Item .env.template .env }
+if (-not (Test-Path frontend\config.json)) { Copy-Item frontend\config.example.json frontend\config.json }
 ```
 
 填入 `.env` 的 LINE、LIFF 與 LLM 設定；沒有 GCP 憑證時改用 `CHAT_STORE=memory`（資料不保存），
