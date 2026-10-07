@@ -59,6 +59,7 @@ LINE 裡測試需要公開 HTTPS 網址與 LINE Developers 設定，詳見
 | [隱私權與資安](docs/privacy-security.md) | 同意與政策版本、資料刪除、登入驗證、瀏覽器與 LLM 防護 |
 | [校園 API](docs/campus-api.md) | NTHU API v2 端點、資料格式、舊 postback 相容與 MCP 工具遷移 |
 | [介面設計](design.md) | 網頁與 LINE Flex 規範、共用主題、預覽與手機端驗收 |
+| [草地測試 SOP](docs/grass-testing-sop.md) | 通用草稿：校準、iPhone 連線、現場測試與紀錄；設備專屬流程待補 |
 | [部署與維運](infra/README.md) | staging / prod 資源、LINE / Auth0 環境設定、部署腳本、Secret 與監測 |
 | [Agent 開發指引](AGENTS.md) | Coding agent 應遵守的專案慣例、修改限制與驗證入口 |
 
