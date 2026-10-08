@@ -7,6 +7,8 @@
 - 外部身分 → 內部 user 的對應只能以「建立」寫入：同一個外部身分不可能屬於兩個 user。
 - 連結第二個身分只能明確進行（呼叫端必須同時驗證過兩個身分），絕不以 email、名稱或學號自動合併。
 - 至少保留一個身分；連結與解除都會寫稽核紀錄。
+- 唯一的例外是 `move_identity`：只給 IdP 保證同屬一人的身分使用（Auth0 token 裡 NTHUSA ID 綁定的 LINE），
+  以 IdP 為準把對應改到目前的 user。
 """
 
 from __future__ import annotations
@@ -56,6 +58,21 @@ class UserStore(Protocol):
 
     async def unlink_identity(self, user_id: str, provider: str) -> None:
         """解除連結；只剩一個身分時拋出 LastIdentityError。"""
+        ...
+
+    async def find_user(self, identity: VerifiedIdentity) -> str | None:
+        """外部身分目前對應的 user（不建立）；沒有對應或 user 已刪除時回傳 None。"""
+        ...
+
+    async def has_identity(self, user_id: str, provider: str) -> bool: ...
+
+    async def move_identity(self, user_id: str, identity: VerifiedIdentity) -> str | None:
+        """
+        把 IdP 保證屬於這個 user 的身分對應到它（同一個交易）。
+
+        身分原本屬於別的 user 時，從那個 user 移除並回傳它的 id；這個 user 原本連結的
+        同 provider 舊身分會被取代。已經對應到這個 user 時什麼都不做，回傳 None。
+        """
         ...
 
     async def touch_activity(self, user_id: str) -> None: ...
@@ -215,6 +232,41 @@ class MemoryUserStore:
             record = linked.pop(provider)
             self.lookup.pop(lookup_key(provider, record["providerUserId"]), None)
             self.audit[user_id].append({"action": "unlink", "provider": provider})
+
+    async def find_user(self, identity: VerifiedIdentity) -> str | None:
+        user_id = self.lookup.get(lookup_key(identity.provider, identity.provider_user_id))
+        status = self.users.get(user_id or "", {}).get("status")
+        return user_id if status not in (None, DELETED) else None
+
+    async def has_identity(self, user_id: str, provider: str) -> bool:
+        return provider in self.identities.get(user_id, {})
+
+    async def move_identity(self, user_id: str, identity: VerifiedIdentity) -> str | None:
+        key = lookup_key(identity.provider, identity.provider_user_id)
+        async with self._lock:
+            self._check_active(user_id)
+            previous = self.lookup.get(key)
+            if previous == user_id:
+                return None
+            own = self.identities[user_id].get(identity.provider)
+            if own is not None:
+                old_key = lookup_key(identity.provider, own["providerUserId"])
+                if self.lookup.get(old_key) == user_id:
+                    del self.lookup[old_key]
+            if previous is not None:
+                record = self.identities[previous].get(identity.provider)
+                if record and record["providerUserId"] == identity.provider_user_id:
+                    del self.identities[previous][identity.provider]
+                    self.audit[previous].append({"action": "unlink", "provider": identity.provider})
+            self.lookup[key] = user_id
+            self.identities[user_id][identity.provider] = {
+                "provider": identity.provider,
+                "providerUserId": identity.provider_user_id,
+                "linkedAt": now_utc(),
+                "metadata": {},
+            }
+            self.audit[user_id].append({"action": "link", "provider": identity.provider})
+            return previous
 
     async def touch_activity(self, user_id: str) -> None:
         if user_id in self.users:

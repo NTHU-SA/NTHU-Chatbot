@@ -26,18 +26,27 @@ def lookup_key(provider: str, provider_user_id: str) -> str:
     return hashlib.sha256(f"{provider}:{provider_user_id}".encode()).hexdigest()
 
 
+# 學生會跨系統的 NTHUSA ID（Auth0 post-login Action 產生的 `usr_<ULID>`）。
+# 它和內部 user id 不同：內部 id 只在這個環境的資料庫裡用，NTHUSA ID 才是各系統之間交換的 ID，
+# 兩者以外部身分 `nthusa` 對應（identityLookup），所以刪除、額度與並行建立沿用同一套機制。
+NTHUSA_PROVIDER = "nthusa"
+
+
 @dataclass(frozen=True)
 class VerifiedIdentity:
     """
     已由 provider 驗證過的外部身分。
 
     只能由 Authenticator 建立：`provider_user_id` 來自驗證過的 token，前端無法自行宣稱。
+    `linked` 是同一個 token 裡 IdP 保證屬於同一個人的其他身分（例如 NTHUSA ID 綁定的 LINE），
+    由 IdentityService 對應到同一個 user，讓 LINE webhook 找得到這個人。
     """
 
     provider: str
     provider_user_id: str = field(repr=False)
     display_name: str | None = None
     picture_url: str | None = None
+    linked: tuple[VerifiedIdentity, ...] = field(default=(), repr=False)
 
 
 @dataclass(frozen=True)

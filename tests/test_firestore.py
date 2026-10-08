@@ -185,6 +185,44 @@ async def test_linking_rules(db, users):
 
 
 @pytest.mark.firestore
+async def test_move_identity_follows_the_idp(db, users):
+    """IdP 保證屬於這個人的身分：從原本的 user 移過來，舊的同 provider 身分被取代。"""
+    alice, _ = await users.resolve_or_create(identity(provider="nthusa"))
+    bob, _ = await users.resolve_or_create(identity(provider="nthusa"))
+    line_1, line_2 = identity(), identity()
+    assert await users.find_user(line_1) is None
+
+    assert await users.move_identity(alice, line_1) is None
+    assert await users.find_user(line_1) == alice
+    assert await users.move_identity(alice, line_1) is None  # 已對應：不變
+    assert await users.has_identity(alice, "line")
+
+    assert await users.move_identity(bob, line_1) == alice
+    assert await users.find_user(line_1) == bob
+    assert not await users.has_identity(alice, "line")
+    assert await users.has_identity(alice, "nthusa")
+
+    assert await users.move_identity(bob, line_2) is None
+    assert await users.find_user(line_1) is None  # bob 換了另一個 LINE
+    assert await users.find_user(line_2) == bob
+    record = await doc(db, f"users/{bob}/identities/line")
+    assert record["providerUserId"] == line_2.provider_user_id
+    alice_audit = [d.to_dict() async for d in db.collection(f"users/{alice}/auditLog").stream()]
+    assert sorted(entry["action"] for entry in alice_audit) == ["link", "unlink"]
+
+
+@pytest.mark.firestore
+async def test_move_identity_refuses_disabled_users_and_find_skips_deleted(db, users):
+    who = identity()
+    user_id, _ = await users.resolve_or_create(who)
+    await users.begin_deletion(user_id)
+    with pytest.raises(AccountDisabledError):
+        await users.move_identity(user_id, identity())
+    await users.delete_user(user_id)
+    assert await users.find_user(who) is None
+
+
+@pytest.mark.firestore
 async def test_login_activity_and_module_use(db, users):
     user_id = await new_user(users)
     principal = Principal(user_id=user_id, provider="line", display_name="新名字")

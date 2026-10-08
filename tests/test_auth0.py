@@ -8,13 +8,15 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
 
 from src.app.auth import auth0
-from src.app.auth.auth0 import Auth0Authenticator
+from src.app.auth.auth0 import LINE_CLAIM, USR_CLAIM, Auth0Authenticator
 
 DOMAIN = "auth.example.test"
 ISSUER = f"https://{DOMAIN}/"
 AUDIENCE = "https://chat.example.test/api"
 CLIENT_ID = "chatClientId123"
 SUB = "google-oauth2|1234567890"
+NTHUSA_ID = "usr_01K7AJ3Z8Q4N5V6W7X8Y9ZABCD"
+LINE_USER_ID = "U" + "0123456789abcdef" * 2
 
 
 def rsa_key():
@@ -40,6 +42,7 @@ def claims(**overrides) -> dict:
         "iat": now,
         "exp": now + 600,
         "scope": "openid profile",
+        USR_CLAIM: NTHUSA_ID,
     }
     values.update(overrides)
     return {key: value for key, value in values.items() if value is not None}
@@ -87,18 +90,20 @@ async def test_access_token_verified_and_cached(verifier, fake):
     access_token = token()
     first = await verifier.verify(access_token)
     second = await verifier.verify(access_token)
-    assert first.provider == "auth0"
-    assert first.provider_user_id == SUB
+    # 身分是 Action 給的 NTHUSA ID，不是會隨帳號連結改變的 sub
+    assert first.provider == "nthusa"
+    assert first.provider_user_id == NTHUSA_ID
+    assert first.linked == ()
     assert first.display_name == "王小明"
     assert first.picture_url == "https://lh3.googleusercontent.com/a/x"
-    assert SUB not in repr(first)  # 外部 ID 不出現在 repr / log
+    assert NTHUSA_ID not in repr(first)  # 外部 ID 不出現在 repr / log
     assert first == second
     assert (fake.jwks_calls, fake.userinfo_calls) == (1, 1)
 
 
 async def test_single_audience_string_is_accepted(verifier):
     identity = await verifier.verify(token(aud=AUDIENCE))
-    assert identity.provider_user_id == SUB
+    assert identity.provider_user_id == NTHUSA_ID
 
 
 @pytest.mark.parametrize(
@@ -111,6 +116,10 @@ async def test_single_audience_string_is_accepted(verifier):
         {"sub": None},
         {"exp": int(time.time()) - 120},  # 過期（超過容忍範圍）
         {"iat": None},
+        {USR_CLAIM: None},  # post-login Action 沒設定
+        {USR_CLAIM: "usr_" + "0" * 32},  # 內部 id 的格式，不是 NTHUSA ID
+        {USR_CLAIM: "usr_01K7AJ3Z8Q4N5V6W7X8Y9ZABCU"},  # ULID 不含 U
+        {USR_CLAIM: 123},
     ],
 )
 async def test_bad_claims_are_rejected(verifier, overrides):
@@ -156,7 +165,7 @@ async def test_rotated_key_is_picked_up(verifier, fake, monkeypatch):
     # 超過最短重抓間隔後，新的 kid 會觸發重抓
     monkeypatch.setattr(auth0, "JWKS_MIN_REFRESH_SECONDS", 0)
     identity = await verifier.verify(token(private_key=OTHER_KEY, kid="k2"))
-    assert identity.provider_user_id == SUB
+    assert identity.provider_user_id == NTHUSA_ID
     assert fake.jwks_calls == 2
 
 
@@ -170,7 +179,7 @@ async def test_unreachable_jwks_returns_503(verifier, fake):
 async def test_profile_is_best_effort(verifier, fake):
     fake.userinfo_status = 429
     identity = await verifier.verify(token())
-    assert identity.provider_user_id == SUB
+    assert identity.provider_user_id == NTHUSA_ID
     assert identity.display_name is None
     assert identity.picture_url is None
 
@@ -180,3 +189,18 @@ async def test_non_https_picture_is_dropped(verifier, fake):
     identity = await verifier.verify(token())
     assert identity.display_name == "ming"
     assert identity.picture_url is None
+
+
+async def test_line_identity_from_the_action_is_linked(verifier):
+    identity = await verifier.verify(token(**{LINE_CLAIM: LINE_USER_ID}))
+    assert [(other.provider, other.provider_user_id) for other in identity.linked] == [
+        ("line", LINE_USER_ID)
+    ]
+    assert LINE_USER_ID not in repr(identity)
+
+
+@pytest.mark.parametrize("value", ["Uabc", "line|" + LINE_USER_ID, LINE_USER_ID.upper(), 42])
+async def test_malformed_line_claim_is_ignored(verifier, value):
+    identity = await verifier.verify(token(**{LINE_CLAIM: value}))
+    assert identity.provider_user_id == NTHUSA_ID
+    assert identity.linked == ()

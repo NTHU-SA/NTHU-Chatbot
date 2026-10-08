@@ -28,6 +28,7 @@ from src.application.models.profile import (
 )
 from src.application.services.chat_store import ChatStore
 from src.application.services.departments import DepartmentDirectory
+from src.application.services.erasure import erase_user
 from src.application.services.user_store import UserStore
 from src.core.config import Settings
 
@@ -101,7 +102,7 @@ async def me_with_client(
     """
     LIFF 頁面開啟時呼叫，順帶回報 LIFF 執行環境。
 
-    這些資訊是前端自報的，只存成 `identities/line.metadata.liff`，不參與任何授權判斷。
+    這些資訊是前端自報的，只存成登入身分的 `identities/{provider}.metadata.liff`，不參與任何授權判斷。
     """
     return await _me(request, user, client)
 
@@ -207,22 +208,18 @@ async def delete_me(request: Request, user: Principal = Depends(get_principal_fo
     """
     刪除我的所有資料：對話與訊息、稱呼與系所、記憶、同意紀錄、使用紀錄、外部身分對應與帳號本身。
 
-    1. 先把帳號標成 deleting：其他請求（其他實例在狀態快取過期後）一律被擋，只能再呼叫刪除；
-    2. 刪除對話與 user 資料，每一步都重新查詢確認清空；user 文件最後換成不含個資的墓碑；
-    3. 再刪一次對話：涵蓋墓碑寫入前還在進行的請求建立的對話（之後建立的會自己撤銷）。
-    沒刪乾淨時回 503 `deletion_incomplete`，帳號維持 deleting，使用者可以再呼叫一次。
+    步驟見 `erase_user`。沒刪乾淨時回 503 `deletion_incomplete`，帳號維持 deleting，
+    使用者可以再呼叫一次。
     完成後同一個 LINE 帳號再開啟頁面會是全新的使用者（需要重新同意隱私權政策）。
     """
     chats: ChatStore = request.app.state.store
-    users = _users(request)
-    await users.begin_deletion(user.user_id)
-    request.app.state.identity_service.forget_user(user.user_id)
+    identities = request.app.state.identity_service
     try:
-        await chats.delete_all_sessions(user.user_id)
-        await users.delete_user(user.user_id)
-        await chats.delete_all_sessions(user.user_id)
+        await erase_user(
+            chats, _users(request), user.user_id, lambda: identities.forget_user(user.user_id)
+        )
     except DeletionIncompleteError:
         logger.error("User data deletion incomplete")
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, DELETION_INCOMPLETE) from None
-    request.app.state.identity_service.forget_user(user.user_id)
+    identities.forget_user(user.user_id)
     logger.info("User data deleted on request")

@@ -254,6 +254,29 @@ def test_memory_store_startup_skips_firestore_and_manages_runner(lifecycle_mocks
     database.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [
+        ({}, {"line", "auth0"}),
+        # LIFF 改走 Auth0 的 LINE 連線後，不再接受 LIFF 的 id_token
+        ({"AUTH0_LINE_CONNECTION": "line-chat"}, {"auth0"}),
+    ],
+)
+def test_auth0_line_connection_retires_the_liff_authenticator(lifecycle_mocks, extra, expected):
+    environment = {
+        **LIFECYCLE_ENVIRONMENT,
+        "CHAT_STORE": "memory",
+        "AUTH0_DOMAIN": "auth.example.test",
+        "AUTH0_AUDIENCE": "https://chat.example.test/api",
+        "AUTH0_CLIENT_ID": "chatClientId123",
+        **extra,
+    }
+    with patch.dict(os.environ, environment, clear=True):
+        app = create_app()
+        with TestClient(app):
+            assert set(app.state.authenticators) == expected
+
+
 def test_firestore_store_startup_wires_and_closes_client(lifecycle_mocks):
     database, _ = lifecycle_mocks
     environment = {
