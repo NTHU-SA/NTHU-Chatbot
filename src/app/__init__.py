@@ -68,12 +68,15 @@ async def lifespan(app: FastAPI):
             app.state.store = store
             app.state.user_store = user_store
             app.state.module_registry = module_registry
-            app.state.identity_service = IdentityService(user_store)
+            app.state.identity_service = IdentityService(user_store, store)
             app.state.departments = DepartmentDirectory(_fetch_departments)
-            # 新增登入方式時在這裡註冊；provider 名稱即前端 X-Auth-Provider 的值
-            app.state.authenticators = {
-                "line": LineLiffAuthenticator(settings.line_login_channel_id, http),
-            }
+            # 新增登入方式時在這裡註冊；provider 名稱即前端 X-Auth-Provider 的值。
+            # LIFF 經 Auth0 的 LINE 連線登入後，不再接受 LIFF 的 id_token（少一條登入路徑）
+            app.state.authenticators = {}
+            if not settings.auth0_line_connection:
+                app.state.authenticators["line"] = LineLiffAuthenticator(
+                    settings.line_login_channel_id, http
+                )
             if settings.auth0_domain:
                 app.state.authenticators["auth0"] = Auth0Authenticator(
                     settings.auth0_domain, settings.auth0_audience, settings.auth0_client_id, http

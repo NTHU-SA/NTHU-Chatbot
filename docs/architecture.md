@@ -75,7 +75,7 @@ LINE、Auth0 都是連結到 user 的外部身分；之後加學校 OAuth 或 Go
 只要新增一個 `Authenticator`（`src/app/auth/`）並在 `create_app()` 的 lifespan 組裝流程註冊，資料層不用改。
 
 ```text
-請求 → Authenticator（依 X-Auth-Provider：line，啟用時另有 auth0；未知的一律 401）→ VerifiedIdentity
+請求 → Authenticator（依 X-Auth-Provider：auth0，未改走 Auth0 LINE 連線時另有 line；未知的一律 401）→ VerifiedIdentity
      → IdentityService：identityLookup/{sha256(provider:id)} → userId
      → 路由、限流、每日額度、所有資料都只認 userId
 ```
@@ -83,7 +83,9 @@ LINE、Auth0 都是連結到 user 的外部身分；之後加學校 OAuth 或 Go
 - `identityLookup` 的文件 ID 是雜湊值：學號這類個資不會出現在文件路徑、Console 與 log；原始外部 ID 只存在 `users/{uid}/identities/{provider}`。API 不回傳任何 ID。
 - 第一次見到的身分以一次原子寫入建立 user、identity 與 lookup（`create()`，已存在就失敗）；同一個帳號同時進來也只會建立一個 user。
 - 帳號連結（之後開放）**只能明確進行**：同一個請求裡同時證明兩個身分，絕不用 email、名稱或學號自動合併；同一個外部身分不能屬於兩個 user（衝突回 409 且不透露是誰）；至少保留一個登入方式；連結與解除都寫入 `auditLog`。
-- 目前 Auth0 登入（provider `auth0`）與 LIFF 登入（provider `line`）是不同的內部 user，對話不互通。Auth0 的環境設定與帳號連結限制見 [部署文件](../infra/README.md#auth0一般瀏覽器登入)。
+- Auth0 登入的身分是 NTHUSA ID（provider `nthusa`，post-login Action 產生的 `usr_` + ULID，學生會跨系統共用，staging 與 prod 相同），不是 Auth0 的 `sub`（連結帳號時會變）。NTHUSA ID 和內部 `userId` 是兩個不同的值：內部 id 只在這個環境的資料庫裡用。
+- token 也帶 NTHUSA ID 綁定的 LINE userId 時，`IdentityService` 把 LINE 對應到同一個 user，webhook 就找得到這個人：第一次登入而 LINE 已有 user 時沿用那個 user（資料保留）；之後以 Auth0 為準移動對應，LINE 原本屬於沒有 NTHUSA ID 的孤兒 user 時刪除它的資料。
+- 設定 `AUTH0_LINE_CONNECTION` 前，Auth0 登入與 LIFF 登入（provider `line`）是不同的內部 user，對話不互通。Auth0 的環境設定見 [部署文件](../infra/README.md#auth0nthusa-id-登入)。
 - 群組裡的發言者沒有和 bot 建立關係，webhook 不會為他們建立任何資料。
 
 ### Firestore 路徑

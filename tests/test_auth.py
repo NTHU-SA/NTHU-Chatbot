@@ -9,6 +9,7 @@ from src.app.auth.line import LineLiffAuthenticator
 from src.app.auth.rate_limit import RateLimiter
 from src.app.auth.service import IdentityService
 from src.application.models.identity import (
+    NTHUSA_PROVIDER,
     AccountDisabledError,
     IdentityConflictError,
     LastIdentityError,
@@ -16,6 +17,7 @@ from src.application.models.identity import (
     lookup_key,
     new_user_id,
 )
+from src.application.services.chat_store import MemoryChatStore
 from src.application.services.user_store import MemoryUserStore
 
 VALID_CLAIMS = {"iss": "https://access.line.me", "sub": "Uabc", "aud": "100"}
@@ -232,3 +234,112 @@ async def test_quota_is_per_internal_user_across_linked_identities(identities, u
     via_google = await identities.resolve(GOOGLE)
     assert await users.consume_daily_quota(alice.user_id, 1)
     assert not await users.consume_daily_quota(via_google.user_id, 1)
+
+
+# -- NTHUSA ID（Auth0）與綁定的 LINE --
+def nthusa(usr: str, *linked: VerifiedIdentity) -> VerifiedIdentity:
+    return VerifiedIdentity(provider=NTHUSA_PROVIDER, provider_user_id=usr, linked=linked)
+
+
+USR_1 = "usr_01K7AJ3Z8Q4N5V6W7X8Y9ZAAAA"
+USR_2 = "usr_01K7AJ3Z8Q4N5V6W7X8Y9ZBBBB"
+
+
+@pytest.fixture
+def chats():
+    return MemoryChatStore()
+
+
+@pytest.fixture
+def linking(users, chats):
+    return IdentityService(users, chats)
+
+
+async def test_first_nthusa_login_adopts_the_existing_line_user(linking, users, chats):
+    """之前只用 LINE 的人第一次經 Auth0 登入：沿用原本的 user，對話保留。"""
+    old_user = await linking.resolve_line_user("Uaaaa")
+    await chats.create_session(old_user, "舊對話")
+    principal = await linking.resolve(nthusa(USR_1, LINE_A))
+    assert principal.user_id == old_user
+    assert principal.provider == NTHUSA_PROVIDER
+    assert len(await chats.list_sessions(old_user)) == 1
+    assert await users.find_user(nthusa(USR_1)) == old_user
+    assert len(users.users) == 1
+
+
+async def test_line_bound_later_reaches_the_same_user_from_the_webhook(linking, users):
+    principal = await linking.resolve(nthusa(USR_1))
+    assert await users.find_user(LINE_A) is None
+    assert (await linking.resolve(nthusa(USR_1, LINE_A))).user_id == principal.user_id
+    assert await IdentityService(users).resolve_line_user("Uaaaa") == principal.user_id
+
+
+async def test_line_only_orphan_is_erased_when_its_line_moves(linking, users, chats):
+    principal = await linking.resolve(nthusa(USR_1))
+    orphan = await linking.resolve_line_user("Uaaaa")
+    await chats.create_session(orphan, "孤兒帳號的對話")
+    await linking.resolve(nthusa(USR_1, LINE_A))
+    assert users.users[orphan]["status"] == "deleted"
+    assert await chats.list_sessions(orphan) == []
+    assert await linking.resolve_line_user("Uaaaa") == principal.user_id
+
+
+async def test_another_nthusa_user_keeps_its_data_when_its_line_moves(linking, users):
+    first = await linking.resolve(nthusa(USR_1, LINE_A))
+    second = await linking.resolve(nthusa(USR_2, LINE_A))
+    assert second.user_id != first.user_id
+    assert users.users[first.user_id]["status"] == "active"
+    assert "line" not in users.identities[first.user_id]
+    assert await linking.resolve_line_user("Uaaaa") == second.user_id
+    assert (await linking.resolve(nthusa(USR_1))).user_id == first.user_id
+
+
+async def test_rebinding_another_line_replaces_the_old_mapping(linking, users):
+    principal = await linking.resolve(nthusa(USR_1, LINE_A))
+    await linking.resolve(nthusa(USR_1, LINE_B))
+    assert await users.find_user(LINE_A) is None
+    assert await users.find_user(LINE_B) == principal.user_id
+    assert users.identities[principal.user_id]["line"]["providerUserId"] == "Ubbbb"
+
+
+async def test_linked_mapping_is_cached_per_instance(linking, users, monkeypatch):
+    await linking.resolve(nthusa(USR_1, LINE_A))
+    calls = 0
+    original = users.move_identity
+
+    async def counting(*args):
+        nonlocal calls
+        calls += 1
+        return await original(*args)
+
+    monkeypatch.setattr(users, "move_identity", counting)
+    for _ in range(3):
+        await linking.resolve(nthusa(USR_1, LINE_A))
+    assert calls == 0
+
+
+async def test_blocked_line_user_cannot_escape_through_auth0(linking, users):
+    blocked = await linking.resolve_line_user("Uaaaa")
+    users.users[blocked]["status"] = "blocked"
+    with pytest.raises(AccountDisabledError):
+        await linking.resolve(nthusa(USR_1, LINE_A))
+    assert await users.find_user(nthusa(USR_1)) is None
+
+
+async def test_concurrent_first_nthusa_logins_adopt_one_user(users, chats):
+    old_user = await IdentityService(users).resolve_line_user("Uaaaa")
+    services = [IdentityService(users, chats) for _ in range(5)]
+    principals = await asyncio.gather(
+        *(service.resolve(nthusa(USR_1, LINE_A)) for service in services)
+    )
+    assert {principal.user_id for principal in principals} == {old_user}
+    assert len(users.users) == 1
+
+
+async def test_blocked_line_user_is_not_moved_or_erased(linking, users):
+    principal = await linking.resolve(nthusa(USR_1))
+    blocked = await linking.resolve_line_user("Uaaaa")
+    users.users[blocked]["status"] = "blocked"
+    assert (await linking.resolve(nthusa(USR_1, LINE_A))).user_id == principal.user_id
+    assert users.users[blocked]["status"] == "blocked"
+    assert await users.find_user(LINE_A) == blocked

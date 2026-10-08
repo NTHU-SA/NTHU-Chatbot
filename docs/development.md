@@ -56,7 +56,7 @@ pytest（`asyncio_mode = "auto"`；共用 fixture 在 `tests/conftest.py`，假�
 ```powershell
 uv run pytest -q --cov
 uv run pre-commit run --all-files   # isort、Black（格式）、Ruff（只做 lint）、uv.lock 檢查
-node --test tests\frontend_theme.test.cjs tests\frontend_navigation.test.cjs tests\frontend_ui.test.cjs tests\frontend_flex_preview.test.cjs
+node --test tests\frontend_theme.test.cjs tests\frontend_navigation.test.cjs tests\frontend_ui.test.cjs tests\frontend_flex_preview.test.cjs tests\auth0_action.test.cjs
 ```
 
 前端測試使用 Node，無額外套件相依；CI 執行 `tests/*.test.cjs` 的全部測試。

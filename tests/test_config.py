@@ -189,6 +189,25 @@ def test_auth0_settings_are_parsed():
     assert settings.auth0_client_id == "abcDEF123_-xyz"
 
 
+def test_auth0_line_connection_is_optional_and_parsed():
+    assert load({**MEMORY, **AUTH0}).auth0_line_connection is None
+    settings = load({**MEMORY, **AUTH0, "AUTH0_LINE_CONNECTION": "line-chat"})
+    assert settings.auth0_line_connection == "line-chat"
+
+
+@pytest.mark.parametrize(
+    "environment",
+    [
+        {"AUTH0_LINE_CONNECTION": "line"},  # 沒有 Auth0
+        {**AUTH0, "AUTH0_LINE_CONNECTION": "bad name"},
+        {**AUTH0, "AUTH0_LINE_CONNECTION": "-line"},
+    ],
+)
+def test_invalid_auth0_line_connection_fails_fast(environment):
+    with pytest.raises(RuntimeError, match="AUTH0_LINE_CONNECTION"):
+        load({**MEMORY, **environment})
+
+
 def test_partial_auth0_settings_fail_fast():
     with pytest.raises(RuntimeError, match="AUTH0_CLIENT_ID"):
         load({**MEMORY, **AUTH0, "AUTH0_CLIENT_ID": ""})

@@ -246,6 +246,71 @@ class FirestoreUserStore:
 
         await unlink(self._db.transaction(max_attempts=TRANSACTION_ATTEMPTS))
 
+    async def find_user(self, identity: VerifiedIdentity) -> str | None:
+        snapshot = await self._lookup(identity.provider, identity.provider_user_id).get()
+        if not snapshot.exists:
+            return None
+        user_id = snapshot.get("userId")
+        return user_id if await self.get_status(user_id) not in (None, DELETED) else None
+
+    async def has_identity(self, user_id: str, provider: str) -> bool:
+        return (await self._identity(user_id, provider).get()).exists
+
+    async def move_identity(self, user_id: str, identity: VerifiedIdentity) -> str | None:
+        user = self._user(user_id)
+        lookup = self._lookup(identity.provider, identity.provider_user_id)
+        identity_ref = self._identity(user_id, identity.provider)
+
+        @firestore.async_transactional
+        async def move(transaction) -> str | None:
+            # 交易內必須先讀完再寫
+            user_snapshot = await user.get(transaction=transaction)
+            lookup_snapshot = await lookup.get(transaction=transaction)
+            own = await identity_ref.get(transaction=transaction)
+            status = (user_snapshot.to_dict() or {}).get("status") if user_snapshot.exists else None
+            if status != ACTIVE:
+                raise AccountDisabledError(user_id, status)
+            previous = lookup_snapshot.get("userId") if lookup_snapshot.exists else None
+            if previous == user_id:
+                return None
+            # 這個 user 原本連結的同 provider 舊身分（例如換了另一個 LINE）：移除它指向自己的 lookup
+            stale_lookup = None
+            own_id = (own.to_dict() or {}).get("providerUserId") if own.exists else None
+            if own_id and own_id != identity.provider_user_id:
+                candidate = self._lookup(identity.provider, own_id)
+                snapshot = await candidate.get(transaction=transaction)
+                if snapshot.exists and snapshot.get("userId") == user_id:
+                    stale_lookup = candidate
+            previous_ref = previous_snapshot = None
+            if previous:
+                previous_ref = self._identity(previous, identity.provider)
+                previous_snapshot = await previous_ref.get(transaction=transaction)
+
+            if stale_lookup is not None:
+                transaction.delete(stale_lookup)
+            if (
+                previous_snapshot is not None
+                and previous_snapshot.exists
+                and previous_snapshot.get("providerUserId") == identity.provider_user_id
+            ):
+                transaction.delete(previous_ref)
+                transaction.create(
+                    self._audit(previous), self._audit_payload("unlink", identity.provider)
+                )
+            transaction.set(
+                lookup,
+                {
+                    "userId": user_id,
+                    "provider": identity.provider,
+                    "createdAt": firestore.SERVER_TIMESTAMP,
+                },
+            )
+            transaction.set(identity_ref, self._identity_payload(identity))
+            transaction.create(self._audit(user_id), self._audit_payload("link", identity.provider))
+            return previous
+
+        return await move(self._db.transaction(max_attempts=TRANSACTION_ATTEMPTS))
+
     # -- activity --
     async def _undo_if_deleted(self, user_id: str, *refs, user_fields=()) -> bool:
         """

@@ -14,7 +14,7 @@ Firestore 不用金鑰檔：Cloud Run 用執行期服務帳號的 ADC，
 | --- | --- |
 | 機密（Secret Manager） | `LINE_CHANNEL_SECRET`、`LINE_CHANNEL_ACCESS_TOKEN`、`OPENAI_API_KEY` |
 | LINE Login / LIFF | `LINE_LOGIN_CHANNEL_ID`、`LIFF_ID`（部署環境不寫在 repo：Cloud Run 環境變數與 repo variable `LIFF_ID_<ENV>`，見 [LINE 頻道設定](../infra/README.md#line-頻道設定不寫在-repo)） |
-| Auth0 | `AUTH0_DOMAIN`、`AUTH0_AUDIENCE`、`AUTH0_CLIENT_ID`（三個都填才啟用；環境隔離與 Dashboard 設定見 [Auth0](../infra/README.md#auth0一般瀏覽器登入)） |
+| Auth0 | `AUTH0_DOMAIN`、`AUTH0_AUDIENCE`、`AUTH0_CLIENT_ID`（三個都填才啟用）；選用 `AUTH0_LINE_CONNECTION`（LIFF 也經 Auth0 的 LINE 連線登入）。Action、環境隔離與 Dashboard 設定見 [Auth0](../infra/README.md#auth0nthusa-id-登入) |
 | 前端 | `CORS_ALLOWED_ORIGINS`（逗號分隔；只接受 https 網域，本機可用 `http://localhost:<port>`） |
 | LLM | `OPENAI_MODEL`、`OPENAI_BASE_URL`（選填，任何 OpenAI 相容端點）、`OPENAI_USE_RESPONSES_API`、`REASONING_SUMMARY`、`MAX_OUTPUT_TOKENS`、`MAX_OUTPUT_CHARS` |
 | MCP | `MCP_SERVER_URL`、`MCP_ALLOWED_TOOLS`（逗號分隔）、`MCP_TIMEOUT_SECONDS` |

@@ -144,6 +144,12 @@ def test_auth0_settings_reach_config_and_csp(tmp_path, monkeypatch):
     assert "https://avatars.githubusercontent.com" in csp
 
 
+def test_line_connection_reaches_the_config(tmp_path, monkeypatch):
+    conf = AUTH0_CONF + "AUTH0_LINE_CONNECTION=line-chat\n"
+    config, _ = build_with(tmp_path, monkeypatch, conf, client_id="spaClient12345")
+    assert config["auth0"]["lineConnection"] == "line-chat"
+
+
 def test_without_client_id_auth0_stays_disabled(tmp_path, monkeypatch):
     config, csp = build_with(tmp_path, monkeypatch, AUTH0_CONF)
     assert "auth0" not in config
@@ -165,6 +171,8 @@ def test_without_auth0_the_csp_is_unchanged(built):
         "AUTH0_DOMAIN=auth.example.test\n",
         "AUTH0_AUDIENCE=https://chat.example.test/api\n",
         "CUSTOM_DOMAIN=chat.example.test/\n",
+        "AUTH0_LINE_CONNECTION=line\n",  # 沒有 Auth0
+        "AUTH0_DOMAIN=auth.example.test\nAUTH0_AUDIENCE=a\nAUTH0_LINE_CONNECTION=bad name\n",
     ],
 )
 def test_bad_auth0_or_domain_settings_are_rejected(tmp_path, extra):

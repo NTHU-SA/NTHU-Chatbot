@@ -292,6 +292,10 @@ env_vars+=";REASONING_SUMMARY=${REASONING_SUMMARY};MCP_SERVER_URL=${MCP_SERVER_U
 env_vars+=";CORS_ALLOWED_ORIGINS=${FRONTEND_ORIGINS};WEB_SEARCH_ENABLED=${WEB_SEARCH_ENABLED}"
 if [[ -n "${AUTH0_DOMAIN:-}" && -n "${AUTH0_CLIENT_ID:-}" ]]; then
   env_vars+=";AUTH0_DOMAIN=${AUTH0_DOMAIN};AUTH0_AUDIENCE=${AUTH0_AUDIENCE};AUTH0_CLIENT_ID=${AUTH0_CLIENT_ID}"
+  # LIFF 也經 Auth0 的 LINE 連線登入（後端不再接受 LIFF id_token）
+  if [[ -n "${AUTH0_LINE_CONNECTION:-}" ]]; then
+    env_vars+=";AUTH0_LINE_CONNECTION=${AUTH0_LINE_CONNECTION}"
+  fi
 fi
 secret_vars="OPENAI_API_KEY=${SECRET_OPENAI}:latest,LINE_CHANNEL_SECRET=${SECRET_LINE_SECRET}:latest"
 secret_vars+=",LINE_CHANNEL_ACCESS_TOKEN=${SECRET_LINE_TOKEN}:latest"
@@ -348,6 +352,7 @@ echo "服務網址：${url}"
 echo "LINE Developers：Webhook URL = ${url}/callback；LIFF Endpoint URL = ${FRONTEND_URL}"
 if [[ -n "${AUTH0_DOMAIN:-}" ]]; then
   echo "Auth0 Application（SPA）：Allowed Callback / Logout URLs = ${FRONTEND_URL}；Allowed Web Origins = ${FRONTEND_URL%/}"
+  echo "Auth0 post-login Action：infra/auth0/post-login-nthusa-id.js（步驟見 infra/README.md 的 Auth0 一節）"
 fi
 echo "conf 的 API_ORIGIN 應為：${url}（staging 可用 https://${SERVICE}-${project_number}.${REGION}.run.app）"
 echo "GitHub repo variables（Settings → Secrets and variables → Actions → Variables，不是機密）："
