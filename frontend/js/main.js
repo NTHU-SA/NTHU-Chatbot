@@ -5,7 +5,7 @@
  */
 
 import { api, loadConfig } from "./api.js";
-import { authProvider, logout, signIn } from "./auth.js";
+import { logout, signIn } from "./auth.js";
 import { createSession, loadSessions, openSession, send } from "./chat.js";
 import {
   deleteAllData, finishDeletion, requestConsent, setPolicyVersion,
@@ -99,10 +99,10 @@ async function boot() {
     const cfg = await loadConfig();
     setPolicyVersion(cfg.privacyPolicyVersion);
     if (!(await signIn(cfg))) return; // redirecting to a login page
-    const line = authProvider() === "line";
+    const line = liff.isInClient();
     el.logoutBtn.hidden = line; // inside LINE, leaving is closing the window
 
-    // LIFF environment info is only meaningful (and only accepted) for LINE sign-ins.
+    // LIFF environment info is only meaningful inside the LINE app.
     const me = await (line
       ? api("/api/me", { method: "POST", body: await clientInfo() })
       : api("/api/me")).then((res) => res.json());

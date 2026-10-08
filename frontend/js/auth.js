@@ -1,8 +1,10 @@
-// Sign-in. Inside the LINE app the page uses the LIFF id_token (provider "line");
-// in an ordinary browser it uses Auth0 Universal Login (Authorization Code + PKCE)
-// and sends an Auth0 access token for this environment's API (provider "auth0").
-// The backend verifies both; nothing here is trusted on its own. When config.json
-// has no auth0 block, browsers fall back to LIFF's LINE web login as before.
+// Sign-in. In an ordinary browser the page uses Auth0 Universal Login (Authorization
+// Code + PKCE) and sends an Auth0 access token for this environment's API (provider
+// "auth0"); the token carries the NTHUSA ID. Inside the LINE app it does the same through
+// Auth0's LINE connection (config auth0.lineConnection), which reuses the bot's LINE Login
+// channel, so LINE itself signs the user in. Without that connection the LINE app keeps
+// using the LIFF id_token (provider "line"), and without an auth0 block every browser
+// falls back to LIFF's LINE web login. The backend verifies every token.
 
 const AUTH0_SDK = "../vendor/auth0-spa-js.production.esm.js";
 const AUTH0_WORKER = "./vendor/auth0-spa-js.worker.production.js";
@@ -16,6 +18,7 @@ const RELOGIN_COOLDOWN_MS = 60_000;
 
 let provider = null; // "line" | "auth0"
 let auth0 = null;
+let connection = null; // Auth0 connection to go straight to (LINE inside the LINE app)
 
 export const authProvider = () => provider;
 
@@ -45,7 +48,10 @@ function loginWithLine() {
 }
 
 async function loginWithAuth0() {
-  await auth0.loginWithRedirect({ appState: { returnTo: location.pathname + location.search } });
+  await auth0.loginWithRedirect({
+    appState: { returnTo: location.pathname + location.search },
+    ...(connection && { authorizationParams: { connection } }),
+  });
 }
 
 async function startLine(cfg) {
@@ -109,9 +115,15 @@ async function startAuth0(cfg) {
 
 // Returns false when the page is navigating away to a login page.
 export async function signIn(cfg) {
-  // isInClient works before liff.init; LIFF stays the only sign-in inside LINE.
-  if (!liff.isInClient() && cfg.auth0) return startAuth0(cfg);
-  return startLine(cfg);
+  // isInClient works before liff.init.
+  if (!liff.isInClient()) return cfg.auth0 ? startAuth0(cfg) : startLine(cfg);
+  if (!(cfg.auth0 && cfg.auth0.lineConnection)) return startLine(cfg);
+  connection = cfg.auth0.lineConnection;
+  // Finish the Auth0 callback first: liff.init must not see Auth0's code/state in the URL.
+  if (!(await startAuth0(cfg))) return false;
+  // Still needed for the LIFF environment info and LINE features; no LIFF login here.
+  await liff.init({ liffId: cfg.liffId });
+  return true;
 }
 
 export async function accessToken() {
