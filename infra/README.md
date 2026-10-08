@@ -50,15 +50,16 @@ LINE 的 ID 和金鑰都依環境注入，repo 裡的設定檔不含任何 LINE 
 
 更換頻道時後端與前端要一起換，否則 LIFF 的 id_token 會因 channel ID 不符被拒絕。
 
-## Auth0（一般瀏覽器登入）
+## Auth0（NTHUSA ID 登入）
 
-LINE 裡（LIFF）仍用 LINE Login；用一般瀏覽器開啟時改走 Auth0 Universal Login。chat 使用學生會的 Auth0 tenant（custom domain `auth.nthusa.tw`），staging / prod 各自一組 Application 與 API，audience 不同，staging 的 token 不能呼叫 prod 的 API。
+用一般瀏覽器開啟時走 Auth0 Universal Login；設定 LINE 連線（`AUTH0_LINE_CONNECTION`）後，LINE 裡（LIFF）也經 Auth0 的 LINE 連線登入，否則仍用 LIFF 的 id_token。後端認的是 post-login Action 放進 token 的 NTHUSA ID（`usr_` + ULID，學生會跨系統共用、staging 與 prod 相同），不是 Auth0 的 `sub`。chat 使用學生會的 Auth0 tenant（custom domain `auth.nthusa.tw`），staging / prod 各自一組 Application 與 API，audience 不同，staging 的 token 不能呼叫 prod 的 API。
 
 | 值 | 放在哪裡 |
 |---|---|
 | `AUTH0_DOMAIN`、`AUTH0_AUDIENCE` | 環境設定檔（公開值） |
 | `AUTH0_CLIENT_ID`（後端） | Cloud Run 環境變數：`AUTH0_CLIENT_ID=... bash infra/bootstrap.sh infra/environments/<env>.conf`；之後重跑會沿用服務上的值 |
 | `AUTH0_CLIENT_ID`（前端 `config.json`） | GitHub repo variable `AUTH0_CLIENT_ID_STAGING` / `AUTH0_CLIENT_ID_PROD` |
+| `AUTH0_LINE_CONNECTION`（選用） | 環境設定檔（公開值）；前端在部署時、後端在重跑 bootstrap 時生效 |
 
 三個值缺一時 Auth0 不啟用，一般瀏覽器沿用 LIFF 的 LINE 網頁登入，所以可以先部署程式、再建立 Auth0 設定。
 
@@ -72,10 +73,19 @@ Auth0 Dashboard（每個環境各一次）：
    - Connections 分頁只開要給 chat 用的登入方式
 3. 把 Application 的 Client ID 依上表設定到 Cloud Run 與 repo variable。
 
+整個 tenant 一次（staging、prod 共用）：
+
+4. **Actions → Library → Create Action**（Login / Post Login，Node 22），貼上 [`auth0/post-login-nthusa-id.js`](auth0/post-login-nthusa-id.js)，Secrets 設 `CHAT_CLIENT_IDS`（兩個 Chat Application 的 Client ID，逗號分隔）與 `LINE_CONNECTIONS`（步驟 5 的連線名稱，逗號分隔；還沒有就先留空）。Deploy 後拖進 **Actions → Triggers → post-login**。**後端要求 token 帶 NTHUSA ID，Action 必須在部署這版後端之前生效**，否則 Auth0 登入一律 401。
+5. LINE 連線（選用，讓 LIFF 也經 Auth0）：**Authentication → Social → LINE**，Channel ID / Secret 用 **bot 現有的 LINE Login channel**（staging 用 DEV bot 的、prod 用正式 bot 的；同一個 Provider，LINE userId 才會和 webhook 相同）。Login channel 的 secret 只放在 Auth0。不要勾 email（LINE 的 email 權限要另外申請，隱私權政策也沒寫）。只對該環境的 Chat Application 啟用。LINE Developers 那邊在該 channel 的 Callback URL 加上 `https://auth.nthusa.tw/login/callback`（LIFF 的 Endpoint URL 不用改）。DEV channel 是 Developing 狀態，只有 channel 的 tester 能登入。
+6. 確認步驟 5 的連線可以登入、token 帶 `https://nthusa.tw/line_user_id` 後，把連線名稱寫進環境設定檔的 `AUTH0_LINE_CONNECTION`，merge 後重跑 bootstrap。之後後端不再接受 LIFF 的 id_token。
+
+第一次以 NTHUSA ID 登入、而這個 LINE 已經有 chat 的帳號（之前用 LINE 登入或傳過訊息）時，沿用那個帳號，對話與設定都保留。
+
 和學生會中央驗證共用同一個 tenant，請注意：
 - post-login Action（例如 allowlist）會套用到 tenant 裡所有 Application，必須以 `event.client.client_id` 限定範圍，否則會擋住 chat 的使用者。
-- 不要對 chat 的使用者做 Auth0 帳號連結：連結後被併入的身分 `sub` 會改成主帳號的，chat 會把他當成另一個人。chat 的帳號連結在後端做（內部 user id）。
-- 目前 Auth0 登入（provider `auth0`）與 LIFF 登入（provider `line`）是**不同的內部 user**，對話不互通。之後要讓兩者對到同一人（後續 PR），前提是 LINE connection 的 LINE Login channel 和 bot 在同一個 LINE Provider，兩邊的 LINE user ID 才會相同。
+- Auth0 的使用者與帳號連結是整個 tenant 共用的：在 staging 綁定或解除綁定，prod 也會生效（同一個 NTHUSA ID）。staging 只給測試人員使用。
+- 綁定登入方式的介面在後續 PR；在那之前不要在 Dashboard 手動連結 chat 使用者的帳號：被併入的帳號的 `app_metadata`（含它的 NTHUSA ID）會被 Auth0 丟掉，它在 chat 的資料就找不到了。
+- 還沒設定 `AUTH0_LINE_CONNECTION` 時，Auth0 登入與 LIFF 登入（provider `line`）仍是不同的內部 user，對話不互通。
 - 隱私權政策（第 3 版起）已說明以 Google 經 Auth0 登入時的資料；之後新增其他登入方式（例如 GitHub）時，要先更新 `privacy.html` 並遞增 `PRIVACY_POLICY_VERSION`。
 
 ## 網域

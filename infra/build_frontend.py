@@ -33,6 +33,7 @@ LIFF_ID_PATTERN = re.compile(r"^\d+-[A-Za-z0-9]+$")
 ORIGIN = re.compile(r"^https://[a-z0-9-]+(\.[a-z0-9-]+)+$")
 DOMAIN = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)+$")
 CLIENT_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+CONNECTION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,127}$")
 # Auth0 登入後的頭像（Google、GitHub、Gravatar 與 Auth0 預設頭像）
 AVATAR_HOSTS = (
     "https://*.googleusercontent.com",
@@ -61,6 +62,9 @@ def read_conf(path: Path) -> dict[str, str]:
             raise SystemExit(f"{path}: {key} must be a bare host name")
     if bool(values.get("AUTH0_DOMAIN")) != bool(values.get("AUTH0_AUDIENCE")):
         raise SystemExit(f"{path}: set both AUTH0_DOMAIN and AUTH0_AUDIENCE, or neither")
+    connection = values.get("AUTH0_LINE_CONNECTION")
+    if connection and not (values.get("AUTH0_DOMAIN") and CONNECTION.match(connection)):
+        raise SystemExit(f"{path}: AUTH0_LINE_CONNECTION needs Auth0 and a valid connection name")
     return values
 
 
@@ -79,11 +83,15 @@ def auth0_config(conf: dict[str, str]) -> dict[str, str] | None:
         return None
     if not CLIENT_ID.match(client_id):
         raise SystemExit("AUTH0_CLIENT_ID environment variable is malformed")
-    return {
+    config = {
         "domain": conf["AUTH0_DOMAIN"],
         "clientId": client_id,
         "audience": conf["AUTH0_AUDIENCE"],
     }
+    # 有 LINE 連線時，LIFF 內也經 Auth0 登入（直接帶到 LINE，不顯示 Auth0 登入頁）
+    if conf.get("AUTH0_LINE_CONNECTION"):
+        config["lineConnection"] = conf["AUTH0_LINE_CONNECTION"]
+    return config
 
 
 def content_security_policy(api_origin: str, auth0_domain: str | None = None) -> str:
