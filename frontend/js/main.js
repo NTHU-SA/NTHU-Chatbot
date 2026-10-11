@@ -151,6 +151,11 @@ async function boot() {
       showOverlay(err.message, true, finishDeletion);
       return;
     }
+    if (err.code === "account_deleted") {
+      // Deleted moments ago: the same NTHUSA ID can start over after a short wait.
+      showOverlay(err.message, true);
+      return;
+    }
     console.error(err);
     showOverlay(`無法連線：${err.message}`, true);
   }

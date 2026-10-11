@@ -1,10 +1,9 @@
-// Sign-in. In an ordinary browser the page uses Auth0 Universal Login (Authorization
-// Code + PKCE) and sends an Auth0 access token for this environment's API (provider
-// "auth0"); the token carries the NTHUSA ID. Inside the LINE app it does the same through
-// Auth0's LINE connection (config auth0.lineConnection), which reuses the bot's LINE Login
-// channel, so LINE itself signs the user in. Without that connection the LINE app keeps
-// using the LIFF id_token (provider "line"), and without an auth0 block every browser
-// falls back to LIFF's LINE web login. The backend verifies every token.
+// Sign-in. Every sign-in goes through Auth0 (Authorization Code + PKCE) and sends an
+// Auth0 access token for this environment's API (provider "auth0"); the token carries the
+// NTHUSA ID, which is the user's id in the backend. In an ordinary browser the user picks
+// a login method on Universal Login; inside the LINE app the page goes straight to Auth0's
+// LINE connection (config auth0.lineConnection), whose channel is in the bot's LINE
+// Provider, so LINE itself signs the user in. The backend verifies every token.
 
 const AUTH0_SDK = "../vendor/auth0-spa-js.production.esm.js";
 const AUTH0_WORKER = "./vendor/auth0-spa-js.worker.production.js";
@@ -16,11 +15,10 @@ const LOGIN_NEEDED = new Set([
 const RELOGIN_KEY = "auth.relogin";
 const RELOGIN_COOLDOWN_MS = 60_000;
 
-let provider = null; // "line" | "auth0"
 let auth0 = null;
 let connection = null; // Auth0 connection to go straight to (LINE inside the LINE app)
 
-export const authProvider = () => provider;
+export const authProvider = () => "auth0";
 
 function callbackUrl() {
   return `${location.origin}/`;
@@ -43,10 +41,6 @@ function restoreLiffState() {
   if (state) history.replaceState(null, "", samePath(state));
 }
 
-function loginWithLine() {
-  liff.login({ redirectUri: location.href });
-}
-
 async function loginWithAuth0() {
   await auth0.loginWithRedirect({
     appState: { returnTo: location.pathname + location.search },
@@ -54,24 +48,7 @@ async function loginWithAuth0() {
   });
 }
 
-async function startLine(cfg) {
-  provider = "line";
-  await liff.init({ liffId: cfg.liffId });
-  if (!liff.isLoggedIn()) {
-    loginWithLine();
-    return false;
-  }
-  if (!liff.getIDToken()) {
-    // Scope openid missing or stale session — force a fresh login.
-    liff.logout();
-    loginWithLine();
-    return false;
-  }
-  return true;
-}
-
 async function startAuth0(cfg) {
-  provider = "auth0";
   const { Auth0Client } = await import(AUTH0_SDK);
   auth0 = new Auth0Client({
     domain: cfg.auth0.domain,
@@ -115,10 +92,10 @@ async function startAuth0(cfg) {
 
 // Returns false when the page is navigating away to a login page.
 export async function signIn(cfg) {
+  if (!cfg.auth0) throw new Error("登入服務尚未設定，請稍後再試。");
   // isInClient works before liff.init.
-  if (!liff.isInClient()) return cfg.auth0 ? startAuth0(cfg) : startLine(cfg);
-  if (!(cfg.auth0 && cfg.auth0.lineConnection)) return startLine(cfg);
-  connection = cfg.auth0.lineConnection;
+  if (!liff.isInClient()) return startAuth0(cfg);
+  connection = cfg.auth0.lineConnection || null;
   // Finish the Auth0 callback first: liff.init must not see Auth0's code/state in the URL.
   if (!(await startAuth0(cfg))) return false;
   // Still needed for the LIFF environment info and LINE features; no LIFF login here.
@@ -127,7 +104,6 @@ export async function signIn(cfg) {
 }
 
 export async function accessToken() {
-  if (provider !== "auth0") return liff.getIDToken();
   try {
     return await auth0.getTokenSilently();
   } catch (err) {
@@ -140,11 +116,6 @@ export async function accessToken() {
 
 // Called on 401: the token expired or was revoked. Throws "re-login" when redirecting.
 export async function relogin() {
-  if (provider !== "auth0") {
-    liff.logout();
-    loginWithLine();
-    throw new Error("re-login");
-  }
   let last = 0;
   try { last = Number(sessionStorage.getItem(RELOGIN_KEY)) || 0; } catch (_) { /* storage off */ }
   if (Date.now() - last < RELOGIN_COOLDOWN_MS) throw new Error("登入驗證失敗，請稍後再試。");
@@ -154,6 +125,5 @@ export async function relogin() {
 }
 
 export async function logout() {
-  if (provider !== "auth0") return;
   await auth0.logout({ logoutParams: { returnTo: callbackUrl() } });
 }

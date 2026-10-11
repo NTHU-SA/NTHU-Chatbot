@@ -1,6 +1,6 @@
 // Backend access. The page is served by Firebase Hosting and calls the Cloud Run
-// API directly (CORS); identity comes from the LIFF id_token or an Auth0 access
-// token (see auth.js), which the backend verifies. No secrets live here —
+// API directly (CORS); identity comes from an Auth0 access token (see auth.js),
+// which the backend verifies. No secrets live here —
 // config.json only holds public IDs and the API base URL for this environment.
 
 import { accessToken, authProvider, relogin } from "./auth.js";
