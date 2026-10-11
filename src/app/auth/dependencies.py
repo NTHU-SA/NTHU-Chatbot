@@ -1,4 +1,4 @@
-"""FastAPI 依賴：bearer token → 對應 provider 驗證 → 內部 user → 限流。"""
+"""FastAPI 依賴：bearer token → 對應 provider 驗證 → NTHUSA ID 的 user → 限流。"""
 
 from __future__ import annotations
 
@@ -6,13 +6,18 @@ from fastapi import Depends, HTTPException, Request, status
 
 from src.app.auth.rate_limit import RateLimiter
 from src.app.auth.service import IdentityService
-from src.application.models.identity import DELETING, AccountDisabledError, Principal
+from src.application.models.identity import DELETED, DELETING, AccountDisabledError, Principal
 
 PROVIDER_HEADER = "x-auth-provider"
-DEFAULT_PROVIDER = "line"
+DEFAULT_PROVIDER = "auth0"
 ACCOUNT_DELETING = {
     "code": "account_deleting",
     "message": "你的資料刪除還沒完成，請再執行一次刪除。",
+}
+# 刪除完成後要等 REUSE_AFTER_DELETION 才能以同一個 NTHUSA ID 重新開始
+ACCOUNT_DELETED = {
+    "code": "account_deleted",
+    "message": "你的資料已刪除。請 10 分鐘後再開啟，會以新使用者身分開始。",
 }
 
 
@@ -41,7 +46,7 @@ async def get_principal_for_deletion(
 
 async def _principal(request: Request, token: str, *, allow_deleting: bool) -> Principal:
     """
-    依 `X-Auth-Provider`（預設 line）挑選 authenticator 驗證 token。
+    依 `X-Auth-Provider`（預設 auth0）挑選 authenticator 驗證 token。
 
     只接受 `app.state.authenticators` 裡註冊的 provider，其餘一律 401；
     錯誤訊息不區分「provider 不存在」與「token 無效」，不給探測線索。
@@ -58,6 +63,8 @@ async def _principal(request: Request, token: str, *, allow_deleting: bool) -> P
     except AccountDisabledError as error:
         if error.status == DELETING:
             raise HTTPException(status.HTTP_403_FORBIDDEN, ACCOUNT_DELETING) from None
+        if error.status == DELETED:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, ACCOUNT_DELETED) from None
         raise HTTPException(status.HTTP_403_FORBIDDEN, "account disabled") from None
 
     limiter: RateLimiter = request.app.state.rate_limiter

@@ -16,11 +16,11 @@ from src.app.routes.callback import MODULE_DISABLED_MESSAGE
 from src.application.models.identity import AccountDisabledError
 from src.application.services.chat_store import MemoryChatStore
 from src.application.services.module_registry import StaticModuleRegistry
+from src.application.services.usage_stats import MemoryUsageStats
 from src.application.services.user_store import MemoryUserStore
-from tests.fakes import TEST_LIFF_ID, make_settings
+from tests.fakes import TEST_LIFF_ID, TEST_USR, make_settings
 
 LIFF_BASE = f"https://liff.line.me/{TEST_LIFF_ID}"
-INTERNAL_ID = "usr_" + "0" * 32
 PROCESS_MESSAGE = "src.app.routes.callback.command_handler.process_message"
 
 
@@ -32,8 +32,10 @@ def webhook_app():
     app.state.messaging_api = AsyncMock()
     app.state.user_store = AsyncMock()
     app.state.identity_service = AsyncMock()
-    app.state.identity_service.resolve_line_user.return_value = INTERNAL_ID
+    # 預設：這個 LINE 已綁定 NTHUSA ID
+    app.state.identity_service.find_line_user.return_value = TEST_USR
     app.state.module_registry = StaticModuleRegistry()
+    app.state.usage_stats = MemoryUsageStats()
     return app
 
 
@@ -80,20 +82,30 @@ def replied_messages(app, index=0):
     return call.args[0].messages
 
 
+def counted(app) -> dict[str, int]:
+    """今天的匿名統計（欄位 → 次數）。"""
+    return {field: count for (_, field), count in app.state.usage_stats.counts.items()}
+
+
+def assert_nothing_stored_per_user(app):
+    """聊天室只累計總數：不寫入任何個人資料（綁定了也一樣）。"""
+    assert app.state.user_store.mock_calls == []
+
+
 def test_signature_required_and_validated_before_processing(post, webhook_app):
     assert post.client.post("/callback", json={}).status_code == 400
     assert (
         post.client.post("/callback", json={}, headers={"X-Line-Signature": "invalid"}).status_code
         == 400
     )
-    webhook_app.state.identity_service.resolve_line_user.assert_not_awaited()
+    webhook_app.state.identity_service.find_line_user.assert_not_awaited()
 
 
 def test_free_text_replies_liff_button_with_question(post, webhook_app):
     assert post([event(text="機器學習的課")]).status_code == 200
-    # LINE userId 先換成內部 id，之後的寫入都只用內部 id
-    webhook_app.state.identity_service.resolve_line_user.assert_awaited_once_with("user-1")
-    webhook_app.state.user_store.touch_activity.assert_awaited_once_with(INTERNAL_ID)
+    webhook_app.state.identity_service.find_line_user.assert_awaited_once_with("user-1")
+    assert_nothing_stored_per_user(webhook_app)
+    assert counted(webhook_app) == {"messages": 1}
     (message,) = replied_messages(webhook_app)
     assert message.type == "flex"
     uri = message.contents.footer.contents[0].action.uri
@@ -109,20 +121,34 @@ def test_group_text_gets_liff_button_without_question(post, webhook_app):
     assert message.type == "flex"
     assert message.contents.footer.contents[0].action.uri == LIFF_BASE
     webhook_app.state.messaging_api.show_loading_animation.assert_not_awaited()
-    # 群組發言者沒有和 bot 建立關係：不建立、不更新任何使用者資料
-    webhook_app.state.identity_service.resolve_line_user.assert_not_awaited()
-    webhook_app.state.user_store.touch_activity.assert_not_awaited()
+    # 群組發言者沒有和 bot 建立關係：不查詢、不寫入任何使用者資料
+    webhook_app.state.identity_service.find_line_user.assert_not_awaited()
+    assert_nothing_stored_per_user(webhook_app)
+    assert counted(webhook_app) == {"messages": 1}
 
 
 def test_command_uses_command_handler_and_loading_animation(post, webhook_app):
     with patch(PROCESS_MESSAGE, new=AsyncMock(return_value="Command answer")) as process:
         assert post([event(text="@公車")]).status_code == 200
-    process.assert_awaited_once_with("@公車", INTERNAL_ID)
+    process.assert_awaited_once_with("@公車", TEST_USR)
     loading = webhook_app.state.messaging_api.show_loading_animation.await_args.args[0]
     assert loading.chat_id == "user-1"
     (message,) = replied_messages(webhook_app)
     assert message.text == "Command answer"
-    webhook_app.state.user_store.record_module_use.assert_awaited_once_with(INTERNAL_ID, "bus")
+    assert counted(webhook_app) == {"messages": 1, "modules.bus": 1}
+    assert_nothing_stored_per_user(webhook_app)
+
+
+def test_unbound_line_user_gets_the_same_service_and_nothing_is_created(post, webhook_app):
+    """聊天室不需要登入：沒綁定 NTHUSA ID 的人一樣能用指令，只是不會有任何個人資料。"""
+    webhook_app.state.identity_service.find_line_user.return_value = None
+    with patch(PROCESS_MESSAGE, new=AsyncMock(return_value="Command answer")) as process:
+        assert post([event(text="@公車")]).status_code == 200
+    process.assert_awaited_once_with("@公車", None)
+    webhook_app.state.messaging_api.show_loading_animation.assert_awaited_once()
+    assert replied_messages(webhook_app)[0].text == "Command answer"
+    assert counted(webhook_app) == {"messages": 1, "modules.bus": 1}
+    assert_nothing_stored_per_user(webhook_app)
 
 
 def test_disabled_module_replies_fixed_message(post, webhook_app):
@@ -132,11 +158,11 @@ def test_disabled_module_replies_fixed_message(post, webhook_app):
     process.assert_not_awaited()
     (message,) = replied_messages(webhook_app)
     assert message.text == MODULE_DISABLED_MESSAGE
-    webhook_app.state.user_store.record_module_use.assert_not_awaited()
+    assert counted(webhook_app) == {"messages": 1}
 
 
 def test_disabled_account_gets_no_reply(post, webhook_app):
-    webhook_app.state.identity_service.resolve_line_user.side_effect = AccountDisabledError("x")
+    webhook_app.state.identity_service.find_line_user.side_effect = AccountDisabledError("x")
     assert post([event(text="@公車")]).status_code == 200
     webhook_app.state.messaging_api.reply_message.assert_not_awaited()
 
@@ -145,7 +171,7 @@ def test_disabled_account_gets_no_reply(post, webhook_app):
 def test_help_keyword_routes_to_help_command(post, text):
     with patch(PROCESS_MESSAGE, new=AsyncMock(return_value="help")) as process:
         post([event(text=text)])
-    process.assert_awaited_once_with("@說明", INTERNAL_ID)
+    process.assert_awaited_once_with("@說明", TEST_USR)
 
 
 def test_help_command_renders_usage_bubble(post, webhook_app):
@@ -164,9 +190,8 @@ def test_help_command_renders_usage_bubble(post, webhook_app):
 
 def test_follow_sends_welcome_and_liff_button(post, webhook_app):
     assert post([event(kind="follow")]).status_code == 200
-    webhook_app.state.user_store.update_identity_metadata.assert_awaited_once_with(
-        INTERNAL_ID, "line", {"followed": True}
-    )
+    assert counted(webhook_app) == {"follows": 1}
+    assert_nothing_stored_per_user(webhook_app)
     messages = replied_messages(webhook_app)
     assert [m.type for m in messages] == ["text", "flex"]
     assert "清華校園情報員" in messages[0].text
@@ -186,19 +211,18 @@ def test_share_postback_returns_working_friend_and_share_links(post, webhook_app
     assert actions[1].action.uri == SHARE_URL
 
 
-def test_unfollow_marks_user(post, webhook_app):
+def test_unfollow_is_only_counted(post, webhook_app):
     unfollow = event(kind="unfollow")
     unfollow.pop("replyToken")
     assert post([unfollow]).status_code == 200
-    webhook_app.state.user_store.update_identity_metadata.assert_awaited_once_with(
-        INTERNAL_ID, "line", {"followed": False}
-    )
+    assert counted(webhook_app) == {"unfollows": 1}
+    assert_nothing_stored_per_user(webhook_app)
 
 
 def test_failure_is_sanitized_and_next_event_still_runs(post, webhook_app):
-    webhook_app.state.identity_service.resolve_line_user.side_effect = [
+    webhook_app.state.identity_service.find_line_user.side_effect = [
         RuntimeError("secret-value"),
-        INTERNAL_ID,
+        TEST_USR,
     ]
     assert post([event(), event(event_id="event-2")]).status_code == 200
     assert webhook_app.state.messaging_api.reply_message.await_count == 2
@@ -220,7 +244,6 @@ LIFECYCLE_ENVIRONMENT = {
     "OPENAI_API_KEY": "test-key",
     "LINE_CHANNEL_ACCESS_TOKEN": "test-token",
     "LINE_CHANNEL_SECRET": "test-secret",
-    "LINE_LOGIN_CHANNEL_ID": "1234567890",
     "LIFF_ID": TEST_LIFF_ID,
 }
 
@@ -246,7 +269,7 @@ def test_memory_store_startup_skips_firestore_and_manages_runner(lifecycle_mocks
             assert client.get("/ping").json() == {"message": "pong"}
             assert isinstance(app.state.store, MemoryChatStore)
             assert isinstance(app.state.user_store, MemoryUserStore)
-            assert set(app.state.authenticators) == {"line"}
+            assert app.state.authenticators == {}  # 沒設定 Auth0：/api 一律 401
             assert app.state.agent_runner is runner
             runner.start.assert_awaited_once()
             runner.stop.assert_not_awaited()
@@ -254,27 +277,19 @@ def test_memory_store_startup_skips_firestore_and_manages_runner(lifecycle_mocks
     database.assert_not_called()
 
 
-@pytest.mark.parametrize(
-    ("extra", "expected"),
-    [
-        ({}, {"line", "auth0"}),
-        # LIFF 改走 Auth0 的 LINE 連線後，不再接受 LIFF 的 id_token
-        ({"AUTH0_LINE_CONNECTION": "line-chat"}, {"auth0"}),
-    ],
-)
-def test_auth0_line_connection_retires_the_liff_authenticator(lifecycle_mocks, extra, expected):
+def test_auth0_is_the_only_authenticator(lifecycle_mocks):
     environment = {
         **LIFECYCLE_ENVIRONMENT,
         "CHAT_STORE": "memory",
         "AUTH0_DOMAIN": "auth.example.test",
         "AUTH0_AUDIENCE": "https://chat.example.test/api",
         "AUTH0_CLIENT_ID": "chatClientId123",
-        **extra,
     }
     with patch.dict(os.environ, environment, clear=True):
         app = create_app()
         with TestClient(app):
-            assert set(app.state.authenticators) == expected
+            assert set(app.state.authenticators) == {"auth0"}
+            assert isinstance(app.state.usage_stats, MemoryUsageStats)
 
 
 def test_firestore_store_startup_wires_and_closes_client(lifecycle_mocks):

@@ -117,7 +117,7 @@ async def test_single_audience_string_is_accepted(verifier):
         {"exp": int(time.time()) - 120},  # 過期（超過容忍範圍）
         {"iat": None},
         {USR_CLAIM: None},  # post-login Action 沒設定
-        {USR_CLAIM: "usr_" + "0" * 32},  # 內部 id 的格式，不是 NTHUSA ID
+        {USR_CLAIM: "usr_" + "0" * 32},  # 舊的內部 id 格式，不是 NTHUSA ID
         {USR_CLAIM: "usr_01K7AJ3Z8Q4N5V6W7X8Y9ZABCU"},  # ULID 不含 U
         {USR_CLAIM: 123},
     ],

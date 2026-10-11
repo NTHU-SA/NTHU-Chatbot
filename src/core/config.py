@@ -69,7 +69,6 @@ def parse_cors_origins(value: str | None) -> tuple[str, ...]:
 
 _AUTH0_VARIABLES = ("AUTH0_DOMAIN", "AUTH0_AUDIENCE", "AUTH0_CLIENT_ID")
 _CLIENT_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
-_CONNECTION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,127}$")
 
 
 def _auth0() -> tuple[str | None, str | None, str | None]:
@@ -95,22 +94,6 @@ def _auth0() -> tuple[str | None, str | None, str | None]:
     if len(audience) > 200:
         raise RuntimeError("Invalid AUTH0_AUDIENCE")
     return domain, audience, client_id
-
-
-def _auth0_line_connection(auth0_enabled: bool) -> str | None:
-    """
-    Auth0 裡 LINE 連線的名稱：設定後 LIFF 也經 Auth0 登入，後端不再接受 LIFF 的 id_token。
-
-    LINE 連線必須沿用 bot 的 LINE Login channel（同一個 Provider），LINE userId 才會和 webhook 相同。
-    """
-    value = (os.getenv("AUTH0_LINE_CONNECTION") or "").strip()
-    if not value:
-        return None
-    if not auth0_enabled:
-        raise RuntimeError("AUTH0_LINE_CONNECTION requires the Auth0 variables")
-    if not _CONNECTION.match(value):
-        raise RuntimeError("Invalid AUTH0_LINE_CONNECTION")
-    return value
 
 
 def _bool(value: str | None, default: bool) -> bool:
@@ -156,8 +139,7 @@ class Settings:
     # LINE Messaging API channel（機密）
     line_channel_secret: str = field(repr=False)
     line_channel_access_token: str = field(repr=False)
-    # LINE Login channel / LIFF
-    line_login_channel_id: str
+    # LIFF（聊天室按鈕開啟的網頁；登入經 Auth0，後端不需要 LINE Login channel）
     liff_id: str
     # LLM（任何 OpenAI 相容端點）
     openai_api_key: str = field(repr=False)
@@ -170,11 +152,10 @@ class Settings:
     mcp_server_url: str = "https://api.nthusa.tw/mcp"
     mcp_allowed_tools: tuple[str, ...] = DEFAULT_MCP_TOOLS
     mcp_timeout_seconds: float = 30.0
-    # Auth0（一般瀏覽器登入）。三個都設定才啟用；再設定 LINE 連線時 LIFF 也經 Auth0 登入
+    # Auth0（唯一的登入方式，LIFF 內也是）。三個都設定才啟用，否則 /api 一律 401
     auth0_domain: str | None = None
     auth0_audience: str | None = None
     auth0_client_id: str | None = None
-    auth0_line_connection: str | None = None
     # LIFF 前端（Firebase Hosting）的網域；API 只允許這些網域跨站呼叫
     cors_allowed_origins: tuple[str, ...] = ()
     # 隱私權政策版本（單一來源在 src/core/privacy.py）；改版後使用者需重新同意才能使用 AI 對話
@@ -220,7 +201,6 @@ class Settings:
         required = [
             "LINE_CHANNEL_SECRET",
             "LINE_CHANNEL_ACCESS_TOKEN",
-            "LINE_LOGIN_CHANNEL_ID",
             "LIFF_ID",
             "OPENAI_API_KEY",
         ]
@@ -234,7 +214,6 @@ class Settings:
         return cls(
             line_channel_secret=os.environ["LINE_CHANNEL_SECRET"],
             line_channel_access_token=os.environ["LINE_CHANNEL_ACCESS_TOKEN"],
-            line_login_channel_id=os.environ["LINE_LOGIN_CHANNEL_ID"],
             liff_id=os.environ["LIFF_ID"],
             openai_api_key=os.environ["OPENAI_API_KEY"],
             openai_base_url=os.getenv("OPENAI_BASE_URL") or None,
@@ -247,7 +226,6 @@ class Settings:
             auth0_domain=auth0_domain,
             auth0_audience=auth0_audience,
             auth0_client_id=auth0_client_id,
-            auth0_line_connection=_auth0_line_connection(auth0_domain is not None),
             cors_allowed_origins=parse_cors_origins(os.getenv("CORS_ALLOWED_ORIGINS")),
             chat_store=chat_store,
             google_cloud_project=os.getenv("GOOGLE_CLOUD_PROJECT") or None,

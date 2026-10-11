@@ -13,6 +13,7 @@ from src.app.auth.service import IdentityService
 from src.application.services.chat_store import MemoryChatStore
 from src.application.services.departments import DepartmentDirectory
 from src.application.services.module_registry import StaticModuleRegistry
+from src.application.services.usage_stats import MemoryUsageStats
 from src.application.services.user_store import MemoryUserStore
 from tests.fakes import FakeAuthenticator, FakeRunner, fake_departments, make_settings
 
@@ -45,8 +46,9 @@ def chat_app(runner):
     app.state.user_store = MemoryUserStore()
     app.state.identity_service = IdentityService(app.state.user_store)
     app.state.module_registry = StaticModuleRegistry()
+    app.state.usage_stats = MemoryUsageStats()
     app.state.departments = DepartmentDirectory(fake_departments)
-    app.state.authenticators = {"line": FakeAuthenticator()}
+    app.state.authenticators = {"auth0": FakeAuthenticator()}
     app.state.rate_limiter = RateLimiter(rate_per_minute=600, burst=100)
     app.state.agent_runner = runner
     return app

@@ -178,7 +178,6 @@ async def test_web_search_limit_is_reported_to_the_model(run_state):
 BASE = {
     "LINE_CHANNEL_SECRET": "s",
     "LINE_CHANNEL_ACCESS_TOKEN": "t",
-    "LINE_LOGIN_CHANNEL_ID": "1",
     "LIFF_ID": "l",
     "OPENAI_API_KEY": "k",
     "CHAT_STORE": "memory",

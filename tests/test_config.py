@@ -8,7 +8,6 @@ from src.core.config import DEFAULT_MCP_TOOLS, Settings, parse_cors_origins
 BASE = {
     "LINE_CHANNEL_SECRET": "test-secret",
     "LINE_CHANNEL_ACCESS_TOKEN": "test-token",
-    "LINE_LOGIN_CHANNEL_ID": "1234567890",
     "LIFF_ID": "1234567890-abcdefgh",
     "OPENAI_API_KEY": "test-key",
 }
@@ -187,25 +186,6 @@ def test_auth0_settings_are_parsed():
     assert settings.auth0_domain == "auth.example.com"
     assert settings.auth0_audience == "https://chat.example.com/api"
     assert settings.auth0_client_id == "abcDEF123_-xyz"
-
-
-def test_auth0_line_connection_is_optional_and_parsed():
-    assert load({**MEMORY, **AUTH0}).auth0_line_connection is None
-    settings = load({**MEMORY, **AUTH0, "AUTH0_LINE_CONNECTION": "line-chat"})
-    assert settings.auth0_line_connection == "line-chat"
-
-
-@pytest.mark.parametrize(
-    "environment",
-    [
-        {"AUTH0_LINE_CONNECTION": "line"},  # 沒有 Auth0
-        {**AUTH0, "AUTH0_LINE_CONNECTION": "bad name"},
-        {**AUTH0, "AUTH0_LINE_CONNECTION": "-line"},
-    ],
-)
-def test_invalid_auth0_line_connection_fails_fast(environment):
-    with pytest.raises(RuntimeError, match="AUTH0_LINE_CONNECTION"):
-        load({**MEMORY, **environment})
 
 
 def test_partial_auth0_settings_fail_fast():

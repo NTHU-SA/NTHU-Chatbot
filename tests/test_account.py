@@ -1,14 +1,21 @@
 from pathlib import Path
 
-from src.application.models.identity import DeletionIncompleteError, lookup_key
+from src.application.models.identity import REUSE_AFTER_DELETION, DeletionIncompleteError
 from src.core.privacy import PRIVACY_POLICY_VERSION
-from tests.fakes import AUTH, TEST_IDENTITY, make_settings, parse_sse
+from tests.fakes import AUTH, TEST_USR, make_settings, parse_sse
 
 CONSENT = "/api/consents/privacy_policy"
 
 
 def user_id(chat_app) -> str:
-    return chat_app.state.user_store.lookup[lookup_key("line", TEST_IDENTITY.provider_user_id)]
+    assert TEST_USR in chat_app.state.user_store.users
+    return TEST_USR
+
+
+def age_tombstone(chat_app, uid):
+    """模擬刪除已超過 REUSE_AFTER_DELETION（期間各實例的快取也都過期）。"""
+    chat_app.state.user_store.users[uid]["deletedAt"] -= REUSE_AFTER_DELETION
+    chat_app.state.identity_service.forget_user(uid)
 
 
 def session(client) -> str:
@@ -80,7 +87,7 @@ def test_unknown_consent_type_is_404(client):
 
 
 # -- delete my data --
-def test_delete_me_removes_everything_and_next_login_is_a_new_user(client, chat_app):
+def test_delete_me_removes_everything_and_later_login_starts_fresh(client, chat_app):
     client.post(CONSENT, headers=AUTH, json={"version": "1"})
     session_id = session(client)
     events = parse_sse(send(client, session_id, "我的秘密").text)
@@ -90,17 +97,24 @@ def test_delete_me_removes_everything_and_next_login_is_a_new_user(client, chat_
     assert client.delete("/api/me", headers=AUTH).status_code == 204
 
     users, chats = chat_app.state.user_store, chat_app.state.store
-    assert users.users[old_id] == {"status": "deleted"}  # 只剩不含個資的墓碑
+    assert set(users.users[old_id]) == {"status", "deletedAt"}  # 只剩不含個資的墓碑
+    assert users.users[old_id]["status"] == "deleted"
     assert old_id not in users.identities
     assert old_id not in users.consents
-    assert lookup_key("line", TEST_IDENTITY.provider_user_id) not in users.lookup
+    assert users.lookup == {}
     assert old_id not in chats._sessions
     assert not any(key[0] == old_id for key in chats._messages)
 
-    # 同一個 LINE 帳號再開啟：全新的 user，沒有舊對話，也要重新同意
+    # 剛刪除：還不能重新開始（刪除前已在進行的請求可能晚到）
+    early = client.get("/api/me", headers=AUTH)
+    assert early.status_code == 403
+    assert early.json()["detail"]["code"] == "account_deleted"
+
+    # 之後同一個 NTHUSA ID 再開啟：空白的帳號，沒有舊對話，也要重新同意
+    age_tombstone(chat_app, old_id)
     me = client.get("/api/me", headers=AUTH).json()
     assert me["consent"]["accepted"] is False
-    assert user_id(chat_app) != old_id
+    assert users.users[old_id]["status"] == "active"
     assert client.get("/api/sessions", headers=AUTH).json() == []
 
 
@@ -131,9 +145,9 @@ def test_failed_deletion_can_be_retried_and_blocks_everything_else(client, chat_
 
     monkeypatch.setattr(users, "delete_user", real_delete)
     assert client.delete("/api/me", headers=AUTH).status_code == 204
-    assert users.users[old_id] == {"status": "deleted"}
+    assert users.users[old_id]["status"] == "deleted"
+    age_tombstone(chat_app, old_id)
     assert client.get("/api/me", headers=AUTH).status_code == 200
-    assert user_id(chat_app) != old_id
 
 
 def test_policy_version_has_one_source():

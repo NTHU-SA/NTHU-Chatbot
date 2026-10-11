@@ -8,7 +8,7 @@ from collections import OrderedDict
 
 class RateLimiter:
     """
-    單一實例的 token bucket 限流（防突發），以內部 user id 為 key。
+    單一實例的 token bucket 限流（防突發），以 user id（NTHUSA ID）為 key。
 
     每日額度另外存在 user store，才能跨 Cloud Run 實例。
     """
