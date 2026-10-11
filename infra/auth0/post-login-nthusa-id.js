@@ -7,10 +7,10 @@
  *
  * - The first time a user signs in to a chat app, mint their NTHUSA ID (`usr_` + ULID) and
  *   keep it in app_metadata.usr. It never changes afterwards; Auth0's own user_id does change
- *   when accounts are linked, so the backend keys on this ID instead of `sub`.
+ *   when accounts are linked, so the backend keys its data on this ID instead of `sub`.
  * - Put it in the access token as https://nthusa.tw/usr. The backend rejects tokens without it.
- * - When the user has a LINE identity from one of our LINE connections (they reuse the bot's
- *   LINE Login channels, same Provider), also put its userId in https://nthusa.tw/line_user_id
+ * - When the user has a LINE identity from our LINE connection (one for the whole tenant, its
+ *   channel in the bot's LINE Provider), also put its userId in https://nthusa.tw/line_user_id
  *   so the bot's webhook reaches the same person.
  *
  * Only runs for the chat apps (CHAT_CLIENT_IDS): the tenant is shared with other NTHUSA
@@ -18,7 +18,8 @@
  *
  * Secrets (not sensitive, but kept out of the code so staging and prod share one Action):
  *   CHAT_CLIENT_IDS   comma-separated client IDs of "Chat (staging)" and "Chat (prod)"
- *   LINE_CONNECTIONS  comma-separated names of the Auth0 LINE connections for those apps
+ *   LINE_CONNECTIONS  name of the tenant's Auth0 LINE connection ("line"; comma-separated if
+ *                     ever more than one)
  */
 
 const crypto = require("crypto");

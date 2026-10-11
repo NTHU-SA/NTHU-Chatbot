@@ -4,10 +4,10 @@
 # 用法：
 #   bash infra/bootstrap.sh infra/environments/staging.conf
 #   bash infra/bootstrap.sh infra/environments/prod.conf
-#   LINE_LOGIN_CHANNEL_ID=... LIFF_ID=... bash infra/bootstrap.sh ...   # 第一次建立或更換 LINE 頻道時
-#   AUTH0_CLIENT_ID=... bash infra/bootstrap.sh ...                       # 第一次啟用或更換 Auth0 Application 時
+#   LIFF_ID=... bash infra/bootstrap.sh ...          # 第一次建立或更換 LIFF app 時
+#   AUTH0_CLIENT_ID=... bash infra/bootstrap.sh ...  # 第一次啟用或更換 Auth0 Application 時
 #
-# LINE 的 ID 與 Auth0 Client ID 不寫在 repo：由執行者以環境變數注入；沒給時沿用 Cloud Run 服務上現有的值。
+# LIFF ID 與 Auth0 Client ID 不寫在 repo：由執行者以環境變數注入；沒給時沿用 Cloud Run 服務上現有的值。
 #
 # staging 與 prod 可以在同一個 GCP 專案：資料庫、Secret、SA、WIF pool、Cloud Run 服務與 Hosting 網站
 # 都依 conf 分開命名，權限也只授予自己那一份（Firestore 以 IAM condition 限定資料庫、
@@ -76,14 +76,13 @@ raw = sys.stdin.read()
 env = json.loads(raw)["spec"]["template"]["spec"]["containers"][0].get("env", []) if raw.strip() else []
 print(next((e.get("value", "") for e in env if e["name"] == sys.argv[1]), ""))' "$1" | tr -d '\r' || true
 }
-LINE_LOGIN_CHANNEL_ID="${LINE_LOGIN_CHANNEL_ID:-$(service_env LINE_LOGIN_CHANNEL_ID)}"
 LIFF_ID="${LIFF_ID:-$(service_env LIFF_ID)}"
-if [[ -z "$LINE_LOGIN_CHANNEL_ID" || -z "$LIFF_ID" ]]; then
-  echo "第一次建立服務：請以環境變數提供 LINE_LOGIN_CHANNEL_ID 與 LIFF_ID" >&2
+if [[ -z "$LIFF_ID" ]]; then
+  echo "第一次建立服務：請以環境變數提供 LIFF_ID" >&2
   exit 1
 fi
-# Auth0（一般瀏覽器登入）：conf 有 AUTH0_DOMAIN / AUTH0_AUDIENCE 且有 Client ID 才啟用。
-# --set-env-vars 會整組取代，所以每次都要帶上；沒有 Client ID 時不設定（後端停用 Auth0）
+# Auth0（唯一的登入方式，LIFF 內也是）：conf 有 AUTH0_DOMAIN / AUTH0_AUDIENCE 且有 Client ID 才啟用。
+# --set-env-vars 會整組取代，所以每次都要帶上；沒有 Client ID 時不設定（/api 一律 401，只剩聊天室能用）
 if [[ -n "${AUTH0_DOMAIN:-}" ]]; then
   : "${AUTH0_AUDIENCE:?${ENV_FILE} 有 AUTH0_DOMAIN 時也要設定 AUTH0_AUDIENCE}"
   AUTH0_CLIENT_ID="${AUTH0_CLIENT_ID:-$(service_env AUTH0_CLIENT_ID)}"
@@ -286,16 +285,11 @@ fi
 step "Cloud Run：${SERVICE}"
 # 以 ^;^ 指定分隔符號：CORS_ALLOWED_ORIGINS 的值本身含逗號
 env_vars="^;^CHAT_STORE=firestore;GOOGLE_CLOUD_PROJECT=${PROJECT_ID};FIRESTORE_DATABASE=${FIRESTORE_DATABASE}"
-env_vars+=";LINE_LOGIN_CHANNEL_ID=${LINE_LOGIN_CHANNEL_ID}"
 env_vars+=";LIFF_ID=${LIFF_ID};OPENAI_MODEL=${OPENAI_MODEL};OPENAI_USE_RESPONSES_API=${OPENAI_USE_RESPONSES_API}"
 env_vars+=";REASONING_SUMMARY=${REASONING_SUMMARY};MCP_SERVER_URL=${MCP_SERVER_URL}"
 env_vars+=";CORS_ALLOWED_ORIGINS=${FRONTEND_ORIGINS};WEB_SEARCH_ENABLED=${WEB_SEARCH_ENABLED}"
 if [[ -n "${AUTH0_DOMAIN:-}" && -n "${AUTH0_CLIENT_ID:-}" ]]; then
   env_vars+=";AUTH0_DOMAIN=${AUTH0_DOMAIN};AUTH0_AUDIENCE=${AUTH0_AUDIENCE};AUTH0_CLIENT_ID=${AUTH0_CLIENT_ID}"
-  # LIFF 也經 Auth0 的 LINE 連線登入（後端不再接受 LIFF id_token）
-  if [[ -n "${AUTH0_LINE_CONNECTION:-}" ]]; then
-    env_vars+=";AUTH0_LINE_CONNECTION=${AUTH0_LINE_CONNECTION}"
-  fi
 fi
 secret_vars="OPENAI_API_KEY=${SECRET_OPENAI}:latest,LINE_CHANNEL_SECRET=${SECRET_LINE_SECRET}:latest"
 secret_vars+=",LINE_CHANNEL_ACCESS_TOKEN=${SECRET_LINE_TOKEN}:latest"
@@ -319,7 +313,7 @@ fi
   --member="serviceAccount:${DEPLOYER_SA}" --role=roles/run.developer >/dev/null
 "${G[@]}" projects remove-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:${DEPLOYER_SA}" --role=roles/run.developer --condition=None >/dev/null 2>&1 || true
-# LINE webhook 與 LIFF API 必須能從公網呼叫；API 自己驗證簽章與 id_token
+# LINE webhook 與 LIFF API 必須能從公網呼叫；API 自己驗證簽章與 Auth0 access token
 "${G[@]}" run services add-iam-policy-binding "$SERVICE" --region="$REGION" \
   --member=allUsers --role=roles/run.invoker >/dev/null
 

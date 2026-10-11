@@ -74,7 +74,7 @@ jobs:
           docker run -d --name app -p 8080:8080 \
             -e CHAT_STORE=memory \
             -e LINE_CHANNEL_SECRET=ci -e LINE_CHANNEL_ACCESS_TOKEN=ci \
-            -e LINE_LOGIN_CHANNEL_ID=ci -e LIFF_ID=ci -e OPENAI_API_KEY=ci \
+            -e LIFF_ID=ci -e OPENAI_API_KEY=ci \
             nthu-chatbot:ci
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8080/ping | grep -q pong; then
