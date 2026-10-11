@@ -10,24 +10,24 @@ LINE 聊天室 ──webhook──▶ Cloud Run /callback
                           └─ 其他文字 → 回一顆按鈕，開啟 LIFF 並帶入問題（同一顆按鈕永遠回到同一串對話）
 
 對話網頁（Firebase Hosting：frontend/；LINE 裡以 LIFF 開啟，一般瀏覽器也能用）
-   │  CORS · Authorization: Bearer <token> · X-Auth-Provider: line | auth0
-   │    LINE 裡：LIFF id_token（LINE Login）
-   │    一般瀏覽器：Auth0 access token（Universal Login，Authorization Code + PKCE）
+   │  CORS · Authorization: Bearer <Auth0 access token> · X-Auth-Provider: auth0
+   │    LINE 裡：直接帶到 Auth0 的 LINE 連線；一般瀏覽器：Universal Login
+   │    （都是 Authorization Code + PKCE；token 帶 NTHUSA ID）
    ▼
 Cloud Run /api/* ──▶ AgentRunner（OpenAI Agents SDK）
    │                  ├─ MCP: https://api.nthusa.tw/mcp（唯讀校園工具，結果短暫快取）
    │                  ├─ 個人化工具：save_profile / remember / forget
    │                  ├─ visit_webpage（只讀 nthu.edu.tw 與其子網域的公開 HTTPS 網頁內文）
    │                  └─ nthu_web_search（選用，只搜設定的校園網域）
-   ├─ Firestore：users / identityLookup / conversations / messages …
+   ├─ Firestore：users / identityLookup / conversations / messages / usageStats …
    └─ SSE ──▶ thinking · interim · tool_call_start / end · suggestions · memory · token · done · error
 ```
 
 - **聊天室只做「reply token 一定來得及」的事**；AI 對話在 LIFF 網頁進行（多個對話、串流、即時顯示正在查什麼）。群組裡只用 `@` 指令，不讀取私人對話。
 - **前後端分離**：頁面由 Hosting 的 CDN 提供，頁面的 CSP 設在 Hosting；前端直接以 CORS 呼叫 Cloud Run。不使用 Hosting rewrite 轉到 Cloud Run，因為 rewrite 有 60 秒上限，會切斷較長的 SSE 回覆。
-- **身分**：LINE 裡用 LIFF `id_token`（後端向 LINE 驗證）；一般瀏覽器啟用 Auth0 時用簽給這個 API 的 access token（後端以 JWKS 本地驗證）。兩者都對應到內部 user，所有資料只認內部 user id。Auth0 未設定時一般瀏覽器沿用 LIFF 的 LINE 網頁登入。
+- **身分**：登入只有 Auth0 一條路（LINE 裡也是），access token 簽給這個 API，後端以 JWKS 本地驗證。身分是 token 裡的 NTHUSA ID，所有資料都以它為 key。聊天室不需要登入：LINE userId 綁定了 NTHUSA ID 才對得到人，沒綁定的人不會有任何個人資料。
 - 輸入「說明」、「help」或 `@說明` 會回使用說明泡泡（指令清單依 `bot_config.yaml` 自動產生）。
-- webhook 等事件處理完才回應；非關鍵寫入（最近活動時間、模組使用次數）與請求並行，回應前收尾，不留會被 Cloud Run 暫停的背景工作。
+- webhook 等事件處理完才回應；非關鍵寫入（聊天室每天的匿名總數）與請求並行，回應前收尾，不留會被 Cloud Run 暫停的背景工作。
 
 ## 目錄結構
 
@@ -39,10 +39,10 @@ src/app/__init__.py               create_app()、lifespan 組裝 app.state
 src/app/routes/callback.py        LINE webhook
 src/app/routes/chat.py            /api/sessions…（LIFF 對話，SSE）
 src/app/routes/account.py         /api/me、同意紀錄、個人資料、刪除我的資料
-src/app/auth/                     Authenticator（LINE、Auth0）、外部身分 → 內部 user、限流
+src/app/auth/                     Authenticator（Auth0）、NTHUSA ID → user、LINE 綁定的對應、限流
 src/app/middleware.py             API 的安全標頭與 CORS
 src/app/handlers/、src/modules/   聊天室內 @ 指令
-src/application/                  資料模型；ChatStore / UserStore / ModuleRegistry 介面與記憶體實作；系所名稱正規化
+src/application/                  資料模型；ChatStore / UserStore / ModuleRegistry / UsageStats 介面與記憶體實作；系所名稱正規化
 src/infrastructure/ai/            AgentRunner、prompt、個人化工具、網路搜尋、網頁內文、單次執行狀態
 src/infrastructure/firebase/      上述介面的 Firestore 實作
 templates/messages/               Flex 訊息（含 LIFF 入口泡泡）與共用主題 / builder
@@ -68,44 +68,47 @@ Firestore Native mode，由 `infra/bootstrap.sh` 建立；staging 用 `(default)
 區域建立後不能更換。資料設計原則：
 **高頻一起讀的放同一份文件、持續增長的用 subcollection、需要跨 user 查詢的放 top-level、歷史資料保留版本**。
 
-### 內部 user id 與外部登入方式分開
+### NTHUSA ID 就是 user id
 
-所有資料都以內部 `userId`（`usr_` + 128 bit 隨機值，建立後不可變）為主鍵。
-LINE、Auth0 都是連結到 user 的外部身分；之後加學校 OAuth 或 Google，
-只要新增一個 `Authenticator`（`src/app/auth/`）並在 `create_app()` 的 lifespan 組裝流程註冊，資料層不用改。
+所有資料都以 NTHUSA ID 為主鍵（`users/{NTHUSA ID}`）：post-login Action 產生的 `usr_` + ULID，
+學生會跨系統共用、staging 與 prod 相同，建立後不會變。它只來自驗證過的 Auth0 access token，
+不是 Auth0 的 `sub`（連結帳號時會變）。LINE、Google 等登入方式都在 Auth0 裡，綁定也在 Auth0 進行
+（介面在後續 PR）；之後加別的登入方式，資料層不用改。
 
 ```text
-請求 → Authenticator（依 X-Auth-Provider：auth0，未改走 Auth0 LINE 連線時另有 line；未知的一律 401）→ VerifiedIdentity
-     → IdentityService：identityLookup/{sha256(provider:id)} → userId
-     → 路由、限流、每日額度、所有資料都只認 userId
+請求 → Auth0Authenticator（X-Auth-Provider: auth0；未知的一律 401）→ NTHUSA ID（+ 綁定的 LINE userId）
+     → IdentityService：users/{NTHUSA ID}（沒有就建立），LINE userId 同步到 identityLookup
+     → 路由、限流、每日額度、所有資料都只認 NTHUSA ID
+
+webhook → LINE userId → identityLookup/{sha256(line:U…)} → NTHUSA ID（只查詢，沒有就是 None）
 ```
 
-- `identityLookup` 的文件 ID 是雜湊值：學號這類個資不會出現在文件路徑、Console 與 log；原始外部 ID 只存在 `users/{uid}/identities/{provider}`。API 不回傳任何 ID。
-- 第一次見到的身分以一次原子寫入建立 user、identity 與 lookup（`create()`，已存在就失敗）；同一個帳號同時進來也只會建立一個 user。
-- 帳號連結（之後開放）**只能明確進行**：同一個請求裡同時證明兩個身分，絕不用 email、名稱或學號自動合併；同一個外部身分不能屬於兩個 user（衝突回 409 且不透露是誰）；至少保留一個登入方式；連結與解除都寫入 `auditLog`。
-- Auth0 登入的身分是 NTHUSA ID（provider `nthusa`，post-login Action 產生的 `usr_` + ULID，學生會跨系統共用，staging 與 prod 相同），不是 Auth0 的 `sub`（連結帳號時會變）。NTHUSA ID 和內部 `userId` 是兩個不同的值：內部 id 只在這個環境的資料庫裡用。
-- token 也帶 NTHUSA ID 綁定的 LINE userId 時，`IdentityService` 把 LINE 對應到同一個 user，webhook 就找得到這個人：第一次登入而 LINE 已有 user 時沿用那個 user（資料保留）；之後以 Auth0 為準移動對應，LINE 原本屬於沒有 NTHUSA ID 的孤兒 user 時刪除它的資料。
-- 設定 `AUTH0_LINE_CONNECTION` 前，Auth0 登入與 LIFF 登入（provider `line`）是不同的內部 user，對話不互通。Auth0 的環境設定見 [部署文件](../infra/README.md#auth0nthusa-id-登入)。
-- 群組裡的發言者沒有和 bot 建立關係，webhook 不會為他們建立任何資料。
+- 第一次登入以一次原子寫入建立 user 與它的 `identities/nthusa`（`create()`，已存在就失敗）；同一個 ID 同時進來也只會建立一次。
+- token 帶 NTHUSA ID 綁定的 LINE userId（`https://nthusa.tw/line_user_id`）時，以 Auth0 為準同步 `identityLookup`：綁了就對應過來（原本屬於別的 user 就從那邊移除，對方的資料不動），換綁取代，解除就移除；每次變動寫入 `auditLog`。同一個綁定每個實例 10 分鐘只同步一次。
+- `identityLookup` 的文件 ID 是雜湊值：LINE userId 不會出現在文件路徑、Console 與 log；原始值只存在 `users/{uid}/identities/line`。API 不回傳任何 ID。
+- 聊天室（webhook）只查詢、不建立：沒有綁定的 LINE 使用者照常使用指令，但不寫入任何個人資料；群組裡的發言者連查詢都不做。使用量只記每天的匿名總數（`usageStats`）。
+- 刪除資料後，同一個 NTHUSA ID 要過 `REUSE_AFTER_DELETION`（10 分鐘）才能重新開始（期間回 403 `account_deleted`）：刪除前已在進行的請求可能晚到，它們靠讀到 deleted 自己撤銷；太快在同一個 key 重建，會讓它們留在新帳號裡。
+- Auth0 的環境設定見 [部署文件](../infra/README.md#auth0nthusa-id-登入)。
 
 ### Firestore 路徑
 
 | 路徑 | 資料 |
 | --- | --- |
-| `identityLookup/{sha256(provider:id)}` | `userId`、`provider`、`createdAt` |
-| `quotaCarryover/{sha256(provider:id)}` | 刪除帳號時保留當日 AI 用量：`day`、`count`、`expiresAt`（TTL 2 天）。同一個外部身分當天重建帳號時沿用，避免以刪除帳號重置每日上限 |
-| `users/{uid}` | `status`（active / blocked / deleting / deleted；deleted 只剩不含個資的墓碑與 `expiresAt` TTL）、`displayName`、`pictureUrl`、`createdAt`、`updatedAt`、`lastActiveAt`、`lastConversationId`、`lastModuleId`、`lastModuleUsedAt`、`conversationCount` |
-| `users/{uid}/identities/{provider}` | `providerUserId`、`linkedAt`、`lastLoginAt`、`metadata`（LINE：`followed`、`liff`{os、appVersion、language、contextType、friendshipStatus}；前端自報，不參與授權；不收 contextId） |
+| `identityLookup/{sha256(line:U…)}` | 綁定的 LINE → `userId`（NTHUSA ID）、`provider`、`createdAt` |
+| `quotaCarryover/{sha256(nthusa:usr_…)}` | 刪除帳號時保留當日 AI 用量：`day`、`count`、`expiresAt`（TTL 2 天）。同一個 NTHUSA ID 當天重建帳號時沿用，避免以刪除帳號重置每日上限 |
+| `users/{uid}` | uid 是 NTHUSA ID。`status`（active / blocked / deleting / deleted；deleted 只剩不含個資的墓碑：`deletedAt`、`expiresAt` TTL）、`displayName`、`pictureUrl`、`createdAt`、`updatedAt`、`lastActiveAt`、`lastConversationId`、`conversationCount` |
+| `users/{uid}/identities/{nthusa\|line}` | `providerUserId`、`linkedAt`、`lastLoginAt`、`metadata`（nthusa：`liff`{os、appVersion、language、contextType、friendshipStatus}，前端自報，不參與授權；不收 contextId） |
 | `users/{uid}/consents/{type}_v{version}` | 同意紀錄：`status`（accepted）、`acceptedAt`、`source`；每個版本一份，不覆蓋 |
 | `users/{uid}/preferences/{nickname\|department}` | `value`、`source`（user：設定頁；assistant：對話中由 AI 記下）、`updatedAt` |
 | `users/{uid}/memory/{m00…m19}` | 使用者要求記住的事：`value`（≤100 字）、`sourceConversationId`、`createdAt`；每則占一個固定格子，以 `create()` 搶空格，並行也不會超過 20 則 |
-| `users/{uid}/moduleStates/{moduleId}` | `@` 指令的 `lastUsedAt`、`usageCount`；`onboarding` 記錄首次使用是否已問過稱呼與系所 |
+| `users/{uid}/moduleStates/onboarding` | 首次使用是否已問過稱呼與系所 |
 | `users/{uid}/usage/{YYYY-MM-DD}` | 每日 LLM 訊息計數 `count`、`expiresAt`（TTL 8 天） |
-| `users/{uid}/auditLog/{id}` | 連結、解除、同意：`action`、`at`、`expiresAt`（TTL 365 天） |
+| `users/{uid}/auditLog/{id}` | LINE 綁定、解除、同意：`action`、`at`、`expiresAt`（TTL 365 天） |
 | `users/{uid}/conversationOrigins/{sha256(origin)}` | LINE 泡泡 → `conversationId` |
 | `users/{uid}/conversationCleanup/{cid}` | 已刪除、訊息尚未清完的對話（中斷後下次繼續清） |
 | `conversations/{cid}` | `userId`、`channel`、`status`、`title`、`startedAt`、`lastMessageAt`、`messageCount`、`metadata.origin`；每人最多 50 個，超過時刪除最久未更新的 |
 | `conversations/{cid}/messages/{mid}` | `role`、`contentType`、`content`、`toolCalls`、`model`、`promptVersion`、`tokenUsage`、`latencyMs`、`createdAt` |
+| `usageStats/{YYYY-MM-DD}` | 聊天室每天的匿名總數：`messages`、`postbacks`、`follows`、`unfollows`、`modules`{moduleId}；不含任何使用者識別資料 |
 | `modules/{moduleId}` | `enabled: false` 暫停某個 `@` 指令模組（沒有文件代表啟用；快取 60 秒；沒有後台時在 Console 開關） |
 
 - 每則訊息一份文件，不存成 array；讀取對話與訊息一律比對 `userId`，別人的對話當作不存在。
