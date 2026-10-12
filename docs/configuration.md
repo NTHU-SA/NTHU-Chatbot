@@ -13,8 +13,8 @@ Firestore 不用金鑰檔：Cloud Run 用執行期服務帳號的 ADC，
 | 類別 | 變數 |
 | --- | --- |
 | 機密（Secret Manager） | `LINE_CHANNEL_SECRET`、`LINE_CHANNEL_ACCESS_TOKEN`、`OPENAI_API_KEY` |
-| LINE Login / LIFF | `LINE_LOGIN_CHANNEL_ID`、`LIFF_ID`（部署環境不寫在 repo：Cloud Run 環境變數與 repo variable `LIFF_ID_<ENV>`，見 [LINE 頻道設定](../infra/README.md#line-頻道設定不寫在-repo)） |
-| Auth0 | `AUTH0_DOMAIN`、`AUTH0_AUDIENCE`、`AUTH0_CLIENT_ID`（三個都填才啟用；環境隔離與 Dashboard 設定見 [Auth0](../infra/README.md#auth0一般瀏覽器登入)） |
+| LIFF | `LIFF_ID`（部署環境不寫在 repo：Cloud Run 環境變數與 repo variable `LIFF_ID_<ENV>`，見 [LINE 頻道設定](../infra/README.md#line-頻道設定不寫在-repo)） |
+| Auth0 | `AUTH0_DOMAIN`、`AUTH0_AUDIENCE`、`AUTH0_CLIENT_ID`（唯一的登入方式；三個都填才啟用，否則 `/api` 一律 401）；前端另用環境設定檔的 `AUTH0_LINE_CONNECTION`（LIFF 裡直接帶到 Auth0 的 LINE 連線）。Action、環境隔離與 Dashboard 設定見 [Auth0](../infra/README.md#auth0nthusa-id-登入) |
 | 前端 | `CORS_ALLOWED_ORIGINS`（逗號分隔；只接受 https 網域，本機可用 `http://localhost:<port>`） |
 | LLM | `OPENAI_MODEL`、`OPENAI_BASE_URL`（選填，任何 OpenAI 相容端點）、`OPENAI_USE_RESPONSES_API`、`REASONING_SUMMARY`、`MAX_OUTPUT_TOKENS`、`MAX_OUTPUT_CHARS` |
 | MCP | `MCP_SERVER_URL`、`MCP_ALLOWED_TOOLS`（逗號分隔）、`MCP_TIMEOUT_SECONDS` |
@@ -45,16 +45,16 @@ Firestore 不用金鑰檔：Cloud Run 用執行期服務帳號的 ADC，
 
 ## LINE Developers 設定
 
-同一個 **Provider** 底下建立兩個 channel（不同 Provider 的 userId 不同，同一個人會變成兩個 user）：
+Messaging API channel、LIFF 所在的 LINE Login channel，以及 Auth0 LINE 連線用的 channel 都要在同一個 **Provider**
+（不同 Provider 的 userId 不同，聊天室就對不到綁定的 NTHUSA ID）：
 
 1. **Messaging API channel**：Channel secret → `LINE_CHANNEL_SECRET`；長期 Channel access token → `LINE_CHANNEL_ACCESS_TOKEN`。
    Webhook URL 設為 `https://<API 網址>/callback`，啟用 Webhook，停用衝突的自動回應與歡迎訊息。
-2. **LINE Login channel**：Channel ID → `LINE_LOGIN_CHANNEL_ID`。新增 **LIFF app**：
-   Endpoint URL `https://<HOSTING_SITE>.web.app/`、Size `Full`、Scopes 勾選 `profile` 與 **`openid`**（缺少就拿不到 id_token）。
-   LIFF ID → `LIFF_ID`。在 LINE 以外的瀏覽器測試時，要把自己加入 Login channel 的 tester 或發佈 channel。
+2. **LINE Login channel**：新增 **LIFF app**：Endpoint URL `https://<HOSTING_SITE>.web.app/`、Size `Full`、
+   Scopes 勾選 `profile`。LIFF ID → `LIFF_ID`。登入不用 LIFF 的 id_token，改走 Auth0 的 LINE 連線
+   （設定見 [Auth0](../infra/README.md#auth0nthusa-id-登入)）。
 
-staging / prod 各自注入頻道 ID 與金鑰，不寫進 repo；更換頻道時前後端要一起換，
-否則 LIFF 的 id_token 會因 channel ID 不符被拒絕。各環境的設定位置見
+staging / prod 各自注入 LIFF ID 與金鑰，不寫進 repo；更換 LIFF app 時前後端要一起換。各環境的設定位置見
 [LINE 頻道設定](../infra/README.md#line-頻道設定不寫在-repo)。
 
 ## Rich Menu

@@ -55,7 +55,7 @@ FastAPI 後端、原生 JS / LIFF 前端、OpenAI Agents SDK、NTHU Data MCP 與
 ```powershell
 uv run pytest -q --cov
 uv run pre-commit run --all-files
-node --test tests\frontend_theme.test.cjs tests\frontend_navigation.test.cjs tests\frontend_ui.test.cjs tests\frontend_flex_preview.test.cjs
+node --test tests\frontend_theme.test.cjs tests\frontend_navigation.test.cjs tests\frontend_ui.test.cjs tests\frontend_flex_preview.test.cjs tests\auth0_action.test.cjs
 npx firebase-tools emulators:exec --only firestore --project demo-nthu-chatbot "uv run pytest -q --cov"
 ```
 

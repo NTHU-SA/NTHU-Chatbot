@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 import time
 from collections import OrderedDict
 
@@ -12,9 +13,15 @@ import jwt
 from fastapi import HTTPException, status
 from loguru import logger
 
-from src.application.models.identity import VerifiedIdentity
+from src.application.models.identity import NTHUSA_PROVIDER, VerifiedIdentity
 
 ALGORITHM = "RS256"
+# post-login Action（infra/auth0/post-login-nthusa-id.js）放進 access token 的自訂 claim
+CLAIM_NAMESPACE = "https://nthusa.tw/"
+USR_CLAIM = CLAIM_NAMESPACE + "usr"
+LINE_CLAIM = CLAIM_NAMESPACE + "line_user_id"
+NTHUSA_ID = re.compile(r"^usr_[0-9A-HJKMNP-TV-Z]{26}$")
+LINE_USER_ID = re.compile(r"^U[0-9a-f]{32}$")
 # 簽章金鑰快取一小時；遇到不認得的 kid（金鑰輪替）才提早重抓，但最多每分鐘一次，避免被偽造的 kid 拖著打 Auth0
 JWKS_TTL_SECONDS = 3600
 JWKS_MIN_REFRESH_SECONDS = 60
@@ -39,7 +46,9 @@ class Auth0Authenticator:
     `exp`，以及 `azp`（必須是 chat 自己的 Application）：同一個 tenant 裡其他 Application
     即使取得同一個 audience 的 token 也不會被接受。
 
-    `provider_user_id` 是 Auth0 的 `sub`（例如 `google-oauth2|…`），只取自驗過簽章的 token。
+    身分是 Action 放進 token 的 NTHUSA ID（`usr_<ULID>`），不是 Auth0 的 `sub`：
+    `sub` 在 Auth0 連結帳號時會變，NTHUSA ID 不會。token 沒有這個 claim（Action 沒設定）時一律 401。
+    使用者在 Auth0 綁定了我們的 LINE 連線時，token 也帶 LINE userId，放進 `linked`。
     顯示名稱與頭像不在 access token 裡，第一次見到某個 token 時向 `/userinfo` 取一次（失敗就略過），
     驗證結果以 token 雜湊為 key 快取到 `exp`（最多一小時）。
     """
@@ -75,11 +84,18 @@ class Auth0Authenticator:
 
         claims = await self._decode(token)
         name, picture = await self._profile(token)
+        line_user_id = claims.get(LINE_CLAIM)
+        linked = (
+            (VerifiedIdentity(provider="line", provider_user_id=line_user_id),)
+            if isinstance(line_user_id, str) and LINE_USER_ID.match(line_user_id)
+            else ()
+        )
         identity = VerifiedIdentity(
-            provider=self.provider,
-            provider_user_id=claims["sub"],
+            provider=NTHUSA_PROVIDER,
+            provider_user_id=claims[USR_CLAIM],
             display_name=name,
             picture_url=picture,
+            linked=linked,
         )
         self._cache[key] = (min(float(claims["exp"]), now + 3600), identity)
         self._cache.move_to_end(key)
@@ -110,6 +126,10 @@ class Auth0Authenticator:
             raise _unauthorized() from None
         sub = claims.get("sub")
         if claims.get("azp") != self._client_id or not isinstance(sub, str) or not sub:
+            raise _unauthorized()
+        nthusa_id = claims.get(USR_CLAIM)
+        if not isinstance(nthusa_id, str) or not NTHUSA_ID.match(nthusa_id):
+            logger.warning("Auth0 access token has no valid NTHUSA ID claim")
             raise _unauthorized()
         return claims
 

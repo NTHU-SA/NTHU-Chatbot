@@ -10,8 +10,8 @@
 
 LIFF ID 與 Auth0 Client ID 不寫在 repo：從環境變數 `LIFF_ID`、`AUTH0_CLIENT_ID` 讀取
 （CI 用 GitHub repo variable `LIFF_ID_<ENV>`、`AUTH0_CLIENT_ID_<ENV>` 注入）。
-Auth0 網域與 API audience 在環境設定檔（`AUTH0_DOMAIN`、`AUTH0_AUDIENCE`）；三者缺一時不啟用 Auth0，
-一般瀏覽器沿用 LIFF 的 LINE 登入。不讀也不寫任何機密。
+Auth0 網域與 API audience 在環境設定檔（`AUTH0_DOMAIN`、`AUTH0_AUDIENCE`）。登入只有 Auth0 一條路，
+三者缺一就讓 build 失敗，不部署一個無法登入的網站。不讀也不寫任何機密。
 """
 
 from __future__ import annotations
@@ -28,11 +28,12 @@ ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
 POLICY_SOURCE = ROOT / "src" / "core" / "privacy.py"
 POLICY_MARKER = re.compile(r"(<span data-policy-version>)[^<]*(</span>)")
-REQUIRED = ("PROJECT_ID", "API_ORIGIN")
+REQUIRED = ("PROJECT_ID", "API_ORIGIN", "AUTH0_DOMAIN", "AUTH0_AUDIENCE")
 LIFF_ID_PATTERN = re.compile(r"^\d+-[A-Za-z0-9]+$")
 ORIGIN = re.compile(r"^https://[a-z0-9-]+(\.[a-z0-9-]+)+$")
 DOMAIN = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)+$")
 CLIENT_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+CONNECTION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,127}$")
 # Auth0 登入後的頭像（Google、GitHub、Gravatar 與 Auth0 預設頭像）
 AVATAR_HOSTS = (
     "https://*.googleusercontent.com",
@@ -59,55 +60,49 @@ def read_conf(path: Path) -> dict[str, str]:
     for key in ("AUTH0_DOMAIN", "CUSTOM_DOMAIN"):
         if values.get(key) and not DOMAIN.match(values[key]):
             raise SystemExit(f"{path}: {key} must be a bare host name")
-    if bool(values.get("AUTH0_DOMAIN")) != bool(values.get("AUTH0_AUDIENCE")):
-        raise SystemExit(f"{path}: set both AUTH0_DOMAIN and AUTH0_AUDIENCE, or neither")
+    connection = values.get("AUTH0_LINE_CONNECTION")
+    if connection and not CONNECTION.match(connection):
+        raise SystemExit(f"{path}: AUTH0_LINE_CONNECTION must be a valid connection name")
     return values
 
 
-def auth0_config(conf: dict[str, str]) -> dict[str, str] | None:
-    """
-    前端的 Auth0 設定（公開值）。
-
-    設定檔沒有 Auth0 時停用；有設定但還沒提供 `AUTH0_CLIENT_ID`（尚未建立 Application）時也停用並提示，
-    前端沿用 LINE 登入。Client ID 格式不符則直接失敗。
-    """
-    if not conf.get("AUTH0_DOMAIN"):
-        return None
+def auth0_config(conf: dict[str, str]) -> dict[str, str]:
+    """前端的 Auth0 設定（公開值）。沒有 `AUTH0_CLIENT_ID`（尚未建立 Application）或格式不符時失敗。"""
     client_id = os.environ.get("AUTH0_CLIENT_ID", "").strip()
-    if not client_id:
-        print("AUTH0_CLIENT_ID is not set; Auth0 sign-in stays disabled", file=sys.stderr)
-        return None
     if not CLIENT_ID.match(client_id):
-        raise SystemExit("AUTH0_CLIENT_ID environment variable is malformed")
-    return {
+        raise SystemExit("AUTH0_CLIENT_ID environment variable is missing or malformed")
+    config = {
         "domain": conf["AUTH0_DOMAIN"],
         "clientId": client_id,
         "audience": conf["AUTH0_AUDIENCE"],
     }
+    # 有 LINE 連線時，LIFF 內也經 Auth0 登入（直接帶到 LINE，不顯示 Auth0 登入頁）
+    if conf.get("AUTH0_LINE_CONNECTION"):
+        config["lineConnection"] = conf["AUTH0_LINE_CONNECTION"]
+    return config
 
 
-def content_security_policy(api_origin: str, auth0_domain: str | None = None) -> str:
+def content_security_policy(api_origin: str, auth0_domain: str) -> str:
     # Auth0：token / userinfo 走 connect-src；頁面重新載入後的靜默登入用隱藏 iframe（frame-src）
-    auth0 = f" https://{auth0_domain}" if auth0_domain else ""
-    avatars = " " + " ".join(AVATAR_HOSTS) if auth0_domain else ""
+    auth0 = f" https://{auth0_domain}"
+    avatars = " " + " ".join(AVATAR_HOSTS)
     directives = [
         "default-src 'self'",
         "script-src 'self' https://static.line-scdn.net",
         "style-src 'self' 'unsafe-inline'",
         f"img-src 'self' data: https://profile.line-scdn.net https://*.line-scdn.net{avatars}",
         f"connect-src 'self' {api_origin} https://api.line.me https://liff.line.me https://access.line.me{auth0}",
+        f"frame-src 'self'{auth0}",
         "base-uri 'self'",
         "form-action 'self'",
         "object-src 'none'",
         "frame-ancestors 'none'",
     ]
-    if auth0_domain:
-        directives.insert(5, f"frame-src 'self'{auth0}")
     return "; ".join(directives)
 
 
-def hosting_config(conf: dict[str, str], auth0: dict[str, str] | None = None) -> dict:
-    csp = content_security_policy(conf["API_ORIGIN"], auth0["domain"] if auth0 else None)
+def hosting_config(conf: dict[str, str], auth0: dict[str, str]) -> dict:
+    csp = content_security_policy(conf["API_ORIGIN"], auth0["domain"])
     headers = [
         {"key": "Content-Security-Policy", "value": csp},
         {"key": "X-Content-Type-Options", "value": "nosniff"},
@@ -164,9 +159,8 @@ def build(conf_path: Path) -> Path:
         "liffId": liff_id(),
         "apiBase": conf["API_ORIGIN"],
         "privacyPolicyVersion": version,
+        "auth0": auth0,
     }
-    if auth0:
-        public_config["auth0"] = auth0
     (out / "public" / "config.json").write_text(
         json.dumps(public_config, indent=2) + "\n", encoding="utf-8"
     )

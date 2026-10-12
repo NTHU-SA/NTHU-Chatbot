@@ -15,10 +15,10 @@
 | 部署來源 | `NTHU-SA/NTHU-Chatbot` 合併進 `main` | `NTHU-SA/NTHU-Chatbot` 的版本 tag `vX.Y.Z` |
 | Cloud Build | `cloudbuild.yaml`（建置映像） | `cloudbuild.release.yaml`（沿用 staging 同一個 commit 的映像，不重新建置） |
 | Cloud Run | `nthu-chatbot-staging` | `nthu-chatbot` |
-| LINE | 測試用 Provider 的頻道 | 正式 Provider（Messaging API 與 LINE Login 必須在**同一個 Provider**） |
+| LINE | DEV bot 的頻道 | 正式 bot 的頻道（兩個 bot 和 Auth0 LINE 連線的 channel 都在**同一個 Provider**，LINE userId 才相同） |
 | Firestore 刪除保護 | 關 | 開 |
 | 前端（Firebase Hosting） | `nthusa-chatbot-staging.web.app` | `chat.nthusa.tw`（自訂網域；`nthusa-chatbot-prod.web.app` 也能連） |
-| Auth0（一般瀏覽器登入） | 學生會 tenant（`auth.nthusa.tw`）的 Application「Chat (staging)」，API `https://chat.nthusa.tw/api/staging` | 同一個 tenant 的「Chat (prod)」，API `https://chat.nthusa.tw/api` |
+| Auth0（唯一的登入方式） | 學生會 tenant（`auth.nthusa.tw`）的 Application「Chat (staging)」，API `https://chat.nthusa.tw/api/staging` | 同一個 tenant 的「Chat (prod)」，API `https://chat.nthusa.tw/api` |
 
 權限隔離：
 - 執行期 SA 的 `roles/datastore.user` 帶 IAM condition，只能存取自己的 Firestore 資料庫；Secret 逐一授權。
@@ -44,23 +44,23 @@ LINE 的 ID 和金鑰都依環境注入，repo 裡的設定檔不含任何 LINE 
 
 | 值 | 放在哪裡 | 怎麼設定 |
 |---|---|---|
-| `LINE_LOGIN_CHANNEL_ID`、`LIFF_ID`（後端） | 該環境 Cloud Run 的環境變數 | 第一次建立或更換頻道時：`LINE_LOGIN_CHANNEL_ID=... LIFF_ID=... bash infra/bootstrap.sh infra/environments/<env>.conf`；之後重跑 bootstrap 不帶這兩個變數會沿用服務上的值 |
+| `LIFF_ID`（後端，聊天室按鈕的網址） | 該環境 Cloud Run 的環境變數 | 第一次建立或更換 LIFF app 時：`LIFF_ID=... bash infra/bootstrap.sh infra/environments/<env>.conf`；之後重跑 bootstrap 不帶這個變數會沿用服務上的值 |
 | `LIFF_ID`（前端 `config.json`） | GitHub repo variable `LIFF_ID_STAGING` / `LIFF_ID_PROD` | `gh variable set LIFF_ID_<ENV> -R NTHU-SA/NTHU-Chatbot --body <LIFF ID>`；沒設定時 CI 跳過前端部署。手動部署（`deploy_frontend.sh`）沒給 `LIFF_ID` 時讀 Cloud Run 上的值 |
 | channel secret、access token | Secret Manager（prod 的名稱加 `-prod`） | 用 stdin 加入（見下方「加入 Secret 值」） |
 
-更換頻道時後端與前端要一起換，否則 LIFF 的 id_token 會因 channel ID 不符被拒絕。
+更換 LIFF app 時後端與前端要一起換。登入不用 LIFF 的 id_token，後端不需要 LINE Login channel ID。
 
-## Auth0（一般瀏覽器登入）
+## Auth0（NTHUSA ID 登入）
 
-LINE 裡（LIFF）仍用 LINE Login；用一般瀏覽器開啟時改走 Auth0 Universal Login。chat 使用學生會的 Auth0 tenant（custom domain `auth.nthusa.tw`），staging / prod 各自一組 Application 與 API，audience 不同，staging 的 token 不能呼叫 prod 的 API。
+登入只有 Auth0 一條路：一般瀏覽器走 Universal Login，LINE 裡（LIFF）直接帶到 Auth0 的 LINE 連線（`AUTH0_LINE_CONNECTION`）。後端認的是 post-login Action 放進 token 的 NTHUSA ID（`usr_` + ULID，學生會跨系統共用、staging 與 prod 相同），資料直接以它為 key（`users/{NTHUSA ID}`），不是 Auth0 的 `sub`。chat 使用學生會的 Auth0 tenant（custom domain `auth.nthusa.tw`），staging / prod 各自一組 Application 與 API，audience 不同，staging 的 token 不能呼叫 prod 的 API。
 
 | 值 | 放在哪裡 |
 |---|---|
-| `AUTH0_DOMAIN`、`AUTH0_AUDIENCE` | 環境設定檔（公開值） |
+| `AUTH0_DOMAIN`、`AUTH0_AUDIENCE`、`AUTH0_LINE_CONNECTION` | 環境設定檔（公開值；`AUTH0_LINE_CONNECTION` 只給前端用） |
 | `AUTH0_CLIENT_ID`（後端） | Cloud Run 環境變數：`AUTH0_CLIENT_ID=... bash infra/bootstrap.sh infra/environments/<env>.conf`；之後重跑會沿用服務上的值 |
 | `AUTH0_CLIENT_ID`（前端 `config.json`） | GitHub repo variable `AUTH0_CLIENT_ID_STAGING` / `AUTH0_CLIENT_ID_PROD` |
 
-三個值缺一時 Auth0 不啟用，一般瀏覽器沿用 LIFF 的 LINE 網頁登入，所以可以先部署程式、再建立 Auth0 設定。
+三個 Auth0 值缺一時：後端不啟用 Auth0（`/api` 一律 401，只有聊天室能用），前端的 `build_frontend.py` 直接失敗、CI 不部署。所以一個環境要先完成下面的 Auth0 設定，再部署這版程式。
 
 Auth0 Dashboard（每個環境各一次）：
 
@@ -69,14 +69,27 @@ Auth0 Dashboard（每個環境各一次）：
    - Allowed Callback URLs、Allowed Logout URLs：前端網址（staging `https://nthusa-chatbot-staging.web.app/`、prod `https://chat.nthusa.tw/`；bootstrap 最後會印出）
    - Allowed Web Origins：同上但不含結尾斜線
    - Refresh Token Rotation 開啟、設定 Absolute Lifetime；Grant Types 只留 Authorization Code 與 Refresh Token
-   - Connections 分頁只開要給 chat 用的登入方式
+   - Connections 分頁只開要給 chat 用的登入方式（含 LINE）
 3. 把 Application 的 Client ID 依上表設定到 Cloud Run 與 repo variable。
+
+整個 tenant 一次（staging、prod 共用）：
+
+4. LINE 連線：**Authentication → Social → LINE**。整個 tenant 只能有一個 LINE 連線（Dashboard 一種社群登入只能建一個；兩個連線遇到同一個 LINE 帳號會產生重複的 `line|U…` 使用者），staging、prod 與學生會其他系統共用。Channel ID / Secret 目前用**正式 bot 的 LINE Login channel**（已發佈，所有人都能登入；DEV channel 是 Developing，只有 tester 能登入）。之後要換成別的 channel（例如另開「NTHUSA ID」channel，讓同意畫面顯示學生會而不是 bot 名稱），只要新 channel 也在 bot 的 Provider：同一個 Provider 的 LINE userId 相同，Auth0 的 `line|U…` 不會變，帳號與綁定都保留，使用者只會再看到一次同意畫面。
+   - Login channel 的 secret 只放在 Auth0。不要勾 email（LINE 的 email 權限要另外申請，隱私權政策也沒寫）。
+   - 對 Chat (staging)、Chat (prod)（以及要用 LINE 登入的其他學生會 Application）啟用。
+   - LINE Developers 那邊在該 channel 的 Callback URL 加上 `https://auth.nthusa.tw/login/callback`（LIFF 的 Endpoint URL 不用改）。
+   - 連線名稱（預設 `line`）就是環境設定檔的 `AUTH0_LINE_CONNECTION`。
+5. **Actions → Library → Create Action**（Login / Post Login，Node 22），貼上 [`auth0/post-login-nthusa-id.js`](auth0/post-login-nthusa-id.js)，Secrets 設 `CHAT_CLIENT_IDS`（兩個 Chat Application 的 Client ID，逗號分隔）與 `LINE_CONNECTIONS`（步驟 4 的連線名稱，`line`）。Deploy 後拖進 **Actions → Triggers → post-login**。**後端要求 token 帶 NTHUSA ID，Action 必須在部署這版後端之前生效**，否則 Auth0 登入一律 401。
+
+LINE 帳號與 NTHUSA ID 的對應：token 帶 NTHUSA ID 綁定的 LINE userId（`https://nthusa.tw/line_user_id`）時，後端把它寫進 `identityLookup`，聊天室（webhook）就能找到同一個人；在 Auth0 換綁或解除時，下一次登入跟著更新。聊天室只查詢、不建立：沒有綁定 NTHUSA ID 的 LINE 使用者照常使用指令，但不會有任何個人資料，只計入每天的匿名總數（`usageStats`）。
+
+刪除資料後，同一個 NTHUSA ID 要過 10 分鐘（`REUSE_AFTER_DELETION`）才能重新開始：刪除前已在進行的請求可能晚到，太快在同一個 key 重建會讓它們寫進新帳號。
 
 和學生會中央驗證共用同一個 tenant，請注意：
 - post-login Action（例如 allowlist）會套用到 tenant 裡所有 Application，必須以 `event.client.client_id` 限定範圍，否則會擋住 chat 的使用者。
-- 不要對 chat 的使用者做 Auth0 帳號連結：連結後被併入的身分 `sub` 會改成主帳號的，chat 會把他當成另一個人。chat 的帳號連結在後端做（內部 user id）。
-- 目前 Auth0 登入（provider `auth0`）與 LIFF 登入（provider `line`）是**不同的內部 user**，對話不互通。之後要讓兩者對到同一人（後續 PR），前提是 LINE connection 的 LINE Login channel 和 bot 在同一個 LINE Provider，兩邊的 LINE user ID 才會相同。
-- 隱私權政策（第 3 版起）已說明以 Google 經 Auth0 登入時的資料；之後新增其他登入方式（例如 GitHub）時，要先更新 `privacy.html` 並遞增 `PRIVACY_POLICY_VERSION`。
+- Auth0 的使用者與帳號連結是整個 tenant 共用的：在 staging 綁定或解除綁定，prod 也會生效（同一個 NTHUSA ID）。staging 只給測試人員使用。
+- 綁定登入方式的介面在後續 PR；在那之前不要在 Dashboard 手動連結 chat 使用者的帳號：被併入的帳號的 `app_metadata`（含它的 NTHUSA ID）會被 Auth0 丟掉，它在 chat 的資料就找不到了。
+- 隱私權政策（第 3 版起）已說明以 Google 經 Auth0 登入時的資料；LINE 經 Auth0 登入與綁定要在第 4 版補上，prod 在第 4 版發佈前不能部署這版。之後新增其他登入方式（例如 GitHub）時，也要先更新 `privacy.html` 並遞增 `PRIVACY_POLICY_VERSION`。
 
 ## 網域
 
@@ -110,7 +123,7 @@ Windows 上如果 `python` 不是正確的直譯器，可以加 `PYTHON=.venv/Sc
 
 5. GitHub Actions 部署前端用的 Workload Identity Federation：provider 只信任 `GITHUB_OWNER/GITHUB_REPO` 在 `DEPLOY_REF` 上的 workflow（結尾 `*` 為前綴比對，prod 是 `refs/tags/v*`），換到的身分是只有 `firebasehosting.admin` 的 `nthu-chatbot-hosting` SA；不產生任何金鑰。
 6. 建立 Secret（只建容器，不碰值）；任何 Secret 還沒有值時會停下來。
-7. 建立或更新 Cloud Run 服務：環境變數（含 `CORS_ALLOWED_ORIGINS` = Hosting 的兩個預設網域）、Secret 掛載、`--timeout=180 --concurrency=40 --cpu-boost`、`min-instances=0`，並開放公開呼叫（webhook 與 API 自己驗證簽章和 id_token）。
+7. 建立或更新 Cloud Run 服務：環境變數（含 `CORS_ALLOWED_ORIGINS` = Hosting 的兩個預設網域）、Secret 掛載、`--timeout=180 --concurrency=40 --cpu-boost`、`min-instances=0`，並開放公開呼叫（webhook 與 API 自己驗證簽章和 Auth0 access token）。
 8. 建立或校正 Cloud Build trigger（`deploy-<service>`）：conf 的 `BRANCH_REGEX`（staging）或 `TAG_REGEX`（prod）擇一、`BUILD_CONFIG`（預設 `cloudbuild.yaml`）、substitutions，使用部署 SA。
 9. 最後印出要設定的 GitHub repo variables（`GCP_WIF_PROVIDER_<ENV>`、`GCP_HOSTING_SA_<ENV>`，不是機密）。設定後 CI 才會部署前端，沒設定時該 job 會略過。
 
@@ -143,10 +156,10 @@ gcloud secrets versions disable <舊版本號> --secret=<name> --project=<PROJEC
 ## 建立 prod
 
 1. `prod.conf` 已填好（與 staging 同一個專案，資源分開命名）。
-2. 在 LINE Developers 的**正式 Provider** 建立 Messaging API 與 LINE Login channel；LINE Login 底下建立 LIFF app。記下 channel ID 與 LIFF ID（不寫進 repo，見「LINE 頻道設定」）。
+2. 在 LINE Developers 的**正式 Provider** 建立 Messaging API 與 LINE Login channel；LINE Login 底下建立 LIFF app。記下 LIFF ID（不寫進 repo，見「LINE 頻道設定」）。
 3. Cloud Build 已連結 `NTHU-SA/NTHU-Chatbot`（staging 用的同一個連結）。
-4. `LINE_LOGIN_CHANNEL_ID=<正式 Login channel ID> LIFF_ID=<正式 LIFF ID> bash infra/bootstrap.sh infra/environments/prod.conf`：第一次會停在 Secret 沒有值的那一步。
-5. 依上一節加入三個 Secret 值，再跑一次 bootstrap（同樣帶上兩個 LINE ID）。
+4. `LIFF_ID=<正式 LIFF ID> bash infra/bootstrap.sh infra/environments/prod.conf`：第一次會停在 Secret 沒有值的那一步。
+5. 依上一節加入三個 Secret 值，再跑一次 bootstrap（同樣帶上 `LIFF_ID`）。
 6. `ALERT_EMAIL=... bash infra/monitoring.sh infra/environments/prod.conf`，並把外部 ping 服務指向 prod 的 `/ping`
 7. 確認 bootstrap 印出的服務網址與 `prod.conf` 的 `API_ORIGIN` 相同；在 GitHub repo 設定印出的兩個 variables（`..._PROD`），以及 `LIFF_ID_PROD`。
 8. LINE Developers：Webhook URL 設為 `<服務網址>/callback`、開啟 Use webhook；LIFF Endpoint URL 設為 `https://chat.nthusa.tw/`（網域生效前用 `https://nthusa-chatbot-prod.web.app/`）；用正式 bot 的 token 部署 rich menu（`uv run python -m scripts.rich_menu`）。

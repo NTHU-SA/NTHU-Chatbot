@@ -101,7 +101,7 @@ async def me_with_client(
     """
     LIFF 頁面開啟時呼叫，順帶回報 LIFF 執行環境。
 
-    這些資訊是前端自報的，只存成 `identities/line.metadata.liff`，不參與任何授權判斷。
+    這些資訊是前端自報的，只存成 `identities/nthusa.metadata.liff`，不參與任何授權判斷。
     """
     return await _me(request, user, client)
 
@@ -211,7 +211,7 @@ async def delete_me(request: Request, user: Principal = Depends(get_principal_fo
     2. 刪除對話與 user 資料，每一步都重新查詢確認清空；user 文件最後換成不含個資的墓碑；
     3. 再刪一次對話：涵蓋墓碑寫入前還在進行的請求建立的對話（之後建立的會自己撤銷）。
     沒刪乾淨時回 503 `deletion_incomplete`，帳號維持 deleting，使用者可以再呼叫一次。
-    完成後同一個 LINE 帳號再開啟頁面會是全新的使用者（需要重新同意隱私權政策）。
+    完成 10 分鐘後（REUSE_AFTER_DELETION），同一個 NTHUSA ID 再登入會是全新的使用者（需要重新同意隱私權政策）。
     """
     chats: ChatStore = request.app.state.store
     users = _users(request)

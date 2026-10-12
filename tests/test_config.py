@@ -8,7 +8,6 @@ from src.core.config import DEFAULT_MCP_TOOLS, Settings, parse_cors_origins
 BASE = {
     "LINE_CHANNEL_SECRET": "test-secret",
     "LINE_CHANNEL_ACCESS_TOKEN": "test-token",
-    "LINE_LOGIN_CHANNEL_ID": "1234567890",
     "LIFF_ID": "1234567890-abcdefgh",
     "OPENAI_API_KEY": "test-key",
 }

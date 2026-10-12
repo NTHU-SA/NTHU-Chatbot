@@ -20,6 +20,7 @@ from log import logger
 from src.app.background import BackgroundWrites
 from src.app.handlers.command_handler import command_handler
 from src.application.models.identity import AccountDisabledError
+from src.application.services.usage_stats import FOLLOW, MESSAGE, POSTBACK, UNFOLLOW
 from templates.messages import open_web_chat
 
 router = APIRouter()
@@ -33,14 +34,20 @@ RICH_MENU_SWITCH_DATA = {"menu-main", "menu-more"}
 
 async def resolve_user(event, state) -> str | None:
     """
-    1 對 1 聊天的 LINE userId（已由 webhook 簽章驗證）→ 內部 user id。
+    1 對 1 聊天的 LINE userId（已由 webhook 簽章驗證）→ 綁定它的 NTHUSA ID；沒有綁定時為 None。
 
-    群組與多人聊天室裡的發言者沒有和 bot 建立關係，不為他們建立任何資料。
+    只查詢、不建立：聊天室不需要登入，不為沒有綁定的人（或群組裡的發言者）建立任何資料。
+    綁定的帳號被停用時拋出 AccountDisabledError（事件不處理）。
     """
     source = event.source
     if getattr(source, "type", None) != "user" or not getattr(source, "user_id", None):
         return None
-    return await state.identity_service.resolve_line_user(source.user_id)
+    return await state.identity_service.find_line_user(source.user_id)
+
+
+def count(state, writes: BackgroundWrites, event: str) -> None:
+    """聊天室的匿名統計（只有每天的總數，見 UsageStats）。"""
+    writes.spawn(state.usage_stats.record(event), "usage_stats")
 
 
 @router.post("/callback")
@@ -72,11 +79,9 @@ async def handle_callback(request: Request):
             elif isinstance(event, PostbackEvent):
                 await handle_postback(event, state, user_id, writes)
             elif isinstance(event, FollowEvent):
-                await handle_follow(event, state, user_id, writes)
-            elif isinstance(event, UnfollowEvent) and user_id:
-                await state.user_store.update_identity_metadata(
-                    user_id, "line", {"followed": False}
-                )
+                await handle_follow(event, state, writes)
+            elif isinstance(event, UnfollowEvent):
+                count(state, writes, UNFOLLOW)
         except AccountDisabledError:
             # 被停用的帳號：不回覆、不處理
             logger.warning("Webhook event from disabled account ignored")
@@ -105,12 +110,12 @@ async def handle_callback(request: Request):
 
 
 async def run_command(text: str, user_id: str | None, state, writes: BackgroundWrites):
-    """執行 `@` 指令；模組在 Firestore 被停用時回固定訊息，並非同步記錄模組使用次數。"""
+    """執行 `@` 指令；模組在 Firestore 被停用時回固定訊息，並非同步累計模組的使用總數。"""
     module = command_handler.parse_command(text)[0]
     if module and not await state.module_registry.is_enabled(module):
         return MODULE_DISABLED_MESSAGE
-    if module and user_id:
-        writes.spawn(state.user_store.record_module_use(user_id, module), "record_module_use")
+    if module:
+        writes.spawn(state.usage_stats.record_module(module), "usage_stats")
     return await command_handler.process_message(text, user_id)
 
 
@@ -126,14 +131,13 @@ async def handle_message(event: MessageEvent, state, user_id, writes):
     reply_token = event.reply_token
     liff_id = state.settings.liff_id
 
-    if user_id:
-        writes.spawn(state.user_store.touch_activity(user_id), "touch_activity")
+    count(state, writes, MESSAGE)
 
     if message_text.strip().lower() in HELP_KEYWORDS:
         message_text = f"{command_handler.command_prefix}說明"
 
     if message_text.startswith(command_handler.command_prefix):
-        if user_id:
+        if event.source.type == "user":
             try:
                 # loading 動畫要用 LINE 的 chat id（1 對 1 時就是對方的 LINE userId）
                 await state.messaging_api.show_loading_animation(
@@ -176,8 +180,7 @@ async def handle_postback(event: PostbackEvent, state, user_id, writes):
 
     根據 postback data 判斷是否為命令，並產生相應回覆。
     """
-    if user_id:
-        writes.spawn(state.user_store.touch_activity(user_id), "touch_activity")
+    count(state, writes, POSTBACK)
     postback_data = event.postback.data
     reply_token = event.reply_token
     if postback_data in RICH_MENU_SWITCH_DATA:
@@ -204,17 +207,13 @@ async def handle_postback(event: PostbackEvent, state, user_id, writes):
         logger.warning("Postback 事件沒有產生任何回覆訊息。")
 
 
-async def handle_follow(event: FollowEvent, state, user_id, writes):
+async def handle_follow(event: FollowEvent, state, writes):
     """
     處理追蹤事件（加入好友事件）。
 
     當使用者加入好友時，發送歡迎訊息。
     """
-    if user_id:
-        writes.spawn(
-            state.user_store.update_identity_metadata(user_id, "line", {"followed": True}),
-            "followed",
-        )
+    count(state, writes, FOLLOW)
 
     reply_token = event.reply_token
     welcome_text = """初次見面！我是清華校園情報員！清華生活中的大小事，只要是你遇到的問題，我都會努力幫你解決唷！

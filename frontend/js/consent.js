@@ -83,6 +83,6 @@ export async function finishDeletion() {
     showOverlay(err.message || "刪除沒有完成，請再試一次。", true, finishDeletion);
     return;
   }
-  showOverlay("你的資料已全部刪除。重新開啟頁面會以新使用者身分開始。", false);
+  showOverlay("你的資料已全部刪除。10 分鐘後重新開啟頁面，會以新使用者身分開始。", false);
   history.replaceState(null, "", location.pathname);
 }

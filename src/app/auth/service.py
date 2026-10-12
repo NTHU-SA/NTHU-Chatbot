@@ -1,4 +1,4 @@
-"""外部身分 → 內部 user 的解析。"""
+"""登入身分（NTHUSA ID）→ user，以及 webhook 的 LINE userId → user。"""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from src.application.models.identity import (
     ACTIVE,
     DELETED,
     DELETING,
+    LINKED_PROVIDERS,
     AccountDisabledError,
     Principal,
     VerifiedIdentity,
@@ -16,21 +17,24 @@ from src.application.models.identity import (
 )
 from src.application.services.user_store import UserStore
 
-# 對應關係只有在解除連結時才會變，快取 10 分鐘；帳號狀態快取 60 秒，封鎖能很快生效
+# 對應關係只有在 Auth0 改綁定時才會變，快取 10 分鐘；帳號狀態快取 60 秒，封鎖能很快生效
 MAPPING_TTL_SECONDS = 600
 STATUS_TTL_SECONDS = 60
 
 
 class IdentityService:
     """
-    把 Authenticator（或 LINE webhook 簽章）驗證過的外部身分解析成內部 user。
+    把 Authenticator 驗證過的 NTHUSA ID 解析成 user（user id 就是 NTHUSA ID），第一次見到時建立。
 
-    第一次見到的身分會建立新 user。webhook 與 LIFF 共用同一份對應，
-    前提是 LINE Login channel 與 Messaging API channel 在同一個 Provider（`sub` 相同）。
+    token 裡 NTHUSA ID 綁定的 LINE（`linked`）以 Auth0 為準同步到 `identityLookup`：
+    綁了就對應到這個 user（原本屬於別的 user 就移過來），解除了就移除，webhook 靠它找到同一個人。
+    前提是 Auth0 的 LINE 連線和 bot 的 Messaging API channel 在同一個 LINE Provider（userId 相同）。
+    webhook 只查詢、不建立：沒有綁定 NTHUSA ID 的 LINE 使用者不會有任何個人資料。
     """
 
     def __init__(self, store: UserStore, max_cache: int = 10_000) -> None:
         self._store = store
+        # lookup key → (到期時間, user id)：LINE userId 的對應，以及登入時已同步過的綁定
         self._mapping: OrderedDict[str, tuple[float, str]] = OrderedDict()
         self._status: dict[str, tuple[float, str]] = {}
         self._max_cache = max_cache
@@ -39,16 +43,18 @@ class IdentityService:
         self, identity: VerifiedIdentity, *, allow_deleting: bool = False
     ) -> Principal:
         """
-        外部身分 → Principal。帳號被封鎖或刪除中時拋出 AccountDisabledError；
+        NTHUSA ID → Principal。帳號被封鎖、刪除中或剛刪除時拋出 AccountDisabledError；
 
         `allow_deleting=True` 只給刪除 API 使用：刪除中途失敗時，使用者仍能再呼叫一次刪除。
         """
+        user_id = identity.provider_user_id
         try:
-            user_id = await self._resolve_user_id(identity)
+            await self._ensure_user(identity)
         except AccountDisabledError as error:
             if not (allow_deleting and error.status == DELETING):
                 raise
-            user_id = error.args[0]
+        else:
+            await self._sync_linked(user_id, identity.linked)
         return Principal(
             user_id=user_id,
             provider=identity.provider,
@@ -56,42 +62,83 @@ class IdentityService:
             picture_url=identity.picture_url,
         )
 
-    async def _resolve_user_id(self, identity: VerifiedIdentity) -> str:
-        key = lookup_key(identity.provider, identity.provider_user_id)
+    async def _ensure_user(self, identity: VerifiedIdentity) -> None:
+        user_id = identity.provider_user_id
         now = time.monotonic()
-        cached = self._mapping.get(key)
-        if cached and cached[0] > now and await self._check_status(cached[1], now):
-            self._mapping.move_to_end(key)
-            return cached[1]
-        # resolve_or_create 本身會檢查狀態並在停用時拋出例外
-        user_id, _ = await self._store.resolve_or_create(identity)
-        self._remember(key, user_id, now)
+        if await self._check_status(user_id, now):
+            return
+        # 沒有 user 或只剩墓碑：建立（store 會檢查狀態，停用時拋出例外）
+        await self._store.get_or_create_user(identity)
         self._status[user_id] = (now + STATUS_TTL_SECONDS, ACTIVE)
+
+    async def _sync_linked(self, user_id: str, linked: tuple[VerifiedIdentity, ...]) -> None:
+        """讓 identityLookup 跟上 Auth0 的綁定；同一個綁定 10 分鐘內只同步一次。"""
+        now = time.monotonic()
+        current: list[str] = []
+        changed = False
+        for provider in LINKED_PROVIDERS:
+            identity = next((item for item in linked if item.provider == provider), None)
+            # 已同步的狀態：綁定的身分（或「沒有綁定」）→ user
+            key = (
+                lookup_key(provider, identity.provider_user_id)
+                if identity
+                else f"unlinked:{provider}:{user_id}"
+            )
+            current.append(key)
+            if self._cached(key) == user_id:
+                continue
+            previous = await self._store.sync_identity(user_id, provider, identity)
+            if previous is not None:
+                self.forget_user(previous)
+            changed = True
+        if changed:
+            # 舊的綁定（含 webhook 查過的對應）還指向這個 user：全部清掉，只記住現在的狀態
+            self._forget_mappings(user_id)
+            for key in current:
+                self._remember(key, user_id, now)
+
+    async def find_line_user(self, line_user_id: str) -> str | None:
+        """
+        LINE webhook 的 userId（已由簽章驗證）→ 綁定它的 user；沒有綁定時回傳 None（不建立）。
+
+        帳號被封鎖或刪除中時拋出 AccountDisabledError。
+        """
+        key = lookup_key("line", line_user_id)
+        now = time.monotonic()
+        user_id = self._cached(key)
+        if user_id is None:
+            user_id = await self._store.find_user(
+                VerifiedIdentity(provider="line", provider_user_id=line_user_id)
+            )
+            if user_id is None:
+                return None
+            self._remember(key, user_id, now)
+        if not await self._check_status(user_id, now):
+            self._mapping.pop(key, None)
+            return None
         return user_id
 
-    async def resolve_line_user(self, line_user_id: str) -> str:
-        """LINE webhook 的 userId（已由簽章驗證）→ 內部 user id。"""
-        principal = await self.resolve(
-            VerifiedIdentity(provider="line", provider_user_id=line_user_id)
-        )
-        return principal.user_id
-
-    def forget(self, identity: VerifiedIdentity) -> None:
-        """解除連結後清掉本實例的快取。"""
-        self._mapping.pop(lookup_key(identity.provider, identity.provider_user_id), None)
+    def _cached(self, key: str) -> str | None:
+        cached = self._mapping.get(key)
+        if cached and cached[0] > time.monotonic():
+            self._mapping.move_to_end(key)
+            return cached[1]
+        return None
 
     def forget_user(self, user_id: str) -> None:
         """刪除資料後清掉本實例指向這個 user 的所有快取。"""
+        self._forget_mappings(user_id)
+        self._status.pop(user_id, None)
+
+    def _forget_mappings(self, user_id: str) -> None:
         for key in [k for k, (_, uid) in self._mapping.items() if uid == user_id]:
             del self._mapping[key]
-        self._status.pop(user_id, None)
 
     async def _check_status(self, user_id: str, now: float) -> bool:
         """
-        快取的對應是否仍可用。
+        user 是否存在且可用。
 
-        被封鎖或刪除中 → 拋出 AccountDisabledError；user 已刪除（墓碑或文件不存在）→ 回傳 False，
-        呼叫端改走 store 重新解析，同一個外部身分會得到全新的 user。
+        被封鎖或刪除中 → 拋出 AccountDisabledError；user 不存在或已刪除（墓碑）→ 回傳 False。
         """
         cached = self._status.get(user_id)
         if cached and cached[0] > now:

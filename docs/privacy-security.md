@@ -14,7 +14,7 @@
 
 ## 資安重點
 
-- **登入**：只採用 provider 驗證過的身分。LINE：verify endpoint 檢查 `aud`、`iss`。Auth0：只接受 RS256，檢查簽章（JWKS）、`iss`、`aud`（每個環境一個 API）、`exp`，以及 `azp` 必須是 chat 自己的 Application（同一個 tenant 的其他 Application 拿到的 token 不被接受）；前端不用 id_token 呼叫 API。顯示名稱與頭像只來自驗證過的 claims 或 `/userinfo`；未知的 provider 與無效 token 回同樣的 401。
+- **登入**：只有 Auth0 一條路（LINE 裡也經 Auth0 的 LINE 連線）。只接受 RS256，檢查簽章（JWKS）、`iss`、`aud`（每個環境一個 API）、`exp`、`azp` 必須是 chat 自己的 Application（同一個 tenant 的其他 Application 拿到的 token 不被接受），以及 post-login Action 放的 NTHUSA ID claim；前端不用 id_token 呼叫 API。聊天室不需要登入，沒有綁定 NTHUSA ID 的 LINE 使用者不會有任何個人資料，只計入每天的匿名總數。顯示名稱與頭像只來自驗證過的 claims 或 `/userinfo`；未知的 provider 與無效 token 回同樣的 401。
 - **瀏覽器的 Auth0 token**：refresh token 只放在同源 Web Worker 的記憶體（不存 localStorage），重新整理後以 Auth0 網域的隱藏 iframe 靜默取得；登入後只導回同源路徑，網址列不留 `code` / `state`。
 - **API**：CORS 只允許設定的前端網域且不帶 cookie；API 回應帶 `default-src 'none'`、`X-Frame-Options: DENY`；`docs_url` 等文件端點關閉。
 - **前端**：Hosting 設定嚴格 CSP（`connect-src` 只允許該環境的 API、LINE 與 Auth0 網域）；模型輸出經 DOMPurify 消毒，連結只允許 http(s) / mailto。

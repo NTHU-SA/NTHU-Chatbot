@@ -9,7 +9,7 @@
 
 - **校園查詢**：`@` 指令直接查 NTHU REST API v2；輸入「說明」、「help」或 `@說明` 查看依 `bot_config.yaml` 產生的指令清單。群組裡只用 `@` 指令，不讀取私人對話。
 - **AI 對話**：支援多個對話、串流回答、工具查詢過程與個人化記憶；使用前須同意隱私權政策，可在側欄「我的資料」修改或刪除資料。AI 回覆可能出錯，重要資訊請再確認。
-- **登入**：LINE 裡使用 LIFF / LINE Login，一般瀏覽器可用 Auth0；目前兩種登入是不同的內部帳號，對話不互通。
+- **登入**：以 NTHUSA ID（學生會的 Auth0）登入，LINE 裡經 Auth0 的 LINE 連線、一般瀏覽器走 Universal Login，兩邊是同一個帳號。聊天室的 `@` 指令不需要登入。
 - **介面**：網頁與 LINE Flex 共用 Soft Glass 視覺語言；網頁支援跟隨系統、淺色與深色外觀。
 
 | 層次 | 技術 |
@@ -33,7 +33,7 @@ if (-not (Test-Path frontend\config.json)) { Copy-Item frontend\config.example.j
 
 填入 `.env` 的 LINE、LIFF 與 LLM 設定；沒有 GCP 憑證時改用 `CHAT_STORE=memory`（資料不保存），
 並設 `CORS_ALLOWED_ORIGINS=http://localhost:5500`。
-在 `frontend/config.json` 填入 LIFF ID 與 `apiBase`（本機為 `http://localhost:5000`）。
+在 `frontend/config.json` 填入 LIFF ID、`apiBase`（本機為 `http://localhost:5000`）與 `auth0`（與 `.env` 的 Auth0 設定相同）。
 兩份本機設定都已被 Git 排除，不要提交。
 
 ```powershell

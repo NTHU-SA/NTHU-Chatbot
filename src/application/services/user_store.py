@@ -1,12 +1,12 @@
 """
 使用者與外部身分儲存介面。
 
-`UserStore` 管理 `users/{uid}`、`users/{uid}/identities/*`、`identityLookup/*` 與每日額度；
+`UserStore` 管理 `users/{NTHUSA ID}`、`users/{uid}/identities/*`、`identityLookup/*` 與每日額度；
 `MemoryUserStore` 供測試與本機開發，規則與 Firestore 實作一致：
 
-- 外部身分 → 內部 user 的對應只能以「建立」寫入：同一個外部身分不可能屬於兩個 user。
-- 連結第二個身分只能明確進行（呼叫端必須同時驗證過兩個身分），絕不以 email、名稱或學號自動合併。
-- 至少保留一個身分；連結與解除都會寫稽核紀錄。
+- user 只由驗證過的 NTHUSA ID 建立（`get_or_create_user`），同一個 ID 並行進來也只會建立一次。
+- LINE 這類外部身分只跟著 Auth0 的綁定走（`sync_identity`，以 IdP 為準）：同一個外部身分同時只對應
+  一個 user，絕不以 email、名稱或學號自動合併；每次變動都寫稽核紀錄。
 """
 
 from __future__ import annotations
@@ -19,14 +19,12 @@ from src.application.models.identity import (
     ACTIVE,
     DELETED,
     DELETING,
+    REUSE_AFTER_DELETION,
     AccountDisabledError,
-    IdentityConflictError,
-    LastIdentityError,
     Principal,
     VerifiedIdentity,
     consent_doc_id,
     lookup_key,
-    new_user_id,
 )
 from src.application.models.profile import (
     MAX_MEMORIES,
@@ -39,23 +37,31 @@ from src.application.services.chat_store import new_id, now_utc
 
 
 class UserStore(Protocol):
-    async def resolve_or_create(self, identity: VerifiedIdentity) -> tuple[str, bool]:
+    async def get_or_create_user(self, identity: VerifiedIdentity) -> bool:
         """
-        外部身分 → 內部 user id；沒有就建立 user、identity 與 lookup（同一個交易）。
+        NTHUSA ID 的 user（`users/{identity.provider_user_id}`）；沒有就建立，回傳是否新建立。
 
-        回傳 (user_id, created)。帳號被封鎖或刪除中時拋出 AccountDisabledError（帶 status）；
-        已刪除（墓碑）的 user 視為不存在，建立全新的 user。
+        帳號被封鎖、刪除中，或刪除完成還不到 REUSE_AFTER_DELETION 時拋出 AccountDisabledError
+        （帶 status）；更早刪除的墓碑換成全新的空白 user。
         """
         ...
 
     async def get_status(self, user_id: str) -> str | None: ...
 
-    async def link_identity(self, user_id: str, identity: VerifiedIdentity) -> None:
-        """把另一個已驗證的外部身分連結到既有 user；已屬於別人時拋出 IdentityConflictError。"""
+    async def find_user(self, identity: VerifiedIdentity) -> str | None:
+        """外部身分（LINE）目前對應的 user，不建立；沒有對應或 user 已刪除時回傳 None。"""
         ...
 
-    async def unlink_identity(self, user_id: str, provider: str) -> None:
-        """解除連結；只剩一個身分時拋出 LastIdentityError。"""
+    async def sync_identity(
+        self, user_id: str, provider: str, identity: VerifiedIdentity | None
+    ) -> str | None:
+        """
+        讓這個 user 的 `provider` 身分和 IdP 一致（同一個交易）。
+
+        `identity` 為 None：IdP 已解除綁定，移除這個 user 的該身分與它的 lookup。
+        否則把身分對應到這個 user，取代它原本的同 provider 身分；身分原本屬於別的 user 時，
+        從那個 user 移除並回傳它的 id。其餘情況回傳 None。
+        """
         ...
 
     async def touch_activity(self, user_id: str) -> None: ...
@@ -63,14 +69,6 @@ class UserStore(Protocol):
     async def record_login(self, user: Principal, metadata: dict[str, Any] | None = None) -> None:
         """更新顯示資料（只採用驗證過的 claims）、登入時間與 provider 專屬 metadata。"""
         ...
-
-    async def update_identity_metadata(
-        self, user_id: str, provider: str, metadata: dict[str, Any]
-    ) -> None:
-        """合併寫入 provider 專屬資料（例如 LINE 的 followed）。"""
-        ...
-
-    async def record_module_use(self, user_id: str, module_id: str) -> None: ...
 
     async def consume_daily_quota(self, user_id: str, limit: int) -> bool:
         """計入今日一則 LLM 訊息；超過上限時回傳 False。"""
@@ -118,7 +116,8 @@ class UserStore(Protocol):
         """
         刪除這個 user 的所有資料：子集合、外部身分與 lookup；user 文件換成不含個資的墓碑。
 
-        之後同一個 LINE 帳號再登入會得到全新的 user。對話由 ChatStore 另外刪除。
+        之後同一個 NTHUSA ID 再登入會得到全新的 user（見 REUSE_AFTER_DELETION）。
+        對話由 ChatStore 另外刪除。
         沒有全部刪除時拋出 DeletionIncompleteError，帳號維持 deleting。
         """
         ...
@@ -154,17 +153,17 @@ class MemoryUserStore:
         if status != ACTIVE:
             raise AccountDisabledError(user_id, status)
 
-    async def resolve_or_create(self, identity: VerifiedIdentity) -> tuple[str, bool]:
-        key = lookup_key(identity.provider, identity.provider_user_id)
+    async def get_or_create_user(self, identity: VerifiedIdentity) -> bool:
+        user_id = identity.provider_user_id
         async with self._lock:
-            owner = self.users.get(self.lookup.get(key, ""))
-            if owner is not None and owner.get("status") != DELETED:
-                user_id = self.lookup[key]
-                self._check_active(user_id)
-                return user_id, False
-            user_id = new_user_id()
+            user = self.users.get(user_id)
             now = now_utc()
-            self.lookup[key] = user_id
+            if user is not None:
+                if user.get("status") != DELETED:
+                    self._check_active(user_id)
+                    return False
+                if now - user["deletedAt"] < REUSE_AFTER_DELETION:
+                    raise AccountDisabledError(user_id, DELETED)
             self.users[user_id] = {
                 "status": "active",
                 "displayName": identity.display_name,
@@ -174,47 +173,62 @@ class MemoryUserStore:
             }
             self.identities[user_id][identity.provider] = {
                 "provider": identity.provider,
-                "providerUserId": identity.provider_user_id,
+                "providerUserId": user_id,
                 "linkedAt": now,
                 "metadata": {},
             }
-            day, count = self.quota_carryover.get(key, ("", 0))
+            day, count = self.quota_carryover.get(lookup_key(identity.provider, user_id), ("", 0))
             if day == now.strftime("%Y-%m-%d"):
                 self._usage[(user_id, day)] = count
-            return user_id, True
+            return True
 
     async def get_status(self, user_id: str) -> str | None:
         user = self.users.get(user_id)
         return user.get("status") if user else None
 
-    async def link_identity(self, user_id: str, identity: VerifiedIdentity) -> None:
-        key = lookup_key(identity.provider, identity.provider_user_id)
+    async def find_user(self, identity: VerifiedIdentity) -> str | None:
+        user_id = self.lookup.get(lookup_key(identity.provider, identity.provider_user_id))
+        status = self.users.get(user_id or "", {}).get("status")
+        return user_id if status not in (None, DELETED) else None
+
+    async def sync_identity(self, user_id, provider, identity) -> str | None:
         async with self._lock:
             self._check_active(user_id)
-            owner = self.lookup.get(key)
-            if owner == user_id:
-                return
-            if owner is not None or identity.provider in self.identities[user_id]:
-                raise IdentityConflictError(identity.provider)
+            own = self.identities[user_id].get(provider)
+            new_id = identity.provider_user_id if identity else None
+            key = lookup_key(provider, new_id) if new_id else None
+            if (
+                own is not None
+                and own["providerUserId"] == new_id
+                and self.lookup.get(key) == user_id
+            ):
+                return None
+            if own is not None:
+                old_key = lookup_key(provider, own["providerUserId"])
+                if self.lookup.get(old_key) == user_id:
+                    del self.lookup[old_key]
+                del self.identities[user_id][provider]
+                if new_id is None:
+                    self.audit[user_id].append({"action": "unlink", "provider": provider})
+            if new_id is None:
+                return None
+            previous = self.lookup.get(key)
+            if previous == user_id:
+                previous = None
+            if previous is not None:
+                record = self.identities[previous].get(provider)
+                if record and record["providerUserId"] == new_id:
+                    del self.identities[previous][provider]
+                    self.audit[previous].append({"action": "unlink", "provider": provider})
             self.lookup[key] = user_id
-            self.identities[user_id][identity.provider] = {
-                "provider": identity.provider,
-                "providerUserId": identity.provider_user_id,
+            self.identities[user_id][provider] = {
+                "provider": provider,
+                "providerUserId": new_id,
                 "linkedAt": now_utc(),
                 "metadata": {},
             }
-            self.audit[user_id].append({"action": "link", "provider": identity.provider})
-
-    async def unlink_identity(self, user_id: str, provider: str) -> None:
-        async with self._lock:
-            linked = self.identities[user_id]
-            if provider not in linked:
-                return
-            if len(linked) <= 1:
-                raise LastIdentityError(provider)
-            record = linked.pop(provider)
-            self.lookup.pop(lookup_key(provider, record["providerUserId"]), None)
-            self.audit[user_id].append({"action": "unlink", "provider": provider})
+            self.audit[user_id].append({"action": "link", "provider": provider})
+            return previous
 
     async def touch_activity(self, user_id: str) -> None:
         if user_id in self.users:
@@ -225,28 +239,10 @@ class MemoryUserStore:
             self.users[user.user_id].update(
                 displayName=user.display_name, pictureUrl=user.picture_url
             )
-        await self.update_identity_metadata(
-            user.user_id,
-            user.provider,
-            {
-                "displayName": user.display_name,
-                "pictureUrl": user.picture_url,
-                **(metadata or {}),
-            },
-        )
-
-    async def update_identity_metadata(self, user_id, provider, metadata) -> None:
-        record = self.identities[user_id].get(provider)
+        record = self.identities[user.user_id].get(user.provider)
         if record is not None:
-            record["metadata"] = _merge(record.get("metadata", {}), metadata)
-
-    async def record_module_use(self, user_id: str, module_id: str) -> None:
-        now = now_utc()
-        state = self.module_states[user_id].setdefault(module_id, {"usageCount": 0})
-        state["usageCount"] += 1
-        state["lastUsedAt"] = now
-        if user_id in self.users:
-            self.users[user_id].update(lastModuleId=module_id, lastModuleUsedAt=now)
+            shown = {"displayName": user.display_name, "pictureUrl": user.picture_url}
+            record["metadata"] = _merge(record.get("metadata", {}), {**shown, **(metadata or {})})
 
     async def consume_daily_quota(self, user_id: str, limit: int) -> bool:
         key = (user_id, now_utc().strftime("%Y-%m-%d"))
@@ -328,4 +324,4 @@ class MemoryUserStore:
                 store.pop(user_id, None)
             for key in [k for k in self._usage if k[0] == user_id]:
                 del self._usage[key]
-            self.users[user_id] = {"status": DELETED}
+            self.users[user_id] = {"status": DELETED, "deletedAt": now_utc()}

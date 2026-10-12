@@ -2,7 +2,7 @@
 這個目錄包含整個 line bot 的主要程式碼。
 - `routes`: 處理 API 請求，包含 `/callback`（LINE webhook）、`/api/*`（LIFF 對話）與 `/ping`
 - `handlers`: 聊天室內的 `@` 指令路由
-- `auth`: 登入 token 驗證（LIFF 用 LINE、一般瀏覽器用 Auth0）、外部身分 → 內部 user、限流
+- `auth`: 登入 token 驗證（LIFF 與一般瀏覽器都經 Auth0，身分是 NTHUSA ID）、LINE 綁定的對應、限流
 - `middleware`: 安全標頭
 LIFF 前端在 repo 根目錄的 `frontend/`，由 Firebase Hosting 提供，透過 CORS 呼叫這裡的 API。
 """
@@ -18,17 +18,18 @@ from linebot.v3.webhook import WebhookParser
 from loguru import logger
 
 from src.app.auth.auth0 import Auth0Authenticator
-from src.app.auth.line import LineLiffAuthenticator
 from src.app.auth.rate_limit import RateLimiter
 from src.app.auth.service import IdentityService
 from src.application.services.chat_store import MemoryChatStore
 from src.application.services.departments import DepartmentDirectory
 from src.application.services.module_registry import StaticModuleRegistry
+from src.application.services.usage_stats import MemoryUsageStats
 from src.application.services.user_store import MemoryUserStore
 from src.core.config import Settings, parse_cors_origins
 from src.infrastructure.ai.agent_runner import AgentRunner
 from src.infrastructure.firebase.chat_store import FirestoreChatStore
 from src.infrastructure.firebase.module_registry import FirestoreModuleRegistry
+from src.infrastructure.firebase.usage_stats import FirestoreUsageStats
 from src.infrastructure.firebase.user_store import FirestoreUserStore
 
 
@@ -47,13 +48,14 @@ async def lifespan(app: FastAPI):
     if settings.chat_store == "memory":
         logger.warning("Using in-memory chat store (data is NOT persisted)")
         store, user_store = MemoryChatStore(), MemoryUserStore()
-        module_registry = StaticModuleRegistry()
+        module_registry, usage_stats = StaticModuleRegistry(), MemoryUsageStats()
     else:
         database = firestore.AsyncClient(
             project=settings.google_cloud_project, database=settings.firestore_database
         )
         store, user_store = FirestoreChatStore(database), FirestoreUserStore(database)
         module_registry = FirestoreModuleRegistry(database)
+        usage_stats = FirestoreUsageStats(database)
 
     runner = AgentRunner(settings)
     try:
@@ -68,13 +70,15 @@ async def lifespan(app: FastAPI):
             app.state.store = store
             app.state.user_store = user_store
             app.state.module_registry = module_registry
+            app.state.usage_stats = usage_stats
             app.state.identity_service = IdentityService(user_store)
             app.state.departments = DepartmentDirectory(_fetch_departments)
-            # 新增登入方式時在這裡註冊；provider 名稱即前端 X-Auth-Provider 的值
-            app.state.authenticators = {
-                "line": LineLiffAuthenticator(settings.line_login_channel_id, http),
-            }
-            if settings.auth0_domain:
+            # 登入只有 Auth0 一條路（LIFF 也經 Auth0 的 LINE 連線），provider 名稱即前端
+            # X-Auth-Provider 的值。沒設定 Auth0 時 /api 一律 401，webhook 與 /ping 照常運作
+            app.state.authenticators = {}
+            if not settings.auth0_domain:
+                logger.warning("Auth0 is not configured; all /api requests will be rejected")
+            else:
                 app.state.authenticators["auth0"] = Auth0Authenticator(
                     settings.auth0_domain, settings.auth0_audience, settings.auth0_client_id, http
                 )

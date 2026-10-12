@@ -2,16 +2,16 @@
 Firestore 使用者與外部身分儲存。
 
 資料結構（欄位名稱依 firebase.spec）：
-  identityLookup/{sha256(provider:id)}      userId / provider / createdAt
+  identityLookup/{sha256(provider:id)}      userId / provider / createdAt（只有 LINE 這類綁定的外部身分）
   quotaCarryover/{sha256(provider:id)}      day / count / expiresAt（TTL）：刪除帳號時保留當日用量，防止重建帳號繞過上限
-  users/{uid}                               status / displayName / pictureUrl / createdAt / updatedAt /
-                                            lastActiveAt / lastConversationId / lastModuleId /
-                                            lastModuleUsedAt / conversationCount
+  users/{uid}                               uid 是 NTHUSA ID（usr_<ULID>）
+                                            status / displayName / pictureUrl / createdAt / updatedAt /
+                                            lastActiveAt / lastConversationId / conversationCount
                                             （刪除後只剩墓碑：status=deleted / deletedAt / expiresAt（TTL））
   users/{uid}/identities/{provider}         provider / providerUserId / linkedAt / lastLoginAt /
-                                            updatedAt / metadata{provider 專屬欄位}
+                                            updatedAt / metadata{provider 專屬欄位}（nthusa、line）
   users/{uid}/auditLog/{id}                 action / provider / at / expiresAt（TTL）
-  users/{uid}/moduleStates/{moduleId}       lastUsedAt / usageCount / updatedAt
+  users/{uid}/moduleStates/onboarding       state / updatedAt
   users/{uid}/usage/{YYYY-MM-DD}            count / expiresAt（TTL）
   users/{uid}/consents/{type}_v{version}    type / version / status / acceptedAt / source
   users/{uid}/preferences/{key}             value / source(user|assistant) / updatedAt（nickname、department）
@@ -37,15 +37,13 @@ from src.application.models.identity import (
     ACTIVE,
     DELETED,
     DELETING,
+    REUSE_AFTER_DELETION,
     AccountDisabledError,
     DeletionIncompleteError,
-    IdentityConflictError,
-    LastIdentityError,
     Principal,
     VerifiedIdentity,
     consent_doc_id,
     lookup_key,
-    new_user_id,
 )
 from src.application.models.profile import (
     MAX_MEMORIES,
@@ -93,10 +91,10 @@ class FirestoreUserStore:
         return self._user(user_id).collection("auditLog").document(new_id())
 
     @staticmethod
-    def _identity_payload(identity: VerifiedIdentity) -> dict:
+    def _identity_payload(provider: str, provider_user_id: str) -> dict:
         return {
-            "provider": identity.provider,
-            "providerUserId": identity.provider_user_id,
+            "provider": provider,
+            "providerUserId": provider_user_id,
             "linkedAt": firestore.SERVER_TIMESTAMP,
             "lastLoginAt": firestore.SERVER_TIMESTAMP,
             "updatedAt": firestore.SERVER_TIMESTAMP,
@@ -115,74 +113,74 @@ class FirestoreUserStore:
         return payload
 
     # -- resolve --
-    async def resolve_or_create(self, identity: VerifiedIdentity) -> tuple[str, bool]:
-        lookup = self._lookup(identity.provider, identity.provider_user_id)
-        snapshot = await lookup.get()
+    async def get_or_create_user(self, identity: VerifiedIdentity) -> bool:
+        user_id = identity.provider_user_id
+        user = self._user(user_id)
+        snapshot = await user.get(field_paths=["status", "deletedAt"])
+        tombstone = None
         if snapshot.exists:
-            user_id = snapshot.get("userId")
-            status = await self.get_status(user_id)
-            if status not in (None, DELETED):
+            data = snapshot.to_dict() or {}
+            status = data.get("status", ACTIVE)
+            if status != DELETED:
                 if status != ACTIVE:
                     raise AccountDisabledError(user_id, status)
-                return user_id, False
-            # 指向的 user 已刪除（只剩墓碑或文件不存在）：移除過期的 lookup，建立新的 user
-            try:
-                await lookup.delete(
-                    option=self._db.write_option(last_update_time=snapshot.update_time)
-                )
-            except FailedPrecondition, NotFound:
-                pass
+                return False
+            deleted_at = data.get("deletedAt")
+            if deleted_at is None or now_utc() - deleted_at < REUSE_AFTER_DELETION:
+                raise AccountDisabledError(user_id, DELETED)
+            tombstone = snapshot
         try:
-            return await self._create(identity, lookup)
-        except AlreadyExists, Conflict:
-            # 另一個請求剛好同時建立了同一個身分：沿用它建立的 user
-            snapshot = await lookup.get()
-            user_id = snapshot.get("userId")
+            await self._create(identity, tombstone)
+        except AlreadyExists, Conflict, FailedPrecondition, NotFound:
+            # 另一個請求剛好同時建立了同一個 user（沿用它），或墓碑剛好被 TTL 刪掉（重新建立）
+            if await self.get_status(user_id) is None:
+                await self._create(identity, None)
+                return True
             await self._ensure_active(user_id)
-            return user_id, False
+            return False
+        return True
 
-    async def _create(self, identity: VerifiedIdentity, lookup) -> tuple[str, bool]:
+    async def _create(self, identity: VerifiedIdentity, tombstone) -> None:
         """
-        一次原子 batch 寫入 lookup、user 與 identity，全部用 `create()`（文件已存在就失敗）。
+        一次原子 batch 寫入 user 與它的 NTHUSA identity。
 
-        不用「先讀再寫」的交易：同一個身分的多個並行請求會互卡讀鎖升級。
-        lookup 已被別人建立時整批都不會寫入，由呼叫端讀回既有的 user。
+        沒有文件時用 `create()`、取代墓碑時以墓碑的 update_time 為前提更新：並行的請求只有一個會成功，
+        其他的失敗後讀回既有的 user。不用「先讀再寫」的交易：同一個 user 的並行請求會互卡讀鎖升級。
         """
-        user_id = new_user_id()
+        user_id = identity.provider_user_id
         user = self._user(user_id)
+        payload = {
+            "status": ACTIVE,
+            "displayName": identity.display_name,
+            "pictureUrl": identity.picture_url,
+            "createdAt": firestore.SERVER_TIMESTAMP,
+            "updatedAt": firestore.SERVER_TIMESTAMP,
+            "lastActiveAt": firestore.SERVER_TIMESTAMP,
+            "conversationCount": 0,
+        }
         batch = self._db.batch()
-        batch.create(
-            lookup,
-            {
-                "userId": user_id,
-                "provider": identity.provider,
-                "createdAt": firestore.SERVER_TIMESTAMP,
-            },
+        if tombstone is None:
+            batch.create(user, payload)
+        else:
+            # 墓碑的 deletedAt / expiresAt（TTL）一併清掉
+            payload.update(deletedAt=firestore.DELETE_FIELD, expiresAt=firestore.DELETE_FIELD)
+            batch.update(
+                user, payload, option=self._db.write_option(last_update_time=tombstone.update_time)
+            )
+        batch.set(
+            self._identity(user_id, identity.provider),
+            self._identity_payload(identity.provider, user_id),
         )
-        batch.create(
-            user,
-            {
-                "status": "active",
-                "displayName": identity.display_name,
-                "pictureUrl": identity.picture_url,
-                "createdAt": firestore.SERVER_TIMESTAMP,
-                "updatedAt": firestore.SERVER_TIMESTAMP,
-                "lastActiveAt": firestore.SERVER_TIMESTAMP,
-                "conversationCount": 0,
-            },
-        )
-        batch.create(self._identity(user_id, identity.provider), self._identity_payload(identity))
-        # 同一個外部身分今天刪除過帳號：沿用當天已用的額度
-        carried = await self._carryover(lookup.id).get()
+        # 同一個 NTHUSA ID 今天刪除過帳號：沿用當天已用的額度
+        carried = await self._carryover(lookup_key(identity.provider, user_id)).get()
         today = now_utc()
         data = carried.to_dict() or {}
         if carried.exists and data.get("day") == today.strftime("%Y-%m-%d"):
-            batch.create(
+            batch.set(
                 self._usage(user_id, data["day"]),
                 {"count": int(data.get("count", 0)), "expiresAt": today + USAGE_RETENTION},
             )
         await batch.commit()
-        return user_id, True
 
     async def _ensure_active(self, user_id: str) -> None:
         status = await self.get_status(user_id)
@@ -195,56 +193,75 @@ class FirestoreUserStore:
             return None
         return (snapshot.to_dict() or {}).get("status", "active")
 
-    # -- linking --
-    async def link_identity(self, user_id: str, identity: VerifiedIdentity) -> None:
+    # -- linked identities --
+    async def find_user(self, identity: VerifiedIdentity) -> str | None:
+        snapshot = await self._lookup(identity.provider, identity.provider_user_id).get()
+        if not snapshot.exists:
+            return None
+        user_id = snapshot.get("userId")
+        return user_id if await self.get_status(user_id) not in (None, DELETED) else None
+
+    async def sync_identity(
+        self, user_id: str, provider: str, identity: VerifiedIdentity | None
+    ) -> str | None:
         user = self._user(user_id)
-        lookup = self._lookup(identity.provider, identity.provider_user_id)
-        identity_ref = self._identity(user_id, identity.provider)
+        identity_ref = self._identity(user_id, provider)
+        new_id = identity.provider_user_id if identity else None
+        lookup = self._lookup(provider, new_id) if new_id else None
 
         @firestore.async_transactional
-        async def link(transaction):
+        async def sync(transaction) -> str | None:
+            # 交易內必須先讀完再寫
             user_snapshot = await user.get(transaction=transaction)
-            lookup_snapshot = await lookup.get(transaction=transaction)
-            identity_snapshot = await identity_ref.get(transaction=transaction)
+            own = await identity_ref.get(transaction=transaction)
             status = (user_snapshot.to_dict() or {}).get("status") if user_snapshot.exists else None
             if status != ACTIVE:
                 raise AccountDisabledError(user_id, status)
-            if lookup_snapshot.exists:
-                if lookup_snapshot.get("userId") == user_id:
-                    return
-                # 不透露屬於哪個 user
-                raise IdentityConflictError(identity.provider)
-            if identity_snapshot.exists:
-                raise IdentityConflictError(identity.provider)
-            transaction.create(
+            own_id = (own.to_dict() or {}).get("providerUserId") if own.exists else None
+            # 這個 user 原本連結的同 provider 身分：移除它指向自己的 lookup
+            stale_lookup = None
+            if own_id and own_id != new_id:
+                candidate = self._lookup(provider, own_id)
+                snapshot = await candidate.get(transaction=transaction)
+                if snapshot.exists and snapshot.get("userId") == user_id:
+                    stale_lookup = candidate
+            previous = previous_ref = previous_snapshot = None
+            if lookup is not None:
+                lookup_snapshot = await lookup.get(transaction=transaction)
+                previous = lookup_snapshot.get("userId") if lookup_snapshot.exists else None
+                if previous == user_id and own_id == new_id:
+                    return None
+                if previous == user_id:
+                    previous = None
+                if previous:
+                    previous_ref = self._identity(previous, provider)
+                    previous_snapshot = await previous_ref.get(transaction=transaction)
+
+            if stale_lookup is not None:
+                transaction.delete(stale_lookup)
+            if lookup is None:
+                if own.exists:
+                    transaction.delete(identity_ref)
+                    transaction.create(
+                        self._audit(user_id), self._audit_payload("unlink", provider)
+                    )
+                return None
+            if (
+                previous_snapshot is not None
+                and previous_snapshot.exists
+                and previous_snapshot.get("providerUserId") == new_id
+            ):
+                transaction.delete(previous_ref)
+                transaction.create(self._audit(previous), self._audit_payload("unlink", provider))
+            transaction.set(
                 lookup,
-                {
-                    "userId": user_id,
-                    "provider": identity.provider,
-                    "createdAt": firestore.SERVER_TIMESTAMP,
-                },
+                {"userId": user_id, "provider": provider, "createdAt": firestore.SERVER_TIMESTAMP},
             )
-            transaction.create(identity_ref, self._identity_payload(identity))
-            transaction.create(self._audit(user_id), self._audit_payload("link", identity.provider))
+            transaction.set(identity_ref, self._identity_payload(provider, new_id))
+            transaction.create(self._audit(user_id), self._audit_payload("link", provider))
+            return previous
 
-        await link(self._db.transaction(max_attempts=TRANSACTION_ATTEMPTS))
-
-    async def unlink_identity(self, user_id: str, provider: str) -> None:
-        identities = self._user(user_id).collection("identities")
-
-        @firestore.async_transactional
-        async def unlink(transaction):
-            linked = {doc.id: doc async for doc in identities.stream(transaction=transaction)}
-            if provider not in linked:
-                return
-            if len(linked) <= 1:
-                raise LastIdentityError(provider)
-            record = linked[provider].to_dict() or {}
-            transaction.delete(linked[provider].reference)
-            transaction.delete(self._lookup(provider, record["providerUserId"]))
-            transaction.create(self._audit(user_id), self._audit_payload("unlink", provider))
-
-        await unlink(self._db.transaction(max_attempts=TRANSACTION_ATTEMPTS))
+        return await sync(self._db.transaction(max_attempts=TRANSACTION_ATTEMPTS))
 
     # -- activity --
     async def _undo_if_deleted(self, user_id: str, *refs, user_fields=()) -> bool:
@@ -299,36 +316,6 @@ class FirestoreUserStore:
             user.user_id,
             self._identity(user.user_id, user.provider),
             user_fields=("displayName", "pictureUrl", "lastActiveAt", "updatedAt"),
-        )
-
-    async def update_identity_metadata(self, user_id, provider, metadata) -> None:
-        reference = self._identity(user_id, provider)
-        await reference.set(
-            {"metadata": metadata, "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True
-        )
-        await self._undo_if_deleted(user_id, reference)
-
-    async def record_module_use(self, user_id: str, module_id: str) -> None:
-        batch = self._db.batch()
-        batch.set(
-            self._user(user_id).collection("moduleStates").document(module_id),
-            {
-                "lastUsedAt": firestore.SERVER_TIMESTAMP,
-                "usageCount": firestore.Increment(1),
-                "updatedAt": firestore.SERVER_TIMESTAMP,
-            },
-            merge=True,
-        )
-        batch.set(
-            self._user(user_id),
-            {"lastModuleId": module_id, "lastModuleUsedAt": firestore.SERVER_TIMESTAMP},
-            merge=True,
-        )
-        await batch.commit()
-        await self._undo_if_deleted(
-            user_id,
-            self._user(user_id).collection("moduleStates").document(module_id),
-            user_fields=("lastModuleId", "lastModuleUsedAt"),
         )
 
     # -- quota --
@@ -486,8 +473,9 @@ class FirestoreUserStore:
         刪除 user 的所有資料（呼叫前先 `begin_deletion`，對話由 ChatStore 另外刪除）。
 
         1. 清除外部身分以外的所有子集合，並確認真的清空；
-        2. 同一個 batch 刪除外部身分與它的 lookup：之後同一個 LINE 帳號登入會是全新的 user；
-        3. user 文件換成不含個資的墓碑（status=deleted，TTL 自動消失）；
+        2. 同一個 batch 刪除外部身分與它的 lookup：webhook 不再對到這個 user；
+        3. user 文件換成不含個資的墓碑（status=deleted，TTL 自動消失）：REUSE_AFTER_DELETION 之後
+           同一個 NTHUSA ID 再登入，會在同一個 key 重建全新的 user；
         4. 再清一次：墓碑之前還在進行的寫入會在這裡被刪掉，之後的寫入會自己撤銷（`_undo_if_deleted`）。
         任何一步沒清乾淨就拋出 DeletionIncompleteError。
         """

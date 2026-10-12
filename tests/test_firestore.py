@@ -5,6 +5,7 @@ Firestore 實作的測試。
 """
 
 import asyncio
+import secrets
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
@@ -15,10 +16,10 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 
 from src.application.models.chat import MessageMeta, TokenUsage, ToolCall
 from src.application.models.identity import (
+    NTHUSA_PROVIDER,
+    REUSE_AFTER_DELETION,
     AccountDisabledError,
     DeletionIncompleteError,
-    IdentityConflictError,
-    LastIdentityError,
     Principal,
     VerifiedIdentity,
     lookup_key,
@@ -26,6 +27,7 @@ from src.application.models.identity import (
 from src.application.services.chat_store import MAX_SESSIONS_PER_USER
 from src.infrastructure.firebase.chat_store import FirestoreChatStore
 from src.infrastructure.firebase.module_registry import FirestoreModuleRegistry
+from src.infrastructure.firebase.usage_stats import FirestoreUsageStats
 from src.infrastructure.firebase.user_store import FirestoreUserStore
 
 PROJECT = "demo-nthu-chatbot"
@@ -93,16 +95,31 @@ def chats(db):
     return FirestoreChatStore(db)
 
 
-def identity(provider="line", display_name="測試者") -> VerifiedIdentity:
-    """每個測試用隨機的外部 ID，避免互相干擾。"""
+CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+
+def nthusa(display_name="測試者") -> VerifiedIdentity:
+    """每個測試用隨機的 NTHUSA ID，避免互相干擾。"""
+    usr = "usr_" + "".join(secrets.choice(CROCKFORD) for _ in range(26))
     return VerifiedIdentity(
-        provider=provider, provider_user_id="U" + uuid4().hex, display_name=display_name
+        provider=NTHUSA_PROVIDER, provider_user_id=usr, display_name=display_name
     )
 
 
+def line() -> VerifiedIdentity:
+    return VerifiedIdentity(provider="line", provider_user_id="U" + uuid4().hex)
+
+
 async def new_user(users) -> str:
-    user_id, _ = await users.resolve_or_create(identity())
-    return user_id
+    who = nthusa()
+    await users.get_or_create_user(who)
+    return who.provider_user_id
+
+
+async def age_tombstone(db, user_id):
+    """模擬刪除已超過 REUSE_AFTER_DELETION。"""
+    long_ago = datetime.now(UTC) - REUSE_AFTER_DELETION - timedelta(minutes=1)
+    await db.document(f"users/{user_id}").update({"deletedAt": long_ago})
 
 
 async def owned_ids(db, user_id) -> set[str]:
@@ -117,93 +134,118 @@ async def doc(db, path) -> dict | None:
 
 # users / identities
 @pytest.mark.firestore
-async def test_first_contact_writes_user_identity_and_hashed_lookup(db, users):
-    who = identity()
-    user_id, created = await users.resolve_or_create(who)
-    assert created
-    assert user_id.startswith("usr_")
+async def test_first_login_writes_the_user_under_its_nthusa_id(db, users):
+    who = nthusa()
+    user_id = who.provider_user_id
+    assert await users.get_or_create_user(who)
 
-    lookup = await doc(db, f"identityLookup/{lookup_key('line', who.provider_user_id)}")
-    assert lookup["userId"] == user_id
-    assert who.provider_user_id not in str(lookup)  # 原始外部 ID 不存在 lookup
     user = await doc(db, f"users/{user_id}")
     assert user["status"] == "active"
     assert user["displayName"] == "測試者"
     assert user["conversationCount"] == 0
-    line = await doc(db, f"users/{user_id}/identities/line")
-    assert line["providerUserId"] == who.provider_user_id
+    record = await doc(db, f"users/{user_id}/identities/nthusa")
+    assert record["providerUserId"] == user_id
+    # NTHUSA ID 本身就是 key，不需要 lookup
+    assert await doc(db, f"identityLookup/{lookup_key('nthusa', user_id)}") is None
 
-    again, created = await users.resolve_or_create(who)
-    assert (again, created) == (user_id, False)
+    assert not await users.get_or_create_user(who)
 
 
 @pytest.mark.firestore
-async def test_concurrent_first_contact_across_clients_creates_one_user(users):
-    who = identity()
+async def test_concurrent_first_login_across_clients_creates_one_user(users):
+    who = nthusa()
     clients = [firestore.AsyncClient(project=PROJECT) for _ in range(5)]
     try:
         results = await asyncio.gather(
-            *(FirestoreUserStore(c).resolve_or_create(who) for c in clients)
+            *(FirestoreUserStore(c).get_or_create_user(who) for c in clients)
         )
     finally:
         for c in clients:
             c.close()
-    assert len({user_id for user_id, _ in results}) == 1
-    assert sum(created for _, created in results) == 1
+    assert sum(results) == 1
 
 
 @pytest.mark.firestore
-async def test_blocked_user_cannot_resolve(db, users):
-    who = identity()
-    user_id, _ = await users.resolve_or_create(who)
-    await db.document(f"users/{user_id}").update({"status": "blocked"})
+async def test_blocked_user_cannot_log_in(db, users):
+    who = nthusa()
+    await users.get_or_create_user(who)
+    await db.document(f"users/{who.provider_user_id}").update({"status": "blocked"})
     with pytest.raises(AccountDisabledError):
-        await users.resolve_or_create(who)
-    assert await users.get_status(user_id) == "blocked"
+        await users.get_or_create_user(who)
+    assert await users.get_status(who.provider_user_id) == "blocked"
 
 
 @pytest.mark.firestore
-async def test_linking_rules(db, users):
-    alice = await new_user(users)
-    bob = await new_user(users)
-    google = identity(provider="google")
+async def test_sync_identity_follows_the_idp(db, users):
+    """LINE 以 Auth0 為準：綁了就對應過來（從原本的 user 移走），換綁取代，解除就移除。"""
+    alice, bob = await new_user(users), await new_user(users)
+    line_1, line_2 = line(), line()
+    assert await users.find_user(line_1) is None
 
-    await users.link_identity(alice, google)
-    assert (await users.resolve_or_create(google))[0] == alice
-    with pytest.raises(IdentityConflictError):
-        await users.link_identity(bob, google)  # 已屬於 alice
-    with pytest.raises(IdentityConflictError):
-        await users.link_identity(alice, identity())  # alice 已有 line 身分
+    assert await users.sync_identity(alice, "line", line_1) is None
+    assert await users.find_user(line_1) == alice
+    lookup = await doc(db, f"identityLookup/{lookup_key('line', line_1.provider_user_id)}")
+    assert line_1.provider_user_id not in str(lookup)  # 原始 LINE userId 不存在 lookup
+    assert await users.sync_identity(alice, "line", line_1) is None  # 已對應：不變
 
-    await users.unlink_identity(alice, "google")
-    with pytest.raises(LastIdentityError):
-        await users.unlink_identity(alice, "line")
-    assert await doc(db, f"identityLookup/{lookup_key('google', google.provider_user_id)}") is None
-    audit = [d.to_dict() async for d in db.collection(f"users/{alice}/auditLog").stream()]
-    assert sorted(entry["action"] for entry in audit) == ["link", "unlink"]
-    assert all(isinstance(entry["expiresAt"], datetime) for entry in audit)
+    assert await users.sync_identity(bob, "line", line_1) == alice
+    assert await users.find_user(line_1) == bob
+    assert await doc(db, f"users/{alice}/identities/line") is None
+    assert await doc(db, f"users/{alice}/identities/nthusa") is not None
+
+    assert await users.sync_identity(bob, "line", line_2) is None
+    assert await users.find_user(line_1) is None  # bob 換了另一個 LINE
+    assert await users.find_user(line_2) == bob
+    record = await doc(db, f"users/{bob}/identities/line")
+    assert record["providerUserId"] == line_2.provider_user_id
+
+    assert await users.sync_identity(bob, "line", None) is None  # 在 Auth0 解除綁定
+    assert await users.find_user(line_2) is None
+    assert await doc(db, f"users/{bob}/identities/line") is None
+    alice_audit = [d.to_dict() async for d in db.collection(f"users/{alice}/auditLog").stream()]
+    assert sorted(entry["action"] for entry in alice_audit) == ["link", "unlink"]
+    bob_audit = [d.to_dict() async for d in db.collection(f"users/{bob}/auditLog").stream()]
+    assert sorted(entry["action"] for entry in bob_audit) == ["link", "link", "unlink"]
+    assert all(isinstance(entry["expiresAt"], datetime) for entry in bob_audit)
 
 
 @pytest.mark.firestore
-async def test_login_activity_and_module_use(db, users):
+async def test_sync_identity_refuses_disabled_users_and_find_skips_deleted(db, users):
+    user_id, bound = await new_user(users), line()
+    await users.sync_identity(user_id, "line", bound)
+    await users.begin_deletion(user_id)
+    with pytest.raises(AccountDisabledError):
+        await users.sync_identity(user_id, "line", line())
+    await users.delete_user(user_id)
+    assert await users.find_user(bound) is None
+
+
+@pytest.mark.firestore
+async def test_login_and_activity(db, users):
     user_id = await new_user(users)
-    principal = Principal(user_id=user_id, provider="line", display_name="新名字")
+    principal = Principal(user_id=user_id, provider=NTHUSA_PROVIDER, display_name="新名字")
     await users.record_login(principal, {"liff": {"os": "ios", "contextType": "utou"}})
-    await users.update_identity_metadata(user_id, "line", {"followed": True})
-    await users.record_module_use(user_id, "bus")
-    await users.record_module_use(user_id, "bus")
     await users.touch_activity(user_id)
 
     user = await doc(db, f"users/{user_id}")
     assert user["displayName"] == "新名字"
-    assert user["lastModuleId"] == "bus"
     assert isinstance(user["lastActiveAt"], datetime)
-    line = await doc(db, f"users/{user_id}/identities/line")
-    assert line["metadata"]["liff"] == {"os": "ios", "contextType": "utou"}
-    assert line["metadata"]["followed"] is True
-    assert line["metadata"]["displayName"] == "新名字"
-    state = await doc(db, f"users/{user_id}/moduleStates/bus")
-    assert state["usageCount"] == 2
+    record = await doc(db, f"users/{user_id}/identities/nthusa")
+    assert record["metadata"]["liff"] == {"os": "ios", "contextType": "utou"}
+    assert record["metadata"]["displayName"] == "新名字"
+
+
+@pytest.mark.firestore
+async def test_chat_room_usage_is_counted_without_any_ids(db):
+    stats = FirestoreUsageStats(db)
+    path = f"usageStats/{datetime.now(UTC).strftime('%Y-%m-%d')}"
+    before = await doc(db, path) or {}
+    await stats.record("messages")
+    await stats.record("messages")
+    await stats.record_module("bus")
+    after = await doc(db, path)
+    assert after["messages"] == before.get("messages", 0) + 2
+    assert after["modules"]["bus"] == before.get("modules", {}).get("bus", 0) + 1
 
 
 @pytest.mark.firestore
@@ -416,11 +458,12 @@ async def test_consent_documents_are_per_version_and_audited(db, users):
 
 @pytest.mark.firestore
 async def test_delete_user_leaves_nothing_behind(db, users, chats):
-    who = identity()
-    user_id, _ = await users.resolve_or_create(who)
+    who, bound = nthusa(), line()
+    user_id = who.provider_user_id
+    await users.get_or_create_user(who)
+    await users.sync_identity(user_id, "line", bound)
     await users.set_consent(user_id, "privacy_policy", "1", "LIFF")
     await users.consume_daily_quota(user_id, 10)
-    await users.record_module_use(user_id, "bus")
     await users.set_preference(user_id, "nickname", "小明", "user")
     await users.add_memory(user_id, "住清齋")
     session, _ = await chats.get_or_create_session(user_id, "x", "ev-1")
@@ -432,24 +475,60 @@ async def test_delete_user_leaves_nothing_behind(db, users, chats):
     assert set(tombstone) == {"status", "deletedAt", "expiresAt"}  # 不含任何個資
     assert tombstone["status"] == "deleted"
     assert [c async for c in db.document(f"users/{user_id}").collections()] == []
-    assert await doc(db, f"identityLookup/{lookup_key('line', who.provider_user_id)}") is None
+    assert await doc(db, f"identityLookup/{lookup_key('line', bound.provider_user_id)}") is None
     assert await owned_ids(db, user_id) == set()
     assert [m async for m in db.collection(f"conversations/{session.id}/messages").stream()] == []
 
-    again, created = await users.resolve_or_create(who)
-    assert created and again != user_id
+
+@pytest.mark.firestore
+async def test_same_nthusa_id_is_rebuilt_empty_only_after_the_grace_period(db, users, chats):
+    who = nthusa()
+    user_id = who.provider_user_id
+    await users.get_or_create_user(who)
+    await users.set_preference(user_id, "nickname", "小明", "user")
+    await delete_everything(users, chats, user_id)
+
+    # 刪除前已在進行的請求可能晚到：不能馬上在同一個 key 重建
+    with pytest.raises(AccountDisabledError) as raised:
+        await users.get_or_create_user(who)
+    assert raised.value.status == "deleted"
+
+    await age_tombstone(db, user_id)
+    assert await users.get_or_create_user(who)
+    user = await doc(db, f"users/{user_id}")
+    assert user["status"] == "active"
+    assert "deletedAt" not in user and "expiresAt" not in user  # TTL 不會刪掉新帳號
+    assert sorted([c.id async for c in db.document(f"users/{user_id}").collections()]) == [
+        "identities"
+    ]
+    assert (await users.get_profile(user_id)).nickname is None
 
 
 @pytest.mark.firestore
-async def test_stale_lookup_after_interrupted_deletion_creates_a_new_user(db, users):
-    who = identity()
-    user_id, _ = await users.resolve_or_create(who)
-    # 模擬刪除中斷：user 文件已刪除，但 lookup 還在
+async def test_concurrent_rebuild_over_a_tombstone_creates_once(db, users, chats):
+    who = nthusa()
+    await users.get_or_create_user(who)
+    await delete_everything(users, chats, who.provider_user_id)
+    await age_tombstone(db, who.provider_user_id)
+    clients = [firestore.AsyncClient(project=PROJECT) for _ in range(4)]
+    try:
+        results = await asyncio.gather(
+            *(FirestoreUserStore(c).get_or_create_user(who) for c in clients)
+        )
+    finally:
+        for c in clients:
+            c.close()
+    assert sum(results) == 1
+    assert await users.get_status(who.provider_user_id) == "active"
+
+
+@pytest.mark.firestore
+async def test_find_user_skips_a_lookup_whose_user_is_gone(db, users):
+    user_id, bound = await new_user(users), line()
+    await users.sync_identity(user_id, "line", bound)
+    # 模擬刪除中斷或墓碑已被 TTL 清掉：user 文件不在了，但 lookup 還在
     await db.recursive_delete(db.document(f"users/{user_id}"))
-    again, created = await users.resolve_or_create(who)
-    assert created and again != user_id
-    lookup = await doc(db, f"identityLookup/{lookup_key('line', who.provider_user_id)}")
-    assert lookup["userId"] == again
+    assert await users.find_user(bound) is None
 
 
 async def delete_everything(users, chats, user_id):
@@ -462,28 +541,26 @@ async def delete_everything(users, chats, user_id):
 
 @pytest.mark.firestore
 async def test_deleting_account_is_refused_until_deletion_finishes(db, users):
-    who = identity()
-    user_id, _ = await users.resolve_or_create(who)
+    who = nthusa()
+    user_id = who.provider_user_id
+    await users.get_or_create_user(who)
     await users.begin_deletion(user_id)
     with pytest.raises(AccountDisabledError) as raised:
-        await users.resolve_or_create(who)
+        await users.get_or_create_user(who)
     assert (raised.value.args[0], raised.value.status) == (user_id, "deleting")
 
 
 @pytest.mark.firestore
 async def test_writes_that_land_after_deletion_undo_themselves(db, users, chats):
-    who = identity()
-    user_id, _ = await users.resolve_or_create(who)
+    user_id = await new_user(users)
     principal = Principal(
-        user_id=user_id, provider="line", display_name="測試者", picture_url="https://x"
+        user_id=user_id, provider=NTHUSA_PROVIDER, display_name="測試者", picture_url="https://x"
     )
     await delete_everything(users, chats, user_id)
 
     # 刪除前就開始、刪除後才寫入的請求（例如另一個實例的背景寫入）
     await users.touch_activity(user_id)
     await users.record_login(principal, {"liff": {"os": "ios"}})
-    await users.update_identity_metadata(user_id, "line", {"followed": True})
-    await users.record_module_use(user_id, "bus")
     assert not await users.consume_daily_quota(user_id, 10)
     await users.set_consent(user_id, "privacy_policy", "1", "LIFF")
     await users.set_preference(user_id, "nickname", "小明", "assistant")
@@ -502,7 +579,7 @@ async def test_writes_that_land_after_deletion_undo_themselves(db, users, chats)
 
 @pytest.mark.firestore
 async def test_writes_during_deletion_are_removed_by_the_final_pass(db, users, chats):
-    user_id, _ = await users.resolve_or_create(identity())
+    user_id = await new_user(users)
     await users.begin_deletion(user_id)
     await chats.delete_all_sessions(user_id)
     # 狀態還是 deleting 時寫入：留給刪除流程的最後一輪清除
@@ -516,8 +593,8 @@ async def test_writes_during_deletion_are_removed_by_the_final_pass(db, users, c
 
 @pytest.mark.firestore
 async def test_deletion_that_leaves_documents_reports_incomplete(db, users, chats, monkeypatch):
-    who = identity()
-    user_id, _ = await users.resolve_or_create(who)
+    user_id, bound = await new_user(users), line()
+    await users.sync_identity(user_id, "line", bound)
     await users.set_preference(user_id, "nickname", "小明", "user")
     session, _ = await chats.get_or_create_session(user_id, "x")
     await users.begin_deletion(user_id)
@@ -529,7 +606,7 @@ async def test_deletion_that_leaves_documents_reports_incomplete(db, users, chat
         await users.delete_user(user_id)
     # 帳號維持 deleting、外部身分對應也還在：使用者可以再按一次刪除
     assert await users.get_status(user_id) == "deleting"
-    assert await doc(db, f"identityLookup/{lookup_key('line', who.provider_user_id)}") is not None
+    assert await doc(db, f"identityLookup/{lookup_key('line', bound.provider_user_id)}") is not None
     assert await doc(db, f"conversations/{session.id}") is not None
 
 
@@ -547,15 +624,16 @@ async def test_delete_all_sessions_also_clears_evicted_conversations_messages(db
 
 @pytest.mark.firestore
 async def test_quota_survives_account_deletion_and_recreation(db, users, chats):
-    who = identity()
-    user_id, _ = await users.resolve_or_create(who)
+    who = nthusa()
+    user_id = who.provider_user_id
+    await users.get_or_create_user(who)
     for _ in range(3):
         assert await users.consume_daily_quota(user_id, 3)
     await delete_everything(users, chats, user_id)
-    again, created = await users.resolve_or_create(who)
-    assert created and again != user_id
-    assert not await users.consume_daily_quota(again, 3)  # 今天的 3 次沿用
-    carried = await doc(db, f"quotaCarryover/{lookup_key('line', who.provider_user_id)}")
+    await age_tombstone(db, user_id)
+    assert await users.get_or_create_user(who)
+    assert not await users.consume_daily_quota(user_id, 3)  # 今天的 3 次沿用
+    carried = await doc(db, f"quotaCarryover/{lookup_key('nthusa', user_id)}")
     assert set(carried) == {"day", "count", "expiresAt"}  # 只有日期與次數
 
 

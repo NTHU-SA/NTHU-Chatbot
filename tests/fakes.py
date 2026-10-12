@@ -7,15 +7,18 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from src.application.models.identity import VerifiedIdentity
+from src.application.models.identity import NTHUSA_PROVIDER, VerifiedIdentity
 from src.core.config import Settings
 from src.infrastructure.ai.agent_runner import AgentEvent
 
 TEST_LIFF_ID = "1234567890-abcdefgh"
+# NTHUSA ID（user id）：usr_ + 26 碼 ULID
+TEST_USR = "usr_01K7AJTESTTESTTESTTESTTEST"
+OTHER_USR = "usr_01K7B2SECNDSECNDSECNDSECND"
 TEST_IDENTITY = VerifiedIdentity(
-    provider="line", provider_user_id="U0123456789abcdef", display_name="測試者"
+    provider=NTHUSA_PROVIDER, provider_user_id=TEST_USR, display_name="測試者"
 )
-OTHER_IDENTITY = VerifiedIdentity(provider="line", provider_user_id="U0000000000other")
+OTHER_IDENTITY = VerifiedIdentity(provider=NTHUSA_PROVIDER, provider_user_id=OTHER_USR)
 AUTH = {"Authorization": "Bearer good-token"}
 
 
@@ -23,7 +26,6 @@ def make_settings(**overrides: Any) -> Settings:
     values: dict[str, Any] = {
         "line_channel_secret": "test-secret",
         "line_channel_access_token": "test-token",
-        "line_login_channel_id": "1234567890",
         "liff_id": TEST_LIFF_ID,
         "openai_api_key": "test-key",
         "chat_store": "memory",
@@ -34,9 +36,9 @@ def make_settings(**overrides: Any) -> Settings:
 
 
 class FakeAuthenticator:
-    """假的 LINE authenticator：只認得 `valid` 裡的 token。"""
+    """假的 Auth0 authenticator：只認得 `valid` 裡的 token。"""
 
-    provider = "line"
+    provider = "auth0"
 
     def __init__(self):
         self.valid = {"good-token": TEST_IDENTITY, "other-token": OTHER_IDENTITY}
@@ -44,7 +46,7 @@ class FakeAuthenticator:
     async def verify(self, token: str) -> VerifiedIdentity:
         if token in self.valid:
             return self.valid[token]
-        raise HTTPException(401, "invalid id_token")
+        raise HTTPException(401, "invalid access token")
 
 
 # NTHU API 單位目錄的一小部分（假資料的形狀與正式 API 相同；只取名稱，不含人員）

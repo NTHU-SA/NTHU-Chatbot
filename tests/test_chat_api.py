@@ -3,14 +3,14 @@ import asyncio
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from src.application.models.identity import lookup_key
+from src.application.models.identity import REUSE_AFTER_DELETION
 from src.application.services.chat_store import MAX_SESSIONS_PER_USER, MemoryChatStore
 from src.infrastructure.ai.agent_runner import AgentEvent
 from src.infrastructure.ai.prompts import PROMPT_VERSION
 from tests.fakes import (
     AUTH,
-    TEST_IDENTITY,
     TEST_LIFF_ID,
+    TEST_USR,
     FakeRunner,
     make_settings,
     parse_sse,
@@ -26,9 +26,9 @@ def other_user():
 
 
 def internal_id(chat_app) -> str:
-    """測試使用者對應到的內部 user id。"""
-    users = chat_app.state.user_store
-    return users.lookup[lookup_key("line", TEST_IDENTITY.provider_user_id)]
+    """測試使用者的 user id（就是 NTHUSA ID）。"""
+    assert TEST_USR in chat_app.state.user_store.users
+    return TEST_USR
 
 
 def accept_policy(client, headers=AUTH):
@@ -85,18 +85,15 @@ def test_unknown_auth_provider_is_rejected(client):
 def test_me_exposes_no_identifiers(client, chat_app):
     body = client.get("/api/me", headers=AUTH).json()
     assert set(body) == {"display_name", "picture_url", "liff_id", "consent"}
-    assert TEST_IDENTITY.provider_user_id not in str(body)
     assert internal_id(chat_app) not in str(body)
 
 
-def test_first_request_creates_internal_user_once(client, chat_app):
+def test_first_request_creates_the_user_once(client, chat_app):
     client.get("/api/me", headers=AUTH)
     client.get("/api/sessions", headers=AUTH)
     users = chat_app.state.user_store
-    user_id = internal_id(chat_app)
-    assert user_id.startswith("usr_")
-    assert list(users.users) == [user_id]
-    assert users.identities[user_id]["line"]["providerUserId"] == TEST_IDENTITY.provider_user_id
+    assert list(users.users) == [TEST_USR]
+    assert users.identities[TEST_USR]["nthusa"]["providerUserId"] == TEST_USR
 
 
 def test_disabled_account_is_forbidden(client, chat_app):
@@ -116,7 +113,7 @@ def test_me_post_stores_liff_client_info_as_metadata(client, chat_app):
     }
     response = client.post("/api/me", headers=AUTH, json=info)
     assert response.status_code == 200
-    metadata = chat_app.state.user_store.identities[internal_id(chat_app)]["line"]["metadata"]
+    metadata = chat_app.state.user_store.identities[internal_id(chat_app)]["nthusa"]["metadata"]
     assert metadata["liff"] == {
         "liffId": TEST_LIFF_ID,
         "os": "ios",
@@ -259,7 +256,7 @@ async def test_concurrent_bubble_requests_create_only_once(chat_app):
     assert codes.count(201) == 1
     assert codes.count(200) == 19
     assert len({r.json()["id"] for r in responses}) == 1
-    # 同一個 LINE 身分只建立了一個內部 user，對話也只有一個
+    # 同一個 NTHUSA ID 只建立了一個 user，對話也只有一個
     assert list(store._sessions) == [internal_id(chat_app)]
     assert len(store._sessions[internal_id(chat_app)]) == 1
 
@@ -392,12 +389,13 @@ def test_daily_quota_enforced(client):
     assert send(client, session_id, "x").status_code == 429
 
 
-def test_deleting_the_account_does_not_reset_the_daily_quota(client):
+def test_deleting_the_account_does_not_reset_the_daily_quota(client, chat_app):
     session_id = new_session(client)
     for _ in range(3):
         assert send(client, session_id, "x").status_code == 200
     assert client.delete("/api/me", headers=AUTH).status_code == 204
-    # 同一個 LINE 帳號重建：要重新同意，但今天的額度沿用
+    chat_app.state.user_store.users[TEST_USR]["deletedAt"] -= REUSE_AFTER_DELETION
+    # 同一個 NTHUSA ID 重建：要重新同意，但今天的額度沿用
     client._policy_accepted = False
     accept_policy(client)
     assert send(client, new_session(client), "x").status_code == 429

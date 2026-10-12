@@ -139,8 +139,7 @@ class Settings:
     # LINE Messaging API channel（機密）
     line_channel_secret: str = field(repr=False)
     line_channel_access_token: str = field(repr=False)
-    # LINE Login channel / LIFF
-    line_login_channel_id: str
+    # LIFF（聊天室按鈕開啟的網頁；登入經 Auth0，後端不需要 LINE Login channel）
     liff_id: str
     # LLM（任何 OpenAI 相容端點）
     openai_api_key: str = field(repr=False)
@@ -153,7 +152,7 @@ class Settings:
     mcp_server_url: str = "https://api.nthusa.tw/mcp"
     mcp_allowed_tools: tuple[str, ...] = DEFAULT_MCP_TOOLS
     mcp_timeout_seconds: float = 30.0
-    # Auth0（一般瀏覽器登入；LIFF 內仍用 LINE）。三個都設定才啟用
+    # Auth0（唯一的登入方式，LIFF 內也是）。三個都設定才啟用，否則 /api 一律 401
     auth0_domain: str | None = None
     auth0_audience: str | None = None
     auth0_client_id: str | None = None
@@ -202,7 +201,6 @@ class Settings:
         required = [
             "LINE_CHANNEL_SECRET",
             "LINE_CHANNEL_ACCESS_TOKEN",
-            "LINE_LOGIN_CHANNEL_ID",
             "LIFF_ID",
             "OPENAI_API_KEY",
         ]
@@ -216,7 +214,6 @@ class Settings:
         return cls(
             line_channel_secret=os.environ["LINE_CHANNEL_SECRET"],
             line_channel_access_token=os.environ["LINE_CHANNEL_ACCESS_TOKEN"],
-            line_login_channel_id=os.environ["LINE_LOGIN_CHANNEL_ID"],
             liff_id=os.environ["LIFF_ID"],
             openai_api_key=os.environ["OPENAI_API_KEY"],
             openai_base_url=os.getenv("OPENAI_BASE_URL") or None,
