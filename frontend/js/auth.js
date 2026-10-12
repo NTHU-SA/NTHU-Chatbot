@@ -64,6 +64,10 @@ async function startAuth0(cfg) {
     useRefreshTokensFallback: true,
     cacheLocation: "memory",
     workerUrl: AUTH0_WORKER,
+    // The login transaction (state, PKCE verifier) goes in a short-lived cookie instead of
+    // sessionStorage: inside the LINE app, LINE Login hands the callback back in another
+    // webview, whose sessionStorage is empty ("Invalid state"); the cookie jar is shared.
+    useCookiesForTransactions: true,
   });
 
   const params = new URLSearchParams(location.search);
@@ -124,6 +128,26 @@ export async function relogin() {
   throw new Error("re-login");
 }
 
+// Ends the Auth0 session too, so the next visit starts from the login page.
 export async function logout() {
   await auth0.logout({ logoutParams: { returnTo: callbackUrl() } });
+}
+
+// After DELETE /api/me: sign out and, once back, tell the user the data is gone
+// (the flag survives the logout redirect, which stays in the same tab).
+const DELETED_KEY = "auth.deleted";
+
+export async function logoutAfterDeletion() {
+  try { sessionStorage.setItem(DELETED_KEY, "1"); } catch (_) { /* storage off */ }
+  await logout();
+}
+
+export function takeDeletedFlag() {
+  try {
+    if (!sessionStorage.getItem(DELETED_KEY)) return false;
+    sessionStorage.removeItem(DELETED_KEY);
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
