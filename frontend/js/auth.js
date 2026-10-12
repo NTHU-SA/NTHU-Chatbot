@@ -55,6 +55,29 @@ async function loginWithAuth0() {
   });
 }
 
+function isCallback() {
+  const params = new URLSearchParams(location.search);
+  return params.has("state") && (params.has("code") || params.has("error"));
+}
+
+// Finishes the login this page came back from. Returns the SDK error code when the callback
+// matched no pending login (the code is then discarded unused), otherwise null.
+async function finishRedirect() {
+  let returnTo = "/";
+  try {
+    const result = await auth0.handleRedirectCallback();
+    returnTo = result.appState && result.appState.returnTo;
+    return null;
+  } catch (err) {
+    if (!STALE_CALLBACK.has(err.error)) throw err;
+    console.warn("Auth0 callback rejected:", err.error);
+    return err.error;
+  } finally {
+    // Never leave the code/state (or an error) in the address bar or history.
+    history.replaceState(null, "", samePath(returnTo));
+  }
+}
+
 async function startAuth0(cfg) {
   const { Auth0Client } = await import(AUTH0_SDK);
   auth0 = new Auth0Client({
@@ -76,25 +99,9 @@ async function startAuth0(cfg) {
     useCookiesForTransactions: true,
   });
 
-  const params = new URLSearchParams(location.search);
-  if (params.has("state") && (params.has("code") || params.has("error"))) {
-    let returnTo = "/";
-    let stale = null;
-    try {
-      const result = await auth0.handleRedirectCallback();
-      returnTo = result.appState && result.appState.returnTo;
-    } catch (err) {
-      if (!STALE_CALLBACK.has(err.error)) throw err;
-      stale = err.error;
-    } finally {
-      // Never leave the code/state (or an error) in the address bar or history.
-      history.replaceState(null, "", samePath(returnTo));
-    }
-    // The code is discarded unused; the silent check below gets the token instead.
-    if (stale) console.warn("Auth0 callback rejected:", stale);
-  } else {
-    restoreLiffState();
-  }
+  let stale = null;
+  if (isCallback()) stale = await finishRedirect();
+  else restoreLiffState();
 
   try {
     await auth0.getTokenSilently();
