@@ -11,8 +11,11 @@ const AUTH0_WORKER = "./vendor/auth0-spa-js.worker.production.js";
 const LOGIN_NEEDED = new Set([
   "login_required", "consent_required", "interaction_required", "missing_refresh_token",
 ]);
-// The callback's state matched no login started here ("Invalid state"). Auth0 has already
-// signed the user in by then, so starting over comes straight back without a login page.
+// The callback's state matched no pending login ("Invalid state"). Inside the LINE app this
+// happens on every first LINE login: LINE loads the callback URL twice, and the copy the user
+// never sees finishes the login first (Auth0 logs one login and one successful code exchange),
+// using up the transaction. Auth0 has signed the user in by then, so starting over comes
+// straight back without going through LINE again.
 const STALE_CALLBACK = new Set(["missing_transaction", "state_mismatch"]);
 // A 401 right after logging in means something is misconfigured; stop instead of looping.
 const RELOGIN_KEY = "auth.relogin";
@@ -68,8 +71,7 @@ async function startAuth0(cfg) {
     cacheLocation: "memory",
     workerUrl: AUTH0_WORKER,
     // The login transaction (state, PKCE verifier) goes in a short-lived cookie instead of
-    // sessionStorage: inside the LINE app, LINE Login hands the callback back in another
-    // webview, whose sessionStorage is empty ("Invalid state"); the cookie jar is shared.
+    // sessionStorage, so whichever webview of the LINE app gets the callback can finish it.
     useCookiesForTransactions: true,
   });
 
