@@ -148,6 +148,7 @@ export function takeDeletedFlag() {
     sessionStorage.removeItem(DELETED_KEY);
     return true;
   } catch (_) {
+    // Storage off: no flag could have been saved either, so just sign in as usual.
     return false;
   }
 }
