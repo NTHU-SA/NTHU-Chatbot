@@ -73,6 +73,7 @@ def test_parsing_of_optional_values():
     assert settings.mcp_timeout_seconds == 12.5
     assert settings.max_output_tokens == 3000
     assert settings.max_output_chars == 9000
+    assert settings.account_reuse_delay_seconds == 600
 
 
 @pytest.mark.parametrize("value", ["prod", "(default)", "stage-01"])
@@ -109,7 +110,9 @@ def test_positive_integer_limits_accept_one(name):
     assert getattr(load({**MEMORY, name: "1"}), name.lower()) == 1
 
 
-@pytest.mark.parametrize("name", ["DAILY_MESSAGE_LIMIT", "TOOL_RESULT_PREVIEW_CHARS"])
+@pytest.mark.parametrize(
+    "name", ["DAILY_MESSAGE_LIMIT", "TOOL_RESULT_PREVIEW_CHARS", "ACCOUNT_REUSE_DELAY_SECONDS"]
+)
 def test_non_negative_limits_allow_zero(name):
     assert getattr(load({**MEMORY, name: "0"}), name.lower()) == 0
     with pytest.raises(RuntimeError, match=name):

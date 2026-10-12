@@ -68,6 +68,7 @@ DELETED = "deleted"
 # 刪除前已在進行的請求可能在刪除後才寫入，靠讀到 deleted 自己撤銷（見 FirestoreUserStore._undo_if_deleted）。
 # 同一個 key 重建得太快，這些寫入會讀到 active 而留在新帳號裡，所以墓碑至少要留這麼久才能重建：
 # 比 IdentityService 的狀態快取（60 秒）與 Cloud Run 的請求上限（180 秒）都長。
+# 預設值；staging 為了反覆測試可用 ACCOUNT_REUSE_DELAY_SECONDS 縮短（見 Settings）。
 REUSE_AFTER_DELETION = timedelta(minutes=10)
 # 這些狀態下寫入的個人資料必須撤銷（見 FirestoreUserStore.delete_user）
 GONE_STATUSES = (DELETING, DELETED)

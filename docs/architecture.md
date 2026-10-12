@@ -87,7 +87,7 @@ webhook → LINE userId → identityLookup/{sha256(line:U…)} → NTHUSA ID（�
 - token 帶 NTHUSA ID 綁定的 LINE userId（`https://nthusa.tw/line_user_id`）時，以 Auth0 為準同步 `identityLookup`：綁了就對應過來（原本屬於別的 user 就從那邊移除，對方的資料不動），換綁取代，解除就移除；每次變動寫入 `auditLog`。同一個綁定每個實例 10 分鐘只同步一次。
 - `identityLookup` 的文件 ID 是雜湊值：LINE userId 不會出現在文件路徑、Console 與 log；原始值只存在 `users/{uid}/identities/line`。API 不回傳任何 ID。
 - 聊天室（webhook）只查詢、不建立：沒有綁定的 LINE 使用者照常使用指令，但不寫入任何個人資料；群組裡的發言者連查詢都不做。使用量只記每天的匿名總數（`usageStats`）。
-- 刪除資料後，同一個 NTHUSA ID 要過 `REUSE_AFTER_DELETION`（10 分鐘）才能重新開始（期間回 403 `account_deleted`）：刪除前已在進行的請求可能晚到，它們靠讀到 deleted 自己撤銷；太快在同一個 key 重建，會讓它們留在新帳號裡。
+- 刪除資料後，同一個 NTHUSA ID 要過 `REUSE_AFTER_DELETION`（10 分鐘；staging 以 `ACCOUNT_REUSE_DELAY_SECONDS=0` 關閉）才能重新開始（期間回 403 `account_deleted`）：刪除前已在進行的請求可能晚到，它們靠讀到 deleted 自己撤銷；太快在同一個 key 重建，會讓它們留在新帳號裡。
 - Auth0 的環境設定見 [部署文件](../infra/README.md#auth0nthusa-id-登入)。
 
 ### Firestore 路徑

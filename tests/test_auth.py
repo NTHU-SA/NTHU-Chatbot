@@ -1,4 +1,5 @@
 import asyncio
+from datetime import timedelta
 
 import pytest
 
@@ -105,6 +106,19 @@ async def test_deleted_account_is_rebuilt_empty_only_after_the_grace_period(user
     assert users.users[USR_1]["status"] == "active"
     assert (await users.get_profile(USR_1)).nickname is None
     assert await other_instance.find_line_user("Uaaaa") is None  # 綁定在下一次登入時才同步
+
+
+async def test_zero_reuse_delay_rebuilds_right_after_deletion():
+    # staging 設 ACCOUNT_REUSE_DELAY_SECONDS=0：刪除後馬上能以同一個 NTHUSA ID 重來
+    users = MemoryUserStore(timedelta(0))
+    identities = IdentityService(users)
+    await identities.resolve(nthusa(USR_1))
+    await users.begin_deletion(USR_1)
+    await users.delete_user(USR_1)
+    identities.forget_user(USR_1)
+    fresh = await identities.resolve(nthusa(USR_1))
+    assert fresh.user_id == USR_1
+    assert users.users[USR_1]["status"] == "active"
 
 
 # -- LINE 綁定：以 Auth0 為準，webhook 只查詢 --

@@ -211,7 +211,7 @@ async def delete_me(request: Request, user: Principal = Depends(get_principal_fo
     2. 刪除對話與 user 資料，每一步都重新查詢確認清空；user 文件最後換成不含個資的墓碑；
     3. 再刪一次對話：涵蓋墓碑寫入前還在進行的請求建立的對話（之後建立的會自己撤銷）。
     沒刪乾淨時回 503 `deletion_incomplete`，帳號維持 deleting，使用者可以再呼叫一次。
-    完成 10 分鐘後（REUSE_AFTER_DELETION），同一個 NTHUSA ID 再登入會是全新的使用者（需要重新同意隱私權政策）。
+    完成一段時間後（REUSE_AFTER_DELETION，可用 ACCOUNT_REUSE_DELAY_SECONDS 調整），同一個 NTHUSA ID 再登入會是全新的使用者（需要重新同意隱私權政策）。
     """
     chats: ChatStore = request.app.state.store
     users = _users(request)

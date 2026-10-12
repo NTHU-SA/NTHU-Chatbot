@@ -83,7 +83,7 @@ Auth0 Dashboard（每個環境各一次）：
 
 LINE 帳號與 NTHUSA ID 的對應：token 帶 NTHUSA ID 綁定的 LINE userId（`https://nthusa.tw/line_user_id`）時，後端把它寫進 `identityLookup`，聊天室（webhook）就能找到同一個人；在 Auth0 換綁或解除時，下一次登入跟著更新。聊天室只查詢、不建立：沒有綁定 NTHUSA ID 的 LINE 使用者照常使用指令，但不會有任何個人資料，只計入每天的匿名總數（`usageStats`）。
 
-刪除資料後，同一個 NTHUSA ID 要過 10 分鐘（`REUSE_AFTER_DELETION`）才能重新開始：刪除前已在進行的請求可能晚到，太快在同一個 key 重建會讓它們寫進新帳號。
+刪除資料後，同一個 NTHUSA ID 要過 10 分鐘（`REUSE_AFTER_DELETION`）才能重新開始：刪除前已在進行的請求可能晚到，太快在同一個 key 重建會讓它們寫進新帳號。staging 為了反覆測試設 `ACCOUNT_REUSE_DELAY_SECONDS=0`（立刻可重來）；prod 維持預設 600。
 
 和學生會中央驗證共用同一個 tenant，請注意：
 - post-login Action（例如 allowlist）會套用到 tenant 裡所有 Application，必須以 `event.client.client_id` 限定範圍，否則會擋住 chat 的使用者。
