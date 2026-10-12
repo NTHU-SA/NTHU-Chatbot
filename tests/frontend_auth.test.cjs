@@ -26,7 +26,7 @@ function storage() {
 // silent: what getTokenSilently does ("ok" or an Auth0 error code).
 // callback: what handleRedirectCallback does ("ok" or an Auth0 error code).
 function setup({ url = "https://chat.example/", silent = "ok", callback = "ok", inClient = false } = {}) {
-  const calls = { logins: [], liffInit: 0, warnings: [] };
+  const calls = { logins: [], liffInit: 0 };
   const location = new URL(url);
   class Auth0Client {
     async handleRedirectCallback() {
@@ -49,7 +49,6 @@ function setup({ url = "https://chat.example/", silent = "ok", callback = "ok", 
     history: { replaceState: (_state, _title, path) => { location.href = new URL(path, location.origin).href; } },
     sessionStorage: storage(),
     localStorage: storage(),
-    console: { warn: (...args) => calls.warnings.push(args.join(" ")) },
     liff: { isInClient: () => inClient, init: async () => { calls.liffInit += 1; } },
     importSdk: async () => ({ Auth0Client }),
   };
@@ -76,28 +75,13 @@ test("a finished callback cleans the address bar and restores the page", async (
   assert.equal(calls.logins.length, 0);
 });
 
-test("a stale callback gets the token silently instead of redirecting", async () => {
+test("a callback that matches no pending login is reported, not retried", async () => {
   const { context, calls, location } = setup({
     url: "https://chat.example/?code=c&state=s", callback: "missing_transaction", inClient: true,
   });
-  assert.equal(await context.signIn(CONFIG), true);
+  await assert.rejects(context.signIn(CONFIG), /Invalid state/);
   assert.equal(location.search, "");
   assert.equal(calls.logins.length, 0);
-  assert.equal(calls.liffInit, 1);
-  assert.match(calls.warnings[0], /missing_transaction/);
-});
-
-test("a stale callback without a session redirects at most once a minute", async () => {
-  const stale = { url: "https://chat.example/?code=c&state=s", callback: "state_mismatch", silent: "login_required" };
-  const first = setup(stale);
-  assert.equal(await first.context.signIn(CONFIG), false);
-  assert.equal(first.calls.logins.length, 1);
-
-  // The same browser comes back stale again within the cooldown: stop instead of looping.
-  const again = setup(stale);
-  again.context.localStorage.setItem("auth.relogin", String(Date.now()));
-  await assert.rejects(again.context.signIn(CONFIG), /state_mismatch/);
-  assert.equal(again.calls.logins.length, 0);
 });
 
 test("other callback errors are not swallowed", async () => {
@@ -109,4 +93,26 @@ test("inside LINE the login goes straight to the LINE connection", async () => {
   const { context, calls } = setup({ silent: "login_required", inClient: true });
   assert.equal(await context.signIn(CONFIG), false);
   assert.equal(calls.logins[0].authorizationParams.connection, "line");
+});
+
+test("LIFF is never initialised, so it never runs a second LINE login", async () => {
+  for (const url of ["https://chat.example/", "https://chat.example/?code=c&state=s"]) {
+    const { context, calls } = setup({ url, inClient: true });
+    assert.equal(await context.signIn(CONFIG), true);
+    assert.equal(calls.liffInit, 0);
+  }
+});
+
+test("LIFF's tokens in the fragment are dropped inside LINE", async () => {
+  const { context, location } = setup({ url: "https://chat.example/?s=abc#access_token=t", inClient: true });
+  assert.equal(await context.signIn(CONFIG), true);
+  assert.equal(location.href, "https://chat.example/?s=abc");
+});
+
+test("a liff.line.me link restores its path and query", async () => {
+  const { context, location } = setup({
+    url: "https://chat.example/?liff.state=%2F%3Fq%3Dbus", inClient: true,
+  });
+  assert.equal(await context.signIn(CONFIG), true);
+  assert.equal(location.pathname + location.search, "/?q=bus");
 });
