@@ -33,7 +33,7 @@ if (-not (Test-Path frontend\config.json)) { Copy-Item frontend\config.example.j
 
 填入 `.env` 的 LINE、LIFF 與 LLM 設定；沒有 GCP 憑證時改用 `CHAT_STORE=memory`（資料不保存），
 並設 `CORS_ALLOWED_ORIGINS=http://localhost:5500`。
-在 `frontend/config.json` 填入 LIFF ID 與 `apiBase`（本機為 `http://localhost:5000`）。
+在 `frontend/config.json` 填入 LIFF ID、`apiBase`（本機為 `http://localhost:5000`）與 `auth0`（與 `.env` 的 Auth0 設定相同）。
 兩份本機設定都已被 Git 排除，不要提交。
 
 ```powershell

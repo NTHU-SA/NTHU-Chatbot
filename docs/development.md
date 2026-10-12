@@ -23,11 +23,13 @@ uv run main.py                    # API 在 http://localhost:5000，健康檢查
 前端是純靜態檔，在另一個終端執行：
 
 ```powershell
-if (-not (Test-Path frontend\config.json)) { Copy-Item frontend\config.example.json frontend\config.json }  # 填入 LIFF ID 與 API 網址（git-ignored）
+if (-not (Test-Path frontend\config.json)) { Copy-Item frontend\config.example.json frontend\config.json }  # 填入 LIFF ID、API 網址與 Auth0 設定（git-ignored）
 uv run python -m http.server 5500 --directory frontend
 ```
 
-並在 `.env` 設 `CORS_ALLOWED_ORIGINS=http://localhost:5500`。在 LINE 裡測試需要公開的 HTTPS 網址：
+並在 `.env` 設 `CORS_ALLOWED_ORIGINS=http://localhost:5500`。登入只有 Auth0：`config.json` 的 `auth0` 要與 `.env` 的
+`AUTH0_DOMAIN`、`AUTH0_AUDIENCE`、`AUTH0_CLIENT_ID` 相同，且該 Application 的 callback / logout / web origin
+要允許 `http://localhost:5500`，否則前端無法登入。在 LINE 裡測試需要公開的 HTTPS 網址：
 用 `ngrok http 5000` 取得 API 網址，填到 Webhook URL（`/callback`）與 `config.json` 的 `apiBase`；
 LIFF Endpoint URL 要指向能公開存取的前端（另一個 ngrok 指向 5500，或直接部署到 staging）。
 頻道與 scopes 見 [LINE Developers 設定](configuration.md#line-developers-設定)。

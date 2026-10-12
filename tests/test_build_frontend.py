@@ -9,12 +9,14 @@ import build_frontend  # noqa: E402
 
 from src.core.privacy import PRIVACY_POLICY_VERSION  # noqa: E402
 
-CONF = """
+BASE_CONF = """
 PROJECT_ID=demo-project
 API_ORIGIN=https://api-demo.a.run.app
 HOSTING_SITE=demo-site
 LINE_CHANNEL_SECRET=must-not-leak
 """
+CONF = BASE_CONF + "AUTH0_DOMAIN=auth.example.test\nAUTH0_AUDIENCE=https://chat.example.test/api\n"
+CLIENT_ID = "spaClient12345"
 
 
 def test_local_config_example_uses_backend_policy_version():
@@ -27,6 +29,7 @@ def test_local_config_example_uses_backend_policy_version():
 def built(tmp_path, monkeypatch):
     # LINE 的 ID 不寫在 repo：由環境變數注入（CI 用 repo variable LIFF_ID_<ENV>）
     monkeypatch.setenv("LIFF_ID", "1234567890-abcdefgh")
+    monkeypatch.setenv("AUTH0_CLIENT_ID", CLIENT_ID)
     conf = tmp_path / "demo.conf"
     conf.write_text(CONF, encoding="utf-8")
     monkeypatch.setattr(build_frontend, "ROOT", tmp_path)
@@ -39,6 +42,11 @@ def test_config_json_holds_only_public_values(built):
         "liffId": "1234567890-abcdefgh",
         "apiBase": "https://api-demo.a.run.app",
         "privacyPolicyVersion": PRIVACY_POLICY_VERSION,
+        "auth0": {
+            "domain": "auth.example.test",
+            "clientId": CLIENT_ID,
+            "audience": "https://chat.example.test/api",
+        },
     }
     assert "must-not-leak" not in (built / "public" / "config.json").read_text(encoding="utf-8")
     assert (built / "public" / "js" / "main.js").exists()
@@ -79,6 +87,7 @@ def test_missing_or_malformed_liff_id_fails_the_build(tmp_path, monkeypatch, val
     conf = tmp_path / "demo.conf"
     conf.write_text(CONF, encoding="utf-8")
     monkeypatch.setattr(build_frontend, "ROOT", tmp_path)
+    monkeypatch.setenv("AUTH0_CLIENT_ID", CLIENT_ID)
     if value is None:
         monkeypatch.delenv("LIFF_ID", raising=False)
     else:
@@ -113,15 +122,9 @@ def test_bad_or_missing_api_origin_is_rejected(tmp_path, line):
         build_frontend.read_conf(conf)
 
 
-AUTH0_CONF = CONF + "AUTH0_DOMAIN=auth.example.test\nAUTH0_AUDIENCE=https://chat.example.test/api\n"
-
-
-def build_with(tmp_path, monkeypatch, conf_text, client_id=None):
+def build_with(tmp_path, monkeypatch, conf_text, client_id=CLIENT_ID):
     monkeypatch.setenv("LIFF_ID", "1234567890-abcdefgh")
-    if client_id is None:
-        monkeypatch.delenv("AUTH0_CLIENT_ID", raising=False)
-    else:
-        monkeypatch.setenv("AUTH0_CLIENT_ID", client_id)
+    monkeypatch.setenv("AUTH0_CLIENT_ID", client_id)
     conf = tmp_path / "demo.conf"
     conf.write_text(conf_text, encoding="utf-8")
     monkeypatch.setattr(build_frontend, "ROOT", tmp_path)
@@ -132,56 +135,40 @@ def build_with(tmp_path, monkeypatch, conf_text, client_id=None):
     return config, headers["Content-Security-Policy"]
 
 
-def test_auth0_settings_reach_config_and_csp(tmp_path, monkeypatch):
-    config, csp = build_with(tmp_path, monkeypatch, AUTH0_CONF, client_id="spaClient12345")
-    assert config["auth0"] == {
-        "domain": "auth.example.test",
-        "clientId": "spaClient12345",
-        "audience": "https://chat.example.test/api",
-    }
+def test_auth0_settings_reach_the_csp(tmp_path, monkeypatch):
+    _, csp = build_with(tmp_path, monkeypatch, CONF)
     assert "https://auth.example.test" in csp.split("connect-src")[1].split(";")[0]
     assert "frame-src 'self' https://auth.example.test" in csp
     assert "https://avatars.githubusercontent.com" in csp
 
 
 def test_line_connection_reaches_the_config(tmp_path, monkeypatch):
-    conf = AUTH0_CONF + "AUTH0_LINE_CONNECTION=line-chat\n"
-    config, _ = build_with(tmp_path, monkeypatch, conf, client_id="spaClient12345")
+    conf = CONF + "AUTH0_LINE_CONNECTION=line-chat\n"
+    config, _ = build_with(tmp_path, monkeypatch, conf)
     assert config["auth0"]["lineConnection"] == "line-chat"
 
 
-def test_without_client_id_auth0_stays_disabled(tmp_path, monkeypatch):
-    config, csp = build_with(tmp_path, monkeypatch, AUTH0_CONF)
-    assert "auth0" not in config
-    assert "auth.example.test" not in csp
-    assert "frame-src" not in csp
-
-
-def test_without_auth0_the_csp_is_unchanged(built):
-    hosting = json.loads((built / "firebase.json").read_text(encoding="utf-8"))["hosting"]
-    csp = hosting["headers"][0]["headers"][0]["value"]
-    assert "frame-src" not in csp
-    assert "googleusercontent" not in csp
+@pytest.mark.parametrize("client_id", ["", "bad id!"])
+def test_missing_or_malformed_auth0_client_id_fails_the_build(tmp_path, monkeypatch, client_id):
+    # 登入只有 Auth0：沒有 Client ID 的網站無法登入，不能部署
+    with pytest.raises(SystemExit):
+        build_with(tmp_path, monkeypatch, CONF, client_id=client_id)
 
 
 @pytest.mark.parametrize(
     "extra",
     [
+        "",  # 沒有 Auth0
+        "AUTH0_LINE_CONNECTION=line\n",
         "AUTH0_DOMAIN=https://auth.example.test\nAUTH0_AUDIENCE=x\n",
         "AUTH0_DOMAIN=auth.example.test\n",
         "AUTH0_AUDIENCE=https://chat.example.test/api\n",
-        "CUSTOM_DOMAIN=chat.example.test/\n",
-        "AUTH0_LINE_CONNECTION=line\n",  # 沒有 Auth0
-        "AUTH0_DOMAIN=auth.example.test\nAUTH0_AUDIENCE=a\nAUTH0_LINE_CONNECTION=bad name\n",
+        "AUTH0_DOMAIN=auth.example.test\nAUTH0_AUDIENCE=https://chat.example.test/api\nCUSTOM_DOMAIN=chat.example.test/\n",
+        "AUTH0_DOMAIN=auth.example.test\nAUTH0_AUDIENCE=https://chat.example.test/api\nAUTH0_LINE_CONNECTION=bad name\n",
     ],
 )
 def test_bad_auth0_or_domain_settings_are_rejected(tmp_path, extra):
     conf = tmp_path / "bad.conf"
-    conf.write_text(CONF + extra, encoding="utf-8")
+    conf.write_text(BASE_CONF + extra, encoding="utf-8")
     with pytest.raises(SystemExit):
         build_frontend.read_conf(conf)
-
-
-def test_malformed_auth0_client_id_fails_the_build(tmp_path, monkeypatch):
-    with pytest.raises(SystemExit):
-        build_with(tmp_path, monkeypatch, AUTH0_CONF, client_id="bad id!")

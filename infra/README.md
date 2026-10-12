@@ -60,7 +60,7 @@ LINE 的 ID 和金鑰都依環境注入，repo 裡的設定檔不含任何 LINE 
 | `AUTH0_CLIENT_ID`（後端） | Cloud Run 環境變數：`AUTH0_CLIENT_ID=... bash infra/bootstrap.sh infra/environments/<env>.conf`；之後重跑會沿用服務上的值 |
 | `AUTH0_CLIENT_ID`（前端 `config.json`） | GitHub repo variable `AUTH0_CLIENT_ID_STAGING` / `AUTH0_CLIENT_ID_PROD` |
 
-三個 Auth0 值缺一時 Auth0 不啟用：`/api` 一律 401、網頁顯示登入尚未設定，只有聊天室能用。所以一個環境要先完成下面的 Auth0 設定，再部署這版程式。
+三個 Auth0 值缺一時：後端不啟用 Auth0（`/api` 一律 401，只有聊天室能用），前端的 `build_frontend.py` 直接失敗、CI 不部署。所以一個環境要先完成下面的 Auth0 設定，再部署這版程式。
 
 Auth0 Dashboard（每個環境各一次）：
 
