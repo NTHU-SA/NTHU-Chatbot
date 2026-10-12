@@ -11,6 +11,9 @@ const AUTH0_WORKER = "./vendor/auth0-spa-js.worker.production.js";
 const LOGIN_NEEDED = new Set([
   "login_required", "consent_required", "interaction_required", "missing_refresh_token",
 ]);
+// The callback's state matched no login started here ("Invalid state"). Auth0 has already
+// signed the user in by then, so starting over comes straight back without a login page.
+const STALE_CALLBACK = new Set(["missing_transaction", "state_mismatch"]);
 // A 401 right after logging in means something is misconfigured; stop instead of looping.
 const RELOGIN_KEY = "auth.relogin";
 const RELOGIN_COOLDOWN_MS = 60_000;
@@ -73,12 +76,23 @@ async function startAuth0(cfg) {
   const params = new URLSearchParams(location.search);
   if (params.has("state") && (params.has("code") || params.has("error"))) {
     let returnTo = "/";
+    let stale = null;
     try {
       const result = await auth0.handleRedirectCallback();
       returnTo = result.appState && result.appState.returnTo;
+    } catch (err) {
+      if (!STALE_CALLBACK.has(err.error)) throw err;
+      stale = err.error;
     } finally {
       // Never leave the code/state (or an error) in the address bar or history.
       history.replaceState(null, "", samePath(returnTo));
+    }
+    if (stale) {
+      // The code is discarded unused; a new login gets its own state and PKCE verifier.
+      console.warn("Auth0 callback rejected:", stale);
+      if (!startRelogin()) throw new Error(`登入驗證失敗（${stale}），請稍後再試。`);
+      await loginWithAuth0();
+      return false;
     }
   } else {
     restoreLiffState();
@@ -118,12 +132,18 @@ export async function accessToken() {
   }
 }
 
-// Called on 401: the token expired or was revoked. Throws "re-login" when redirecting.
-export async function relogin() {
+// At most one automatic re-login per cooldown, so a broken setup cannot loop.
+function startRelogin() {
   let last = 0;
   try { last = Number(sessionStorage.getItem(RELOGIN_KEY)) || 0; } catch (_) { /* storage off */ }
-  if (Date.now() - last < RELOGIN_COOLDOWN_MS) throw new Error("登入驗證失敗，請稍後再試。");
+  if (Date.now() - last < RELOGIN_COOLDOWN_MS) return false;
   try { sessionStorage.setItem(RELOGIN_KEY, String(Date.now())); } catch (_) { /* storage off */ }
+  return true;
+}
+
+// Called on 401: the token expired or was revoked. Throws "re-login" when redirecting.
+export async function relogin() {
+  if (!startRelogin()) throw new Error("登入驗證失敗，請稍後再試。");
   await loginWithAuth0();
   throw new Error("re-login");
 }
