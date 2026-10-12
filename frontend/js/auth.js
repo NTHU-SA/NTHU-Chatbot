@@ -11,13 +11,14 @@ const AUTH0_WORKER = "./vendor/auth0-spa-js.worker.production.js";
 const LOGIN_NEEDED = new Set([
   "login_required", "consent_required", "interaction_required", "missing_refresh_token",
 ]);
-// The callback's state matched no pending login ("Invalid state"). Inside the LINE app this
-// happens on every first LINE login: LINE loads the callback URL twice, and the copy the user
-// never sees finishes the login first (Auth0 logs one login and one successful code exchange),
-// using up the transaction. Auth0 has signed the user in by then, so starting over comes
-// straight back without going through LINE again.
+// The callback's state matched no pending login ("Invalid state"). Inside the LINE app the
+// callback the user sees never finds its login: the copy the user never sees finishes it
+// (Auth0 logs one login and one successful code exchange), and redirecting again ends the
+// same way. Auth0 has signed the user in by then, so the token comes from a silent check
+// instead, like when the LIFF page is closed and reopened.
 const STALE_CALLBACK = new Set(["missing_transaction", "state_mismatch"]);
-// A 401 right after logging in means something is misconfigured; stop instead of looping.
+// Automatic logins are rate-limited so a broken setup cannot loop. localStorage, not
+// sessionStorage: the LINE app may open each callback in a fresh webview.
 const RELOGIN_KEY = "auth.relogin";
 const RELOGIN_COOLDOWN_MS = 60_000;
 
@@ -89,13 +90,8 @@ async function startAuth0(cfg) {
       // Never leave the code/state (or an error) in the address bar or history.
       history.replaceState(null, "", samePath(returnTo));
     }
-    if (stale) {
-      // The code is discarded unused; a new login gets its own state and PKCE verifier.
-      console.warn("Auth0 callback rejected:", stale);
-      if (!startRelogin()) throw new Error(`登入驗證失敗（${stale}），請稍後再試。`);
-      await loginWithAuth0();
-      return false;
-    }
+    // The code is discarded unused; the silent check below gets the token instead.
+    if (stale) console.warn("Auth0 callback rejected:", stale);
   } else {
     restoreLiffState();
   }
@@ -105,6 +101,8 @@ async function startAuth0(cfg) {
     return true;
   } catch (err) {
     if (!LOGIN_NEEDED.has(err.error)) throw err;
+    // Coming back from a login and still signed out: redirecting again would only loop.
+    if (stale && !startRelogin()) throw new Error(`登入驗證失敗（${stale}），請關閉後重新開啟。`);
     await loginWithAuth0();
     return false;
   }
@@ -137,9 +135,9 @@ export async function accessToken() {
 // At most one automatic re-login per cooldown, so a broken setup cannot loop.
 function startRelogin() {
   let last = 0;
-  try { last = Number(sessionStorage.getItem(RELOGIN_KEY)) || 0; } catch (_) { /* storage off */ }
+  try { last = Number(localStorage.getItem(RELOGIN_KEY)) || 0; } catch (_) { /* storage off */ }
   if (Date.now() - last < RELOGIN_COOLDOWN_MS) return false;
-  try { sessionStorage.setItem(RELOGIN_KEY, String(Date.now())); } catch (_) { /* storage off */ }
+  try { localStorage.setItem(RELOGIN_KEY, String(Date.now())); } catch (_) { /* storage off */ }
   return true;
 }
 
