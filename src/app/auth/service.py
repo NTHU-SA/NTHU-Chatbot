@@ -74,6 +74,8 @@ class IdentityService:
     async def _sync_linked(self, user_id: str, linked: tuple[VerifiedIdentity, ...]) -> None:
         """讓 identityLookup 跟上 Auth0 的綁定；同一個綁定 10 分鐘內只同步一次。"""
         now = time.monotonic()
+        current: list[str] = []
+        changed = False
         for provider in LINKED_PROVIDERS:
             identity = next((item for item in linked if item.provider == provider), None)
             # 已同步的狀態：綁定的身分（或「沒有綁定」）→ user
@@ -82,12 +84,18 @@ class IdentityService:
                 if identity
                 else f"unlinked:{provider}:{user_id}"
             )
+            current.append(key)
             if self._cached(key) == user_id:
                 continue
             previous = await self._store.sync_identity(user_id, provider, identity)
             if previous is not None:
                 self.forget_user(previous)
-            self._remember(key, user_id, now)
+            changed = True
+        if changed:
+            # 舊的綁定（含 webhook 查過的對應）還指向這個 user：全部清掉，只記住現在的狀態
+            self._forget_mappings(user_id)
+            for key in current:
+                self._remember(key, user_id, now)
 
     async def find_line_user(self, line_user_id: str) -> str | None:
         """
@@ -119,9 +127,12 @@ class IdentityService:
 
     def forget_user(self, user_id: str) -> None:
         """刪除資料後清掉本實例指向這個 user 的所有快取。"""
+        self._forget_mappings(user_id)
+        self._status.pop(user_id, None)
+
+    def _forget_mappings(self, user_id: str) -> None:
         for key in [k for k, (_, uid) in self._mapping.items() if uid == user_id]:
             del self._mapping[key]
-        self._status.pop(user_id, None)
 
     async def _check_status(self, user_id: str, now: float) -> bool:
         """

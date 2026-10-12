@@ -140,6 +140,30 @@ async def test_rebinding_another_line_replaces_the_old_mapping(identities, users
     assert users.identities[USR_1]["line"]["providerUserId"] == "Ubbbb"
 
 
+async def test_rebinding_back_and_forth_on_one_instance_follows_auth0(identities, users):
+    await identities.resolve(nthusa(USR_1, LINE_A))
+    assert await identities.find_line_user("Uaaaa") == USR_1
+    await identities.resolve(nthusa(USR_1, LINE_B))
+    # 同一個實例的快取不能再把舊的 LINE 對應到這個 user
+    assert await identities.find_line_user("Uaaaa") is None
+    await identities.resolve(nthusa(USR_1, LINE_A))
+    assert await users.find_user(LINE_A) == USR_1
+    assert await users.find_user(LINE_B) is None
+    assert await identities.find_line_user("Ubbbb") is None
+
+
+async def test_unbinding_twice_on_one_instance_removes_the_mapping(identities, users):
+    await identities.resolve(nthusa(USR_1))
+    await identities.resolve(nthusa(USR_1, LINE_A))
+    await identities.resolve(nthusa(USR_1))
+    assert await users.find_user(LINE_A) is None
+    assert await identities.find_line_user("Uaaaa") is None
+    await identities.resolve(nthusa(USR_1, LINE_A))
+    await identities.resolve(nthusa(USR_1))
+    assert await users.find_user(LINE_A) is None
+    assert "line" not in users.identities[USR_1]
+
+
 async def test_unbinding_in_auth0_removes_the_mapping(users):
     await IdentityService(users).resolve(nthusa(USR_1, LINE_A))
     await IdentityService(users).resolve(nthusa(USR_1))
