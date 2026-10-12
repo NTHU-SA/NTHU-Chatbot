@@ -66,8 +66,11 @@ DELETE_ATTEMPTS = 3
 
 
 class FirestoreUserStore:
-    def __init__(self, db: firestore.AsyncClient):
+    def __init__(
+        self, db: firestore.AsyncClient, reuse_after_deletion: timedelta = REUSE_AFTER_DELETION
+    ):
         self._db = db
+        self._reuse_after_deletion = reuse_after_deletion
 
     # -- refs --
     def _user(self, user_id: str):
@@ -126,7 +129,7 @@ class FirestoreUserStore:
                     raise AccountDisabledError(user_id, status)
                 return False
             deleted_at = data.get("deletedAt")
-            if deleted_at is None or now_utc() - deleted_at < REUSE_AFTER_DELETION:
+            if deleted_at is None or now_utc() - deleted_at < self._reuse_after_deletion:
                 raise AccountDisabledError(user_id, DELETED)
             tombstone = snapshot
         try:

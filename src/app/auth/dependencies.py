@@ -17,7 +17,7 @@ ACCOUNT_DELETING = {
 # 刪除完成後要等 REUSE_AFTER_DELETION 才能以同一個 NTHUSA ID 重新開始
 ACCOUNT_DELETED = {
     "code": "account_deleted",
-    "message": "你的資料已刪除。請 10 分鐘後再開啟，會以新使用者身分開始。",
+    "message": "你的資料已刪除。請稍後再開啟，會以新使用者身分開始。",
 }
 
 

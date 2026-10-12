@@ -9,6 +9,7 @@ LIFF 前端在 repo 根目錄的 `frontend/`，由 Firebase Hosting 提供，透
 
 import os
 from contextlib import asynccontextmanager
+from datetime import timedelta
 
 import httpx
 from fastapi import FastAPI
@@ -45,15 +46,17 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
 
     database = None
+    reuse_delay = timedelta(seconds=settings.account_reuse_delay_seconds)
     if settings.chat_store == "memory":
         logger.warning("Using in-memory chat store (data is NOT persisted)")
-        store, user_store = MemoryChatStore(), MemoryUserStore()
+        store, user_store = MemoryChatStore(), MemoryUserStore(reuse_delay)
         module_registry, usage_stats = StaticModuleRegistry(), MemoryUsageStats()
     else:
         database = firestore.AsyncClient(
             project=settings.google_cloud_project, database=settings.firestore_database
         )
-        store, user_store = FirestoreChatStore(database), FirestoreUserStore(database)
+        store = FirestoreChatStore(database)
+        user_store = FirestoreUserStore(database, reuse_delay)
         module_registry = FirestoreModuleRegistry(database)
         usage_stats = FirestoreUsageStats(database)
 

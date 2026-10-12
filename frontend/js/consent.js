@@ -3,6 +3,7 @@
 // the screen and records the user's choice.
 
 import { api } from "./api.js";
+import { logoutAfterDeletion } from "./auth.js";
 import { closeSidebar, confirmDialog, el, showOverlay } from "./dom.js";
 
 // The version privacy.html shows in this deployment (config.json, stamped at build
@@ -83,6 +84,6 @@ export async function finishDeletion() {
     showOverlay(err.message || "刪除沒有完成，請再試一次。", true, finishDeletion);
     return;
   }
-  showOverlay("你的資料已全部刪除。10 分鐘後重新開啟頁面，會以新使用者身分開始。", false);
-  history.replaceState(null, "", location.pathname);
+  showOverlay("你的資料已全部刪除，正在登出…");
+  await logoutAfterDeletion();
 }

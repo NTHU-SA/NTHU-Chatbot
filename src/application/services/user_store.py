@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
+from datetime import timedelta
 from typing import Any, Protocol
 
 from src.application.models.identity import (
@@ -134,7 +135,8 @@ def _merge(base: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
 
 
 class MemoryUserStore:
-    def __init__(self) -> None:
+    def __init__(self, reuse_after_deletion: timedelta = REUSE_AFTER_DELETION) -> None:
+        self._reuse_after_deletion = reuse_after_deletion
         self.users: dict[str, dict[str, Any]] = {}
         self.identities: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
         self.lookup: dict[str, str] = {}
@@ -162,7 +164,7 @@ class MemoryUserStore:
                 if user.get("status") != DELETED:
                     self._check_active(user_id)
                     return False
-                if now - user["deletedAt"] < REUSE_AFTER_DELETION:
+                if now - user["deletedAt"] < self._reuse_after_deletion:
                     raise AccountDisabledError(user_id, DELETED)
             self.users[user_id] = {
                 "status": "active",

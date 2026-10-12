@@ -5,7 +5,7 @@
  */
 
 import { api, loadConfig } from "./api.js";
-import { logout, signIn } from "./auth.js";
+import { logout, signIn, takeDeletedFlag } from "./auth.js";
 import { createSession, loadSessions, openSession, send } from "./chat.js";
 import {
   deleteAllData, finishDeletion, requestConsent, setPolicyVersion,
@@ -96,6 +96,11 @@ async function boot() {
     // liff.isInClient() works before liff.init(); see the safe-area note in style.css.
     // Inside the try so a failed LIFF SDK load still shows the error and retry button.
     if (liff.isInClient()) document.documentElement.classList.add("in-line-client");
+    // Back from the sign-out after deleting the data: stay signed out until the user asks.
+    if (takeDeletedFlag()) {
+      showOverlay("你的資料已全部刪除。按「重試」會重新登入，以新使用者身分開始。", true);
+      return;
+    }
     const cfg = await loadConfig();
     setPolicyVersion(cfg.privacyPolicyVersion);
     if (!(await signIn(cfg))) return; // redirecting to a login page

@@ -173,6 +173,9 @@ class Settings:
     max_output_tokens: int = 2000
     max_output_chars: int = 8000
     daily_message_limit: int = 100
+    # 刪除資料後要等幾秒才能以同一個 NTHUSA ID 重新開始（見 REUSE_AFTER_DELETION）。
+    # 正式環境維持預設；staging 可設 0 方便反覆測試，代價是刪除前還在進行的請求可能寫進新帳號
+    account_reuse_delay_seconds: int = 600
     max_agent_turns: int = 8
     # 每則訊息最多幾次外部工具呼叫（MCP + 網路搜尋 + 網頁內文）
     max_tool_calls_per_message: int = 6
@@ -237,6 +240,7 @@ class Settings:
             max_output_tokens=_int("MAX_OUTPUT_TOKENS", 2000),
             max_output_chars=_int("MAX_OUTPUT_CHARS", 8000),
             daily_message_limit=_int("DAILY_MESSAGE_LIMIT", 100, minimum=0),
+            account_reuse_delay_seconds=_int("ACCOUNT_REUSE_DELAY_SECONDS", 600, minimum=0),
             max_agent_turns=_int("MAX_AGENT_TURNS", 8),
             max_tool_calls_per_message=_int("MAX_TOOL_CALLS_PER_MESSAGE", 6),
             web_search_enabled=_bool(os.getenv("WEB_SEARCH_ENABLED"), False),

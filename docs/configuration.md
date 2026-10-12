@@ -24,7 +24,7 @@ Firestore 不用金鑰檔：Cloud Run 用執行期服務帳號的 ADC，
 | 儲存 | `CHAT_STORE`（`firestore` / `memory`）、`GOOGLE_CLOUD_PROJECT`、`FIRESTORE_DATABASE`（staging 用 `(default)`，prod 用 `prod`） |
 | 本機 emulator | `FIRESTORE_EMULATOR_HOST`（僅本機使用，不得設在 Cloud Run） |
 | 執行環境 | `DEV_MODE`、`PORT` |
-| 限制 | `HISTORY_WINDOW`、`HISTORY_MESSAGE_CHARS`、`MAX_TOOL_OUTPUT_CHARS`、`MAX_MESSAGE_CHARS`、`DAILY_MESSAGE_LIMIT`、`MAX_AGENT_TURNS`、`TOOL_RESULT_PREVIEW_CHARS` |
+| 限制 | `HISTORY_WINDOW`、`HISTORY_MESSAGE_CHARS`、`MAX_TOOL_OUTPUT_CHARS`、`MAX_MESSAGE_CHARS`、`DAILY_MESSAGE_LIMIT`、`MAX_AGENT_TURNS`、`TOOL_RESULT_PREVIEW_CHARS`、`ACCOUNT_REUSE_DELAY_SECONDS`（刪除後幾秒才能重新開始，預設 600；staging 設 0） |
 
 每個變數的說明與預設值見 [.env.template](../.env.template)，解析與驗證在 `src/core/config.py`；
 格式不符時啟動失敗。
