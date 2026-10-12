@@ -97,7 +97,7 @@ webhook → LINE userId → identityLookup/{sha256(line:U…)} → NTHUSA ID（�
 | `identityLookup/{sha256(line:U…)}` | 綁定的 LINE → `userId`（NTHUSA ID）、`provider`、`createdAt` |
 | `quotaCarryover/{sha256(nthusa:usr_…)}` | 刪除帳號時保留當日 AI 用量：`day`、`count`、`expiresAt`（TTL 2 天）。同一個 NTHUSA ID 當天重建帳號時沿用，避免以刪除帳號重置每日上限 |
 | `users/{uid}` | uid 是 NTHUSA ID。`status`（active / blocked / deleting / deleted；deleted 只剩不含個資的墓碑：`deletedAt`、`expiresAt` TTL）、`displayName`、`pictureUrl`、`createdAt`、`updatedAt`、`lastActiveAt`、`lastConversationId`、`conversationCount` |
-| `users/{uid}/identities/{nthusa\|line}` | `providerUserId`、`linkedAt`、`lastLoginAt`、`metadata`（nthusa：`liff`{os、appVersion、language、contextType、friendshipStatus}，前端自報，不參與授權；不收 contextId） |
+| `users/{uid}/identities/{nthusa\|line}` | `providerUserId`、`linkedAt`、`lastLoginAt`、`metadata`（nthusa：`liff`{os、appVersion、language}，前端從 user agent 自報，不參與授權。前端不初始化 LIFF SDK，所以不收 contextType、friendshipStatus 與 contextId） |
 | `users/{uid}/consents/{type}_v{version}` | 同意紀錄：`status`（accepted）、`acceptedAt`、`source`；每個版本一份，不覆蓋 |
 | `users/{uid}/preferences/{nickname\|department}` | `value`、`source`（user：設定頁；assistant：對話中由 AI 記下）、`updatedAt` |
 | `users/{uid}/memory/{m00…m19}` | 使用者要求記住的事：`value`（≤100 字）、`sourceConversationId`、`createdAt`；每則占一個固定格子，以 `create()` 搶空格，並行也不會超過 20 則 |
