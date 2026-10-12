@@ -1,7 +1,7 @@
 {
   "liffId": "1234567890-abcdefgh",
   "apiBase": "http://localhost:5000",
-  "privacyPolicyVersion": "3",
+  "privacyPolicyVersion": "4",
   "auth0": {
     "domain": "auth.example.com",
     "clientId": "your-auth0-spa-client-id",
