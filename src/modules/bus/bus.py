@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta, timezone
 
-from jinja2 import Environment, FileSystemLoader
 from linebot.v3.messaging import (
     FlexContainer,
     FlexMessage,
@@ -13,20 +12,26 @@ from linebot.v3.messaging import (
 
 from src.app.handlers.command_handler import command_handler
 from src.utils import announcecrawler, nthuapi
-from templates.messages.bus_message import BUS_TYPE_NAMES, bus_carousel, bus_direction_bubble
+from templates.messages.bus_message import (
+    bus_menu_bubble,
+    bus_reply,
+    direction_prompt,
+)
 
 STATIC_URL = "https://data.nthusa.tw"
-JINJA_ENV = Environment(loader=FileSystemLoader("src/modules/bus/templates"))
-JINJA_ENV.globals["bus_carousel"] = bus_carousel
+TZ = timezone(timedelta(hours=8))
+DIRECTION_NAMES = {"up": "上山", "down": "下山", "all": "雙向"}
+DAY_NAMES = {"current": "即時", "weekday": "平日", "weekend": "假日"}
 
 
 def _stop_arrivals(schedules: list[dict], stop_name: str) -> list[dict]:
-    """Convert canonical detailed schedules to the existing arrival-card view model."""
+    """Convert canonical detailed schedules to the arrival-card view model."""
     if not isinstance(schedules, list):
         raise ValueError("Invalid bus schedule response")
     arrivals = []
     for schedule in schedules:
         departure = schedule["dep_info"]
+        stops = [item["stop"] for item in schedule["stops_time"]]
         stop = next((item for item in schedule["stops_time"] if item["stop"] == stop_name), None)
         if stop is None:
             raise ValueError("Bus schedule omitted the requested stop")
@@ -38,9 +43,56 @@ def _stop_arrivals(schedules: list[dict], stop_name: str) -> list[dict]:
                 "description": departure["description"],
                 "bus_type": departure["bus_type"],
                 "line": departure.get("line", ""),
+                "stops": stops,
             }
         )
     return arrivals
+
+
+def _day_kind(moment: datetime) -> str:
+    return "weekend" if moment.isoweekday() >= 6 else "weekday"
+
+
+async def _day_bounds(stop_name: str, direction: str, day: str) -> tuple[str | None, str | None]:
+    """今日首末班到站時間。
+
+    `day=current` 只回「從現在起還剩的車」，所以判斷「尚未發車」或「末班車已過」
+    必須另外問整天的班表。這份班表是靜態的，沿用預設快取。
+    """
+    try:
+        schedules = await nthuapi.get(
+            "/buses/schedule",
+            params={
+                "day": day,
+                "limit": 200,
+                "route": "all",
+                "direction": direction,
+                "stop": stop_name,
+                "details": True,
+            },
+        )
+    except ValueError:
+        return None, None
+    if not isinstance(schedules, list):
+        return None, None
+    times = sorted(
+        item["arrive_time"]
+        for schedule in schedules
+        for item in schedule["stops_time"]
+        if item["stop"] == stop_name
+    )
+    return (times[0], times[-1]) if times else (None, None)
+
+
+@command_handler.add_default_menu()
+def bus_menu(event):
+    """五個選項收在一張卡裡，不必左右滑。"""
+    return [
+        FlexMessage(
+            alt_text="公車：動態查詢、最新資訊、路線圖",
+            contents=FlexContainer.from_dict(bus_menu_bubble()),
+        )
+    ]
 
 
 @command_handler.add_command_with_menu(
@@ -56,31 +108,26 @@ def _stop_arrivals(schedules: list[dict], stop_name: str) -> list[dict]:
     ],
 )
 def select_route(params):
+    """方向只是二選一，用泡泡加 Quick Reply 就夠，不開 Flex 卡。"""
     quick_reply = QuickReply(
         items=[
             QuickReplyItem(
                 action=PostbackAction(
                     label="🚍 我要上山",
                     data="@公車/選擇站點 direction=up",
-                    displayText="上山",
+                    displayText="我要上山",
                 )
             ),
             QuickReplyItem(
                 action=PostbackAction(
                     label="🚍 我要下山",
                     data="@公車/選擇站點 direction=down",
-                    displayText="下山",
+                    displayText="我要下山",
                 )
             ),
         ]
     )
-    return [
-        FlexMessage(
-            alt_text="公車紅線、綠線與藍線（南大專車）：請選擇上山或下山",
-            contents=FlexContainer.from_dict(bus_direction_bubble()),
-            quick_reply=quick_reply,
-        )
-    ]
+    return [TextMessage(text=direction_prompt(), quick_reply=quick_reply)]
 
 
 @command_handler.add_command("選擇站點")
@@ -132,47 +179,52 @@ async def query_stop_bus(event):
     }
     if query_params["route"] not in {"all", "main", "nanda"}:
         return [TextMessage(text="未知的公車路線，請重新選擇")]
-    if query_params["day"] not in {"current", "weekday", "weekend"}:
+    if query_params["day"] not in DAY_NAMES:
         return [TextMessage(text="未知的公車營運日，請重新選擇")]
-    if query_params["direction"] not in {"all", "up", "down"}:
+    if query_params["direction"] not in DIRECTION_NAMES:
         return [TextMessage(text="未知的公車方向，請重新選擇")]
     if params.get("time"):
         query_params["time"] = params["time"]
     schedules = await nthuapi.get("/buses/schedule", params=query_params, cache=False)
     bus_stop_info = _stop_arrivals(schedules, stop_name)[:limit]
 
-    if not bus_stop_info:
-        return [TextMessage(text=f"🚌 抱歉，目前 {stop_name} 站點沒有公車資訊")]
+    now = datetime.now(TZ)
+    direction = query_params["direction"]
+    direction_zh = DIRECTION_NAMES[direction]
+    first_time, last_time = await _day_bounds(stop_name, direction, _day_kind(now))
+    tomorrow_first, _ = await _day_bounds(stop_name, direction, _day_kind(now + timedelta(days=1)))
 
-    now = datetime.now(timezone(timedelta(hours=8)))
-    day_mapping = {"current": "即時", "weekday": "平日", "weekend": "假日"}
-    day_zh = day_mapping.get(query_params["day"], "")
-    direction_zh = {"up": "上山", "down": "下山", "all": "雙向"}[query_params["direction"]]
-    now_time = now.strftime("%Y-%m-%d %H:%M:%S")
-    info_message = f"🚌 【{stop_name}】{day_zh}{direction_zh}公車資訊\n更新時間：{now_time}"
+    container = bus_reply(
+        bus_stop_info,
+        stop_name,
+        direction_zh,
+        first_time=first_time,
+        last_time=last_time,
+        tomorrow_first=tomorrow_first,
+        now=now,
+    )
+
+    day_zh = DAY_NAMES[query_params["day"]]
+    info_message = (
+        f"🚌 【{stop_name}】{day_zh}{direction_zh}公車資訊\n"
+        f"更新時間：{now.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
 
     # 製作新的 data for postbackaction
     new_params = ""
     for param in params:
         new_params += f" {param}={params[param]}"
+    refresh_data = "@公車/查詢站點與方向" + new_params
 
-    template = JINJA_ENV.get_template("bus_flex_message.json.jinja")
-    rendered_json = template.render(
-        bus_stop_info=bus_stop_info,
-        stop_name=stop_name,
-        direction_name=direction_zh,
-        refresh_data="@公車/查詢站點與方向" + new_params,
-        bus_type_names=BUS_TYPE_NAMES,
-    )
     flex_message = FlexMessage(
         alt_text=info_message,
-        contents=FlexContainer.from_json(rendered_json),
+        contents=FlexContainer.from_dict(container),
         quickReply=QuickReply(
             items=[
                 QuickReplyItem(
                     action=PostbackAction(
                         label="🔁 重新整理",
-                        data="@公車/查詢站點與方向" + new_params,
+                        data=refresh_data,
                         displayText="重新整理動態公車查詢",
                     )
                 ),
@@ -183,11 +235,10 @@ async def query_stop_bus(event):
                         displayText="重新選擇路線",
                     )
                 ),
-                # 選擇站點
                 QuickReplyItem(
                     action=PostbackAction(
                         label="🚏 重新選擇站點",
-                        data="@公車/選擇站點 direction=" + query_params["direction"],
+                        data="@公車/選擇站點 direction=" + direction,
                         displayText="重新選擇站點",
                     )
                 ),
@@ -217,7 +268,9 @@ async def query_stop_bus(event):
     ],
 )
 async def bus_announce(event):  # 最新公車資訊公告
-    announce = await announcecrawler.get("事務組", "最新公告")
+    # 「最新公告」是事務組的大雜燴看板，前幾筆常是垃圾清運與環境消毒；
+    # 公車消息有自己的專屬看板。
+    announce = await announcecrawler.get("事務組", "校園公車暨巡迴公車公告")
     return [announce]
 
 

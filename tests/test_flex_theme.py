@@ -6,7 +6,6 @@ import pytest
 from linebot.v3.messaging import CarouselColumn, FlexContainer, PostbackAction, URIAction
 
 from src.app.handlers.command_handler import CommandHandler
-from src.modules.bus.bus import JINJA_ENV
 from src.modules.library.library import env
 from templates.messages import help_message, open_web_chat, system_message
 from templates.messages.flex_theme import FLEX_THEME, carousel_message
@@ -139,28 +138,6 @@ async def test_menu_splits_at_line_carousel_limit_and_deduplicates_aliases():
 
 
 def test_jinja_cards_escape_dynamic_data_and_preserve_zero():
-    bus_card = json.loads(
-        JINJA_ENV.get_template("bus_flex_message.json.jinja").render(
-            bus_stop_info=[
-                {
-                    "bus_type": "unknown",
-                    "arrive_time": None,
-                    "dep_stop": '校門 "A"',
-                    "dep_time": "12:00",
-                    "description": "第一行\n第二行",
-                }
-            ],
-            bus_type_names={},
-            stop_name='校門 "A"',
-            direction_name="上山",
-            refresh_data='@公車/查詢站點與方向 stop_name=校門"A" direction=up',
-        )
-    )
-    assert FlexContainer.from_dict(bus_card).to_dict() == bus_card
-    card = bus_card["contents"][0]
-    assert card["body"]["contents"][0]["contents"][1]["text"] == "未知"
-    assert card["header"]["contents"][1]["text"] == '校門 "A" · 上山'
-    assert card["footer"]["contents"][-1]["action"]["data"].endswith("direction=up")
     library_card = json.loads(
         env.get_template("library_space.json.jinja").render(
             spaces=[{"zonename": '討論室 "A"\n樓上', "count": 0}]
@@ -195,16 +172,23 @@ async def test_global_theme_changes_reach_all_builders_templates_and_cached_menu
             content = message["contents"]
             cards = content["contents"] if content["type"] == "carousel" else [content]
             for card in cards:
-                assert card["header"]["backgroundColor"] == "#ECE8F6"
+                # 公車卡刻意用路線色當標題底，說明泡泡則把標題讓給內文
+                route_tints = {route["tint"] for route in FLEX_THEME["routes"].values()}
+                # 路線待確認的卡沒有專屬色，退回中性底
+                allowed = {"#ECE8F6", FLEX_THEME["colors"]["background"], *route_tints}
+                assert card["header"]["backgroundColor"] in allowed
                 assert card["header"]["paddingAll"] == "24px"
                 heading = card["header"]["contents"][0]
                 if heading["type"] == "box":
                     heading = heading["contents"][0]
-                assert heading["size"] == "xl"
+                assert heading["size"] in {"xl", "sm"}
                 assert card["body"]["paddingAll"] == "24px"
                 assert card["styles"]["body"]["backgroundColor"] == "#F6F4FA"
-                if sample["id"] != "system":
+                # 系統訊息與公車說明泡泡用較窄的 notice_size
+                if sample["id"] not in {"system", "bus-none"}:
                     assert card["size"] == "giga"
+                else:
+                    assert card["size"] == FLEX_THEME["components"]["notice_size"]
                 for component in card.get("footer", {}).get("contents", []):
                     if component["type"] == "button":
                         assert component["color"] == "#4D4480"
