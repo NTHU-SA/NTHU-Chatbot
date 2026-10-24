@@ -7,7 +7,7 @@
 import re
 from datetime import datetime, timedelta, timezone
 
-from .flex_theme import FLEX_THEME, text
+from .flex_theme import FLEX_THEME, bubble, text
 
 TZ = timezone(timedelta(hours=8))
 NTHUMODS_URL = "https://nthumods.com/zh/bus"
@@ -170,6 +170,40 @@ def fare_badge(note: str) -> dict:
             }
         ],
     }
+
+
+def route_badge(line: str | None, status: str = "路線待確認", *, compact: bool = False) -> dict:
+    """一條線一個色塊。整行三個顏色擠在一起時反而分不出來。"""
+    key = ROUTE_COLORS.get(line, line)
+    route = FLEX_THEME["routes"].get(key or "")
+    label = route["label"] if route else status
+    if compact and key == "blue":
+        label = label.split(" · ", 1)[0]
+    if not compact and line in NANDA_ROUTE_NAMES:
+        label += " · " + NANDA_ROUTE_NAMES[line]
+    badge = {
+        "type": "box",
+        "layout": "vertical",
+        "backgroundColor": route["tint"] if route else _color("background"),
+        "cornerRadius": FLEX_THEME["radii"]["badge"],
+        "paddingAll": FLEX_THEME["spacing"]["row"],
+        "contents": [
+            {
+                **text(label, size="badge" if compact else "caption", weight="bold"),
+                "color": route["ink"] if route else _color("muted"),
+            }
+        ],
+    }
+    if compact:
+        badge.pop("paddingAll")
+        badge.update(
+            flex=0,
+            paddingTop=FLEX_THEME["spacing"]["badge_y"],
+            paddingBottom=FLEX_THEME["spacing"]["badge_y"],
+            paddingStart=FLEX_THEME["spacing"]["badge_x"],
+            paddingEnd=FLEX_THEME["spacing"]["badge_x"],
+        )
+    return badge
 
 
 def stops_line(stops: list[str], stop_name: str) -> dict:
@@ -466,75 +500,34 @@ def direction_prompt() -> str:
     return "搭校巴，先選方向\n上山含往南大校區，下山含往校本部\n" + labels
 
 
-def _route_name_spans() -> list[dict]:
-    return [
-        span
-        for index, key in enumerate(ROUTE_ORDER)
-        for span in ([{"type": "span", "text": " · ", "color": _color("line")}] if index else [])
-        + [
-            {
-                "type": "span",
-                "text": FLEX_THEME["routes"][key]["label"],
-                "color": FLEX_THEME["routes"][key]["ink"],
-                "weight": "bold",
-            }
-        ]
-    ]
-
-
 def direction_bubble() -> dict:
-    """方向只是二選一，所以用窄卡。但按鈕必須在卡上：電腦版沒有 Quick Reply。"""
-    return {
-        "type": "bubble",
-        "size": FLEX_THEME["components"]["notice_size"],
-        "body": {
-            "type": "box",
-            "layout": "vertical",
-            "paddingAll": FLEX_THEME["spacing"]["body"],
-            "spacing": FLEX_THEME["spacing"]["item_gap"],
-            "backgroundColor": _color("surface"),
-            "contents": [
-                text("搭校巴，先選方向", size="title", weight="bold"),
-                text("上山含往南大校區，下山含往校本部", size="caption", color="muted"),
-                {
-                    "type": "text",
-                    "text": " · ".join(FLEX_THEME["routes"][key]["label"] for key in ROUTE_ORDER),
-                    "contents": _route_name_spans(),
-                    "size": FLEX_THEME["typography"]["caption"],
-                    "wrap": True,
-                },
-            ],
-        },
-        "footer": {
-            "type": "box",
-            "layout": "vertical",
-            "paddingAll": FLEX_THEME["spacing"]["footer"],
-            "spacing": FLEX_THEME["spacing"]["item_gap"],
-            # 次要按鈕是白底，footer 也白的話它就不像按鈕了
-            "backgroundColor": _color("background"),
-            "contents": [
-                {
-                    "type": "button",
-                    "style": "primary" if index == 0 else "secondary",
-                    "color": _color("brand") if index == 0 else _color("surface"),
-                    "height": FLEX_THEME["components"]["button_height"],
-                    "action": {
-                        "type": "postback",
-                        "label": label,
-                        "data": f"@公車/選擇站點 direction={value}",
-                        "displayText": label,
-                    },
-                }
-                for index, (label, value) in enumerate(
-                    (("🚍 我要上山", "up"), ("🚍 我要下山", "down"))
-                )
-            ],
-        },
-        "styles": {
-            "body": {"backgroundColor": _color("surface")},
-            "footer": {"backgroundColor": _color("background")},
-        },
-    }
+    """三條線各一個色塊。按鈕留在卡上：電腦版不顯示 Quick Reply。"""
+    return bubble(
+        "搭校巴，先選方向",
+        [
+            text("上山含往南大校區，下山含往校本部。選好方向後，再選擇搭乘站點。", color="muted"),
+            {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": FLEX_THEME["spacing"]["item_gap"],
+                "contents": [route_badge(line) for line in ROUTE_ORDER],
+            },
+        ],
+        [
+            {
+                "type": "postback",
+                "label": "我要上山",
+                "data": "@公車/選擇站點 direction=up",
+                "displayText": "上山",
+            },
+            {
+                "type": "postback",
+                "label": "我要下山",
+                "data": "@公車/選擇站點 direction=down",
+                "displayText": "下山",
+            },
+        ],
+    )
 
 
 def stops_bubble(stop_names: list[str], direction: str, direction_name: str) -> dict:

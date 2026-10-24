@@ -18,6 +18,7 @@ from templates.messages.bus_message import (
     bus_menu_bubble,
     bus_reply,
     countdown_text,
+    direction_bubble,
     direction_prompt,
     no_bus_bubble,
     runs_today,
@@ -329,6 +330,16 @@ def test_direction_prompt_names_all_three_lines_in_plain_text():
     prompt = direction_prompt()
     for key in ("red", "green", "blue"):
         assert FLEX_THEME["routes"][key]["label"] in prompt
+
+
+def test_each_line_gets_its_own_colour_block_not_one_crowded_row():
+    """三個顏色擠在一行反而分不出來，所以一條線一個色塊。"""
+    blocks = direction_bubble()["body"]["contents"][1]["contents"]
+    assert len(blocks) == 3
+    for block, family in zip(blocks, ("red", "green", "blue"), strict=True):
+        assert block["backgroundColor"] == FLEX_THEME["routes"][family]["tint"]
+        assert block["contents"][0]["color"] == FLEX_THEME["routes"][family]["ink"]
+        assert FLEX_THEME["routes"][family]["label"] in block["contents"][0]["text"]
 
 
 def test_direction_actions_exist_on_the_card_as_well_as_the_quick_reply():
