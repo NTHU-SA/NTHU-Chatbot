@@ -86,7 +86,7 @@ async def build_samples() -> list[dict]:
                 ),
             )
             for state, alt, extra in [
-                ("after_last", "末班車已過", {"today_time": "23:29", "next_time": "08:49"}),
+                ("after_last", "末班車已過", {"next_time": "08:49"}),
                 ("before_first", "尚未發車", {"today_time": "07:31"}),
                 ("no_service", "今日無班次", {}),
             ]

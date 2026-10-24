@@ -50,7 +50,12 @@ async def test_bus_arrivals_use_detailed_schedules_and_escape_json():
         },
     ]
     original = copy.deepcopy(schedules)
-    with fake_api(bus, schedules) as get:
+    # 首末班要固定住：用合成班表推出來的話，結果會隨實際時鐘在
+    # 「尚未發車」與到站卡之間跳動。
+    with (
+        fake_api(bus, schedules) as get,
+        patch.object(bus, "_day_bounds", new=AsyncMock(return_value=("07:00", "22:00"))),
+    ):
         messages = await bus.query_stop_bus(command(stop_name="North Gate"))
 
     schedule_call = get.await_args_list[0]
@@ -81,7 +86,8 @@ async def test_bus_empty_schedules_explain_why_there_is_nothing_to_show():
     assert messages[0].type == "text"
     bubble = messages[1].contents
     assert bubble.type == "bubble"
-    assert bubble.body.contents[0].text in {"末班車已過", "尚未發車", "今日無班次"}
+    # 班表整個拿不到時首末班為 None，必定是「今日無班次」，與時鐘無關
+    assert bubble.body.contents[0].text == "今日無班次"
 
 
 # -- library --

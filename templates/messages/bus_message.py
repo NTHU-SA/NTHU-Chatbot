@@ -52,7 +52,9 @@ FARE_INK = "#B25E00"
 FARE_TINT = "#FDF0E2"
 
 NO_BUS_COPY = {
-    "after_last": ("末班車已過", "今日末班"),
+    # 末班時間不顯示：剩餘班次全停駛時也會走這條，那時末班其實還沒到，
+    # 寫出來會變成「已過」配一個未來時間，自相矛盾。
+    "after_last": ("末班車已過", None),
     "before_first": ("尚未發車", "今日首班"),
     "no_service": ("今日無班次", None),
 }
@@ -335,13 +337,7 @@ def bus_reply(
 
     runnable = [item for item in arrivals if runs_today(item.get("description"), moment.weekday())]
     if not runnable:
-        return no_bus_bubble(
-            stop_name,
-            direction_name,
-            state=state,
-            today_time=last_time,
-            next_time=tomorrow_first,
-        )
+        return no_bus_bubble(stop_name, direction_name, state=state, next_time=tomorrow_first)
     return bus_arrival_carousel(runnable, stop_name, direction_name, moment)
 
 
