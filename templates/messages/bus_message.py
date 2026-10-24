@@ -510,7 +510,8 @@ def direction_bubble() -> dict:
             "layout": "vertical",
             "paddingAll": FLEX_THEME["spacing"]["footer"],
             "spacing": FLEX_THEME["spacing"]["item_gap"],
-            "backgroundColor": _color("surface"),
+            # 次要按鈕是白底，footer 也白的話它就不像按鈕了
+            "backgroundColor": _color("background"),
             "contents": [
                 {
                     "type": "button",
@@ -530,8 +531,8 @@ def direction_bubble() -> dict:
             ],
         },
         "styles": {
-            "body": {"backgroundColor": _color("background")},
-            "footer": {"backgroundColor": _color("surface")},
+            "body": {"backgroundColor": _color("surface")},
+            "footer": {"backgroundColor": _color("background")},
         },
     }
 
