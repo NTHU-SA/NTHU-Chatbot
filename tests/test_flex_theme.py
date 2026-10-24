@@ -189,8 +189,16 @@ async def test_global_theme_changes_reach_all_builders_templates_and_cached_menu
                     assert card["size"] == "giga"
                 else:
                     assert card["size"] == FLEX_THEME["components"]["notice_size"]
+                # 公車到站卡的「重新整理」刻意染成該線的顏色
+                route_inks = {route["ink"] for route in FLEX_THEME["routes"].values()}
                 for component in card.get("footer", {}).get("contents", []):
                     if component["type"] == "button":
-                        assert component["color"] == "#4D4480"
+                        assert component["color"] in {
+                            "#4D4480",
+                            FLEX_THEME["colors"]["surface"],
+                            FLEX_THEME["colors"]["brand"],
+                            FLEX_THEME["colors"]["muted"],
+                            *route_inks,
+                        }
                         assert component["height"] == "md"
     assert await command_handler.auto_generate_default_menu("bus") is not previous

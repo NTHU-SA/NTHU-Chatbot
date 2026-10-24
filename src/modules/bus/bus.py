@@ -15,7 +15,9 @@ from src.utils import announcecrawler, nthuapi
 from templates.messages.bus_message import (
     bus_menu_bubble,
     bus_reply,
+    direction_bubble,
     direction_prompt,
+    stops_bubble,
 )
 
 STATIC_URL = "https://data.nthusa.tw"
@@ -127,7 +129,13 @@ def select_route(params):
             ),
         ]
     )
-    return [TextMessage(text=direction_prompt(), quick_reply=quick_reply)]
+    return [
+        FlexMessage(
+            alt_text=direction_prompt(),
+            contents=FlexContainer.from_dict(direction_bubble()),
+            quick_reply=quick_reply,
+        )
+    ]
 
 
 @command_handler.add_command("選擇站點")
@@ -151,9 +159,16 @@ async def select_stops(events):
             )
         )
 
-    quick_reply = QuickReply(items=quick_reply_items)
-    text_message = TextMessage(text="請選擇你要搭乘的公車站點", quick_reply=quick_reply)
-    return [text_message]
+    direction_zh = DIRECTION_NAMES.get(direction, "上山")
+    return [
+        FlexMessage(
+            alt_text="請選擇你要搭乘的公車站點",
+            contents=FlexContainer.from_dict(
+                stops_bubble([stop["name"] for stop in stops_data], direction, direction_zh)
+            ),
+            quick_reply=QuickReply(items=quick_reply_items),
+        )
+    ]
 
 
 @command_handler.add_command("查詢站點與方向")  # 處理使用者選擇站點後的查詢
@@ -194,10 +209,17 @@ async def query_stop_bus(event):
     first_time, last_time = await _day_bounds(stop_name, direction, _day_kind(now))
     tomorrow_first, _ = await _day_bounds(stop_name, direction, _day_kind(now + timedelta(days=1)))
 
+    new_params = ""
+    for param in params:
+        new_params += f" {param}={params[param]}"
+    refresh_data = "@公車/查詢站點與方向" + new_params
+
     container = bus_reply(
         bus_stop_info,
         stop_name,
         direction_zh,
+        refresh_data,
+        direction=direction,
         first_time=first_time,
         last_time=last_time,
         tomorrow_first=tomorrow_first,
@@ -209,12 +231,6 @@ async def query_stop_bus(event):
         f"🚌 【{stop_name}】{day_zh}{direction_zh}公車資訊\n"
         f"更新時間：{now.strftime('%Y-%m-%d %H:%M:%S')}"
     )
-
-    # 製作新的 data for postbackaction
-    new_params = ""
-    for param in params:
-        new_params += f" {param}={params[param]}"
-    refresh_data = "@公車/查詢站點與方向" + new_params
 
     flex_message = FlexMessage(
         alt_text=info_message,

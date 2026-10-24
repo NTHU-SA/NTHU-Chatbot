@@ -17,11 +17,13 @@ from templates.messages.bus_message import (
     bus_arrival_carousel,
     bus_menu_bubble,
     bus_reply,
+    countdown_text,
     direction_prompt,
     no_bus_bubble,
     runs_today,
     service_state,
     split_note,
+    stops_bubble,
 )
 from templates.messages.flex_theme import FLEX_THEME
 
@@ -42,8 +44,11 @@ def arrival(**changes):
     }
 
 
+REFRESH = "@公車/查詢站點與方向 stop_name=綜二館 direction=up"
+
+
 def cards(arrivals, stop="綜二館", direction="上山", now=NOON):
-    return bus_arrival_carousel(arrivals, stop, direction, now)["contents"]
+    return bus_arrival_carousel(arrivals, stop, direction, REFRESH, now)["contents"]
 
 
 def body_text(card):
@@ -211,6 +216,7 @@ def test_suspended_departures_never_reach_a_card():
         [arrival(arrive_time="12:10"), arrival(arrive_time="12:40", description="週五停駛")],
         "綜二館",
         "上山",
+        REFRESH,
         now=NOON,
         **BOUNDS,
     )
@@ -261,6 +267,7 @@ def test_early_morning_shows_the_first_departure_instead_of_a_huge_countdown():
         [arrival(arrive_time="07:31")],
         "綜二館",
         "下山",
+        REFRESH,
         now=datetime(2026, 10, 23, 0, 30),
         **BOUNDS,
     )
@@ -276,6 +283,7 @@ def test_finished_notice_never_prints_a_last_departure_that_has_not_happened():
         [arrival(arrive_time="23:29", description="週五停駛")],
         "綜二館",
         "下山",
+        REFRESH,
         now=datetime(2026, 10, 23, 23, 3),
         **BOUNDS,
     )
@@ -286,7 +294,9 @@ def test_finished_notice_never_prints_a_last_departure_that_has_not_happened():
 
 
 def test_every_departure_suspended_falls_back_to_the_notice_bubble():
-    container = bus_reply([arrival(description="週五停駛")], "綜二館", "下山", now=NOON, **BOUNDS)
+    container = bus_reply(
+        [arrival(description="週五停駛")], "綜二館", "下山", REFRESH, now=NOON, **BOUNDS
+    )
     assert container["type"] == "bubble"
     rows = [item["text"] for item in container["body"]["contents"] if item["type"] == "text"]
     assert rows[0] == "末班車已過"
@@ -294,7 +304,7 @@ def test_every_departure_suspended_falls_back_to_the_notice_bubble():
 
 
 def test_real_departures_win_over_the_inferred_state():
-    container = bus_reply([arrival()], "綜二館", "上山", now=NOON, **BOUNDS)
+    container = bus_reply([arrival()], "綜二館", "上山", REFRESH, now=NOON, **BOUNDS)
     assert container["type"] == "carousel"
 
 
@@ -321,14 +331,58 @@ def test_direction_prompt_names_all_three_lines_in_plain_text():
         assert FLEX_THEME["routes"][key]["label"] in prompt
 
 
-def test_direction_step_is_a_bubble_with_quick_replies_not_a_flex_card():
-    """二選一的問題用一整張卡太重。"""
+def test_direction_actions_exist_on_the_card_as_well_as_the_quick_reply():
+    """LINE 電腦版不顯示 Quick Reply，卡上必須有同一組動作才走得下去。"""
     message = bus.select_route(SimpleNamespace(params={}))[0]
-    assert message.type == "text"
-    assert [item.action.data for item in message.quick_reply.items] == [
-        "@公車/選擇站點 direction=up",
-        "@公車/選擇站點 direction=down",
+    assert message.type == "flex"
+    on_card = [button.action.data for button in message.contents.footer.contents]
+    assert on_card == ["@公車/選擇站點 direction=up", "@公車/選擇站點 direction=down"]
+    assert [item.action.data for item in message.quick_reply.items] == on_card
+
+
+async def test_stop_actions_exist_on_the_card_as_well_as_the_quick_reply():
+    stops = [{"name": "北校門口"}, {"name": "教育學院大樓&南門停車場"}]
+    with patch.object(bus.nthuapi, "get", new=AsyncMock(return_value=stops)):
+        message = (await bus.select_stops(SimpleNamespace(params={"direction": "down"})))[0]
+    assert message.type == "flex"
+    on_card = [row.action.data for row in message.contents.body.contents]
+    assert on_card == [
+        "@公車/查詢站點與方向 stop_name=北校門口 direction=down",
+        "@公車/查詢站點與方向 stop_name=教育學院大樓&南門停車場 direction=down",
     ]
+    assert [item.action.data for item in message.quick_reply.items] == on_card
+
+
+def test_long_stop_names_stay_readable_because_rows_wrap():
+    """按鈕不會換行，長站名會被切掉，所以站點列用可點的 box。"""
+    bubble = stops_bubble(["教育學院大樓&南門停車場"], "up", "上山")
+    row = bubble["body"]["contents"][0]
+    assert row["type"] == "box"
+    assert row["contents"][0]["wrap"] is True
+
+
+@pytest.mark.parametrize(
+    "minutes, expected",
+    [
+        (None, "時間未知"),
+        (0, "即將進站"),
+        (1, "還有 1 分鐘"),
+        (59, "還有 59 分鐘"),
+        (60, "還有 1 小時"),
+        (110, "還有 1 小時 50 分"),
+        (363, "還有 6 小時 3 分"),
+    ],
+)
+def test_long_waits_switch_to_hours(minutes, expected):
+    """週末班距以小時計，「還有 363 分鐘」沒人會在心裡換算。"""
+    assert countdown_text(minutes) == expected
+
+
+def test_every_card_carries_its_own_action_for_desktop_users():
+    card = cards([arrival()])[0]
+    assert card["footer"]["contents"][0]["action"]["data"] == REFRESH
+    bubble = no_bus_bubble("綜二館", "下山", state="no_service", direction="down")
+    assert bubble["footer"]["contents"][0]["action"]["data"] == "@公車/選擇站點 direction=down"
 
 
 def test_module_menu_replaces_the_generated_carousel_with_one_card():
@@ -394,6 +448,7 @@ def test_dynamic_text_with_quotes_and_newlines_stays_a_valid_flex_container():
         [arrival(dep_stop='校門 "A"', description="第一行\n第二行")],
         '校門 "A"',
         "上山",
+        REFRESH,
         NOON,
     )
     assert FlexContainer.from_dict(container).to_dict() == container

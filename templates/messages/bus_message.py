@@ -119,6 +119,37 @@ def _minutes_until(arrive_time: str, now: datetime) -> int | None:
     return round((target - now).total_seconds() / 60)
 
 
+def countdown_text(minutes: int | None) -> str:
+    """等候時間要讓人一眼讀懂。週末班距以小時計，「還有 363 分鐘」沒人會換算。"""
+    if minutes is None:
+        return "時間未知"
+    if minutes <= 0:
+        return "即將進站"
+    if minutes < 60:
+        return f"還有 {minutes} 分鐘"
+    hours, rest = divmod(minutes, 60)
+    return f"還有 {hours} 小時" if not rest else f"還有 {hours} 小時 {rest} 分"
+
+
+def _action_footer(action: dict, ink: str) -> dict:
+    """LINE 電腦版不顯示 Quick Reply，所以每張卡都要有自己的出口。"""
+    return {
+        "type": "box",
+        "layout": "vertical",
+        "paddingAll": FLEX_THEME["spacing"]["footer"],
+        "backgroundColor": _color("surface"),
+        "contents": [
+            {
+                "type": "button",
+                "style": "link",
+                "height": FLEX_THEME["components"]["button_height"],
+                "color": ink,
+                "action": action,
+            }
+        ],
+    }
+
+
 def fare_badge(note: str) -> dict:
     """要花錢的車給橘色標籤，不能跟一般備註長得一樣。"""
     return {
@@ -172,6 +203,7 @@ def _route_card(
     direction_name: str,
     updated_at: str,
     now: datetime,
+    refresh_data: str,
 ) -> dict:
     route = FLEX_THEME["routes"].get(route_key) or {
         "ink": _color("muted"),
@@ -179,13 +211,7 @@ def _route_card(
     }
     label = CARD_ROUTE_LABEL.get(route_key, UNKNOWN_LABEL)
     first, rest = arrivals[0], arrivals[1:]
-    minutes = _minutes_until(first["arrive_time"], now)
-    if minutes is None:
-        countdown = "時間未知"
-    elif minutes <= 0:
-        countdown = "即將進站"
-    else:
-        countdown = f"還有 {minutes} 分鐘"
+    countdown = countdown_text(_minutes_until(first["arrive_time"], now))
 
     fare, note = split_note(first.get("description"))
     body = [
@@ -240,6 +266,15 @@ def _route_card(
             "backgroundColor": _color("surface"),
             "contents": body,
         },
+        "footer": _action_footer(
+            {
+                "type": "postback",
+                "label": "重新整理",
+                "data": refresh_data,
+                "displayText": "重新整理",
+            },
+            route["ink"],
+        ),
         "styles": {
             "body": {"backgroundColor": _color("background")},
             "footer": {"backgroundColor": _color("surface")},
@@ -251,6 +286,7 @@ def bus_arrival_carousel(
     arrivals: list[dict],
     stop_name: str,
     direction_name: str,
+    refresh_data: str,
     now: datetime | None = None,
 ) -> dict:
     """依路線分組，紅綠藍各一張。該站沒有的線不出現，所以張數是 1~3 不是固定 3。"""
@@ -264,7 +300,7 @@ def bus_arrival_carousel(
 
     updated_at = moment.strftime("%H:%M")
     cards = [
-        _route_card(key, grouped[key], stop_name, direction_name, updated_at, moment)
+        _route_card(key, grouped[key], stop_name, direction_name, updated_at, moment, refresh_data)
         for key in (*ROUTE_ORDER, UNKNOWN_ROUTE)
         if grouped.get(key)
     ]
@@ -281,6 +317,7 @@ def no_bus_bubble(
     today_time: str | None = None,
     next_time: str | None = None,
     next_label: str = "明日首班",
+    direction: str = "up",
 ) -> dict:
     """沒有車的三種情況共用一張泡泡。寫死「末班車已過」在清晨會變成假資訊。"""
     headline, time_label = NO_BUS_COPY[state]
@@ -308,6 +345,15 @@ def no_bus_bubble(
             "backgroundColor": _color("surface"),
             "contents": rows,
         },
+        "footer": _action_footer(
+            {
+                "type": "postback",
+                "label": "換一個站看看",
+                "data": f"@公車/選擇站點 direction={direction}",
+                "displayText": "重新選擇站點",
+            },
+            _color("brand"),
+        ),
         "styles": {
             "body": {"backgroundColor": _color("background")},
             "footer": {"backgroundColor": _color("surface")},
@@ -319,7 +365,9 @@ def bus_reply(
     arrivals: list[dict],
     stop_name: str,
     direction_name: str,
+    refresh_data: str,
     *,
+    direction: str = "up",
     first_time: str | None,
     last_time: str | None,
     tomorrow_first: str | None = None,
@@ -333,12 +381,20 @@ def bus_reply(
     moment = now or datetime.now(TZ)
     state = service_state(first_time, last_time, moment)
     if state == "before_first":
-        return no_bus_bubble(stop_name, direction_name, state=state, today_time=first_time)
+        return no_bus_bubble(
+            stop_name, direction_name, state=state, today_time=first_time, direction=direction
+        )
 
     runnable = [item for item in arrivals if runs_today(item.get("description"), moment.weekday())]
     if not runnable:
-        return no_bus_bubble(stop_name, direction_name, state=state, next_time=tomorrow_first)
-    return bus_arrival_carousel(runnable, stop_name, direction_name, moment)
+        return no_bus_bubble(
+            stop_name,
+            direction_name,
+            state=state,
+            next_time=tomorrow_first,
+            direction=direction,
+        )
+    return bus_arrival_carousel(runnable, stop_name, direction_name, refresh_data, moment)
 
 
 def _menu_button(action: dict, *, primary: bool = False, external: bool = False) -> dict:
@@ -406,6 +462,124 @@ def bus_menu_bubble() -> dict:
 
 
 def direction_prompt() -> str:
-    """選方向只是二選一，用純文字泡泡加 Quick Reply 就夠，不必開一張 Flex 卡。"""
     labels = " · ".join(FLEX_THEME["routes"][key]["label"] for key in ROUTE_ORDER)
     return "搭校巴，先選方向\n上山含往南大校區，下山含往校本部\n" + labels
+
+
+def _route_name_spans() -> list[dict]:
+    return [
+        span
+        for index, key in enumerate(ROUTE_ORDER)
+        for span in ([{"type": "span", "text": " · ", "color": _color("line")}] if index else [])
+        + [
+            {
+                "type": "span",
+                "text": FLEX_THEME["routes"][key]["label"],
+                "color": FLEX_THEME["routes"][key]["ink"],
+                "weight": "bold",
+            }
+        ]
+    ]
+
+
+def direction_bubble() -> dict:
+    """方向只是二選一，所以用窄卡。但按鈕必須在卡上：電腦版沒有 Quick Reply。"""
+    return {
+        "type": "bubble",
+        "size": FLEX_THEME["components"]["notice_size"],
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "paddingAll": FLEX_THEME["spacing"]["body"],
+            "spacing": FLEX_THEME["spacing"]["item_gap"],
+            "backgroundColor": _color("surface"),
+            "contents": [
+                text("搭校巴，先選方向", size="title", weight="bold"),
+                text("上山含往南大校區，下山含往校本部", size="caption", color="muted"),
+                {
+                    "type": "text",
+                    "text": " · ".join(FLEX_THEME["routes"][key]["label"] for key in ROUTE_ORDER),
+                    "contents": _route_name_spans(),
+                    "size": FLEX_THEME["typography"]["caption"],
+                    "wrap": True,
+                },
+            ],
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "paddingAll": FLEX_THEME["spacing"]["footer"],
+            "spacing": FLEX_THEME["spacing"]["item_gap"],
+            "backgroundColor": _color("surface"),
+            "contents": [
+                {
+                    "type": "button",
+                    "style": "primary" if index == 0 else "secondary",
+                    "color": _color("brand") if index == 0 else _color("surface"),
+                    "height": FLEX_THEME["components"]["button_height"],
+                    "action": {
+                        "type": "postback",
+                        "label": label,
+                        "data": f"@公車/選擇站點 direction={value}",
+                        "displayText": label,
+                    },
+                }
+                for index, (label, value) in enumerate(
+                    (("🚍 我要上山", "up"), ("🚍 我要下山", "down"))
+                )
+            ],
+        },
+        "styles": {
+            "body": {"backgroundColor": _color("background")},
+            "footer": {"backgroundColor": _color("surface")},
+        },
+    }
+
+
+def stops_bubble(stop_names: list[str], direction: str, direction_name: str) -> dict:
+    """站名很長，用可點的列而不是按鈕 —— 按鈕不換行，長站名會被切掉。"""
+    rows = []
+    for index, name in enumerate(stop_names):
+        row = {
+            "type": "box",
+            "layout": "vertical",
+            "paddingAll": FLEX_THEME["spacing"]["row"],
+            "cornerRadius": FLEX_THEME["radii"]["row"],
+            "backgroundColor": _color("background"),
+            "action": {
+                "type": "postback",
+                "label": name[:20],
+                "displayText": f"查詢{name}站點公車",
+                "data": f"@公車/查詢站點與方向 stop_name={name} direction={direction}",
+            },
+            "contents": [text(name, weight="bold")],
+        }
+        if index:
+            row["margin"] = FLEX_THEME["spacing"]["item_gap"]
+        rows.append(row)
+    return {
+        "type": "bubble",
+        "size": FLEX_THEME["components"]["bubble_size"],
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "paddingAll": FLEX_THEME["spacing"]["header"],
+            "backgroundColor": _color("tint"),
+            "spacing": "xs",
+            "contents": [
+                text("🚏 你在哪一站？", size="title", weight="bold"),
+                text(direction_name, size="caption", color="muted"),
+            ],
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "paddingAll": FLEX_THEME["spacing"]["body"],
+            "backgroundColor": _color("surface"),
+            "contents": rows,
+        },
+        "styles": {
+            "body": {"backgroundColor": _color("background")},
+            "footer": {"backgroundColor": _color("surface")},
+        },
+    }
