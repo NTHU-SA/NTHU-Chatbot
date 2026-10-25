@@ -57,6 +57,8 @@ NO_BUS_COPY = {
     "after_last": ("末班車已過", None),
     "before_first": ("尚未發車", "今日首班"),
     "no_service": ("今日無班次", None),
+    # 不知道首末班時不要猜。說「今日無班次」會在查詢失敗或查別的營運日時說謊。
+    "unknown": ("目前沒有班次", None),
 }
 
 
@@ -407,6 +409,7 @@ def bus_reply(
     tomorrow_first: str | None = None,
     limit: int | None = None,
     today_only: bool = True,
+    hours_known: bool = True,
     now: datetime | None = None,
 ) -> dict:
     """回傳到站輪播，或在尚未發車／沒有車時回傳說明泡泡。
@@ -417,6 +420,9 @@ def bus_reply(
     `today_only=False` 用於查詢指定營運日（平日／假日）而不是今天 —— 那時
     「現在幾點」和「今天星期幾」都不是判斷依據，所以停駛過濾與首末班判斷
     都跳過，直接把時刻表呈現出來。
+
+    `hours_known=False` 表示連今日首末班都查不到（例如班表 API 失敗）。那時
+    不能說「今日無班次」—— 那是在把查詢失敗講成沒有車。
 
     清晨不顯示「還有 421 分鐘」的到站卡：比對現在是否早於今日首班就夠，
     不需要分鐘數門檻。有真實班次時相信班次，沒有才用推算的狀態。
@@ -432,9 +438,10 @@ def bus_reply(
     if limit is not None:
         runnable = runnable[:limit]
 
-    if not today_only:
+    if not today_only or not hours_known:
+        # 查別的營運日、或連今日首末班都查不到時，不能宣稱「今天」怎麼樣
         if not runnable:
-            return no_bus_bubble(stop_name, direction_name, state="no_service", direction=direction)
+            return no_bus_bubble(stop_name, direction_name, state="unknown", direction=direction)
         return bus_arrival_carousel(runnable, stop_name, direction_name, refresh_data, moment)
 
     state = service_state(first_time, last_time, moment)

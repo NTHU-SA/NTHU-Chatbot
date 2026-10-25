@@ -596,9 +596,43 @@ async def test_missing_stop_name_is_reported_without_calling_api():
     assert messages[0].type == "text"
 
 
-async def test_day_bounds_survive_an_api_failure_instead_of_breaking_the_reply():
+async def test_day_bounds_report_a_failed_lookup_apart_from_an_empty_day():
+    """查不到和那天真的沒車是兩回事 —— 混在一起會把 API 故障說成「今日無班次」。"""
     with patch.object(bus.nthuapi, "get", new=AsyncMock(side_effect=ValueError("down"))):
+        assert await bus._day_bounds("綜二館", "up", "weekday") is None
+    with patch.object(bus.nthuapi, "get", new=AsyncMock(return_value=[])):
         assert await bus._day_bounds("綜二館", "up", "weekday") == (None, None)
+
+
+def test_a_failed_timetable_lookup_does_not_claim_the_day_has_no_buses():
+    bubble = bus_reply(
+        [],
+        "綜二館",
+        "下山",
+        REFRESH,
+        hours_known=False,
+        first_time=None,
+        last_time=None,
+        now=NOON,
+    )
+    rows = [row["text"] for row in bubble["body"]["contents"] if row["type"] == "text"]
+    assert rows[0] == "目前沒有班次"
+    assert "今日" not in rows[0]
+
+
+def test_an_empty_named_day_does_not_talk_about_today():
+    bubble = bus_reply(
+        [],
+        "綜二館",
+        "下山",
+        REFRESH,
+        today_only=False,
+        first_time=None,
+        last_time=None,
+        now=NOON,
+    )
+    rows = [row["text"] for row in bubble["body"]["contents"] if row["type"] == "text"]
+    assert rows[0] == "目前沒有班次"
 
 
 async def test_invalid_schedule_is_logged_and_reported_by_command_handler():

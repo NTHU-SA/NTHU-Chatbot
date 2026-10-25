@@ -58,11 +58,16 @@ def _day_kind(moment: datetime) -> str:
     return "weekend" if moment.isoweekday() >= 6 else "weekday"
 
 
-async def _day_bounds(stop_name: str, direction: str, day: str) -> tuple[str | None, str | None]:
-    """今日首末班到站時間。
+async def _day_bounds(
+    stop_name: str, direction: str, day: str
+) -> tuple[str | None, str | None] | None:
+    """當日首末班到站時間；查不到時回 `None`。
 
     `day=current` 只回「從現在起還剩的車」，所以判斷「尚未發車」或「末班車已過」
     必須另外問整天的班表。這份班表是靜態的，沿用預設快取。
+
+    回 `None`（查詢失敗）和回 `(None, None)`（那天真的沒有班次）是兩回事：
+    前者不能拿來跟使用者說「今日無班次」。
     """
     try:
         schedules = await nthuapi.get(
@@ -77,9 +82,9 @@ async def _day_bounds(stop_name: str, direction: str, day: str) -> tuple[str | N
             },
         )
     except ValueError:
-        return None, None
+        return None
     if not isinstance(schedules, list):
-        return None, None
+        return None
     times = sorted(
         item["arrive_time"]
         for schedule in schedules
@@ -206,13 +211,18 @@ async def query_stop_bus(event):
     direction_zh = DIRECTION_NAMES[direction]
     # 指定平日／假日時，「現在幾點」與「今天星期幾」都不是判斷依據
     today_only = query_params["day"] == "current"
+    first_time = last_time = tomorrow_first = None
+    hours_known = True
     if today_only:
-        (first_time, last_time), (tomorrow_first, _) = await asyncio.gather(
+        today_bounds, tomorrow_bounds = await asyncio.gather(
             _day_bounds(stop_name, direction, _day_kind(now)),
             _day_bounds(stop_name, direction, _day_kind(now + timedelta(days=1))),
         )
-    else:
-        first_time = last_time = tomorrow_first = None
+        hours_known = today_bounds is not None
+        if today_bounds:
+            first_time, last_time = today_bounds
+        if tomorrow_bounds:
+            tomorrow_first = tomorrow_bounds[0]
 
     new_params = ""
     for param in params:
@@ -230,6 +240,7 @@ async def query_stop_bus(event):
         tomorrow_first=tomorrow_first,
         limit=limit,
         today_only=today_only,
+        hours_known=hours_known,
         now=now,
     )
 
