@@ -303,6 +303,57 @@ def test_every_departure_suspended_falls_back_to_the_notice_bubble():
     assert "08:49" in rows[-1]
 
 
+def test_suspended_departures_do_not_hide_the_ones_behind_them():
+    """先截斷再過濾的話，前幾班剛好都停駛就會誤判成沒有車。"""
+    arrivals = [
+        arrival(arrive_time="12:10", description="週五停駛"),
+        arrival(arrive_time="12:20", description="週五停駛"),
+        arrival(arrive_time="12:30"),
+    ]
+    container = bus_reply(arrivals, "綜二館", "上山", REFRESH, limit=2, now=NOON, **BOUNDS)
+    assert container["type"] == "carousel"
+    assert body_text(container["contents"][0])[0] == "12:30 到站"
+
+
+def test_limit_counts_departures_that_actually_run():
+    arrivals = [arrival(arrive_time=f"12:{minute}0") for minute in range(1, 6)]
+    arrivals[0]["description"] = "週五停駛"
+    container = bus_reply(arrivals, "綜二館", "上山", REFRESH, limit=2, now=NOON, **BOUNDS)
+    rows = body_text(container["contents"][0])
+    assert rows[0] == "12:20 到站"
+    assert "後續到站 12:30" in rows
+
+
+def test_a_named_service_day_is_shown_as_a_timetable_not_judged_against_today():
+    """查「平日」時，現在幾點和今天星期幾都不是判斷依據。"""
+    container = bus_reply(
+        [arrival(arrive_time="07:31")],
+        "綜二館",
+        "下山",
+        REFRESH,
+        today_only=False,
+        now=datetime(2026, 10, 23, 0, 30),  # 凌晨，today_only 時會判成尚未發車
+        first_time=None,
+        last_time=None,
+    )
+    assert container["type"] == "carousel"
+
+
+def test_a_named_service_day_keeps_departures_suspended_on_another_weekday():
+    """「週六停駛」不該因為今天是星期五就被濾掉。"""
+    container = bus_reply(
+        [arrival(description="週五停駛")],
+        "綜二館",
+        "下山",
+        REFRESH,
+        today_only=False,
+        now=NOON,
+        first_time=None,
+        last_time=None,
+    )
+    assert container["type"] == "carousel"
+
+
 def test_real_departures_win_over_the_inferred_state():
     container = bus_reply([arrival()], "綜二館", "上山", REFRESH, now=NOON, **BOUNDS)
     assert container["type"] == "carousel"
@@ -492,7 +543,7 @@ async def test_canonical_filters_reach_the_api_without_extra_schedule_requests()
             "day": "weekday",
             "direction": "down",
             "time": "08:08",
-            "limit": 2,
+            "limit": bus.API_FETCH_LIMIT,
             "stop": "綜二館",
             "details": True,
         },
@@ -520,7 +571,7 @@ async def test_legacy_postback_filters_are_translated_to_canonical_query_paramet
         )
     params = get.await_args_list[0].kwargs["params"]
     assert params["route"] == "main"
-    assert params["limit"] == 12
+    assert params["limit"] == bus.API_FETCH_LIMIT
     assert "bus_type" not in params
     assert "limits" not in params
 
@@ -586,7 +637,7 @@ async def test_all_directions_are_labeled_and_canonical_filters_override_legacy_
     assert "雙向" in messages[0].text
     params = get.await_args_list[0].kwargs["params"]
     assert params["route"] == "main"
-    assert params["limit"] == 1
+    assert params["limit"] == bus.API_FETCH_LIMIT
 
 
 async def test_announcements_come_from_the_bus_board_not_the_catch_all_one():

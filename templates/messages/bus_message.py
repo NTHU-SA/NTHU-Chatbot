@@ -405,21 +405,43 @@ def bus_reply(
     first_time: str | None,
     last_time: str | None,
     tomorrow_first: str | None = None,
+    limit: int | None = None,
+    today_only: bool = True,
     now: datetime | None = None,
 ) -> dict:
     """回傳到站輪播，或在尚未發車／沒有車時回傳說明泡泡。
+
+    先濾掉今天停駛的班次再截斷到 `limit`：反過來的話，前幾班剛好都停駛就會
+    誤判成沒有車，其實後面還有。
+
+    `today_only=False` 用於查詢指定營運日（平日／假日）而不是今天 —— 那時
+    「現在幾點」和「今天星期幾」都不是判斷依據，所以停駛過濾與首末班判斷
+    都跳過，直接把時刻表呈現出來。
 
     清晨不顯示「還有 421 分鐘」的到站卡：比對現在是否早於今日首班就夠，
     不需要分鐘數門檻。有真實班次時相信班次，沒有才用推算的狀態。
     """
     moment = now or datetime.now(TZ)
+
+    if today_only:
+        runnable = [
+            item for item in arrivals if runs_today(item.get("description"), moment.weekday())
+        ]
+    else:
+        runnable = list(arrivals)
+    if limit is not None:
+        runnable = runnable[:limit]
+
+    if not today_only:
+        if not runnable:
+            return no_bus_bubble(stop_name, direction_name, state="no_service", direction=direction)
+        return bus_arrival_carousel(runnable, stop_name, direction_name, refresh_data, moment)
+
     state = service_state(first_time, last_time, moment)
     if state == "before_first":
         return no_bus_bubble(
             stop_name, direction_name, state=state, today_time=first_time, direction=direction
         )
-
-    runnable = [item for item in arrivals if runs_today(item.get("description"), moment.weekday())]
     if not runnable:
         return no_bus_bubble(
             stop_name,
@@ -518,13 +540,13 @@ def direction_bubble() -> dict:
                 "type": "postback",
                 "label": "我要上山",
                 "data": "@公車/選擇站點 direction=up",
-                "displayText": "上山",
+                "displayText": "我要上山",
             },
             {
                 "type": "postback",
                 "label": "我要下山",
                 "data": "@公車/選擇站點 direction=down",
-                "displayText": "下山",
+                "displayText": "我要下山",
             },
         ],
     )

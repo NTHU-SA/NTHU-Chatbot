@@ -62,7 +62,7 @@ async def test_bus_arrivals_use_detailed_schedules_and_escape_json():
     assert schedule_call.kwargs["cache"] is False
     assert schedule_call.kwargs["params"] == {
         "day": "current",
-        "limit": 5,
+        "limit": bus.API_FETCH_LIMIT,
         "route": "all",
         "direction": "up",
         "stop": "North Gate",

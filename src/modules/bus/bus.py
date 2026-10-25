@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from linebot.v3.messaging import (
@@ -20,6 +21,8 @@ from templates.messages.bus_message import (
 )
 
 STATIC_URL = "https://data.nthusa.tw"
+# 多跟 API 要一些班次：停駛的濾掉之後才湊得滿使用者要的數量
+API_FETCH_LIMIT = 12
 TZ = timezone(timedelta(hours=8))
 DIRECTION_NAMES = {"up": "上山", "down": "下山", "all": "雙向"}
 DAY_NAMES = {"current": "即時", "weekday": "平日", "weekend": "假日"}
@@ -51,6 +54,7 @@ def _stop_arrivals(schedules: list[dict], stop_name: str) -> list[dict]:
 
 
 def _day_kind(moment: datetime) -> str:
+    # 國定假日會被當成平日 —— 校方 API 沒有行事曆，連假的班表要靠公告看板
     return "weekend" if moment.isoweekday() >= 6 else "weekday"
 
 
@@ -179,7 +183,7 @@ async def query_stop_bus(event):
 
     query_params = {
         "day": params.get("day", "current"),
-        "limit": limit,
+        "limit": API_FETCH_LIMIT,
         "route": params.get("route", params.get("bus_type", "all")),
         "direction": params.get("direction", "up"),
         "stop": stop_name,
@@ -194,13 +198,21 @@ async def query_stop_bus(event):
     if params.get("time"):
         query_params["time"] = params["time"]
     schedules = await nthuapi.get("/buses/schedule", params=query_params, cache=False)
-    bus_stop_info = _stop_arrivals(schedules, stop_name)[:limit]
+    # 截斷留到過濾之後做，否則前幾班剛好都停駛就會誤判成沒有車
+    bus_stop_info = _stop_arrivals(schedules, stop_name)
 
     now = datetime.now(TZ)
     direction = query_params["direction"]
     direction_zh = DIRECTION_NAMES[direction]
-    first_time, last_time = await _day_bounds(stop_name, direction, _day_kind(now))
-    tomorrow_first, _ = await _day_bounds(stop_name, direction, _day_kind(now + timedelta(days=1)))
+    # 指定平日／假日時，「現在幾點」與「今天星期幾」都不是判斷依據
+    today_only = query_params["day"] == "current"
+    if today_only:
+        (first_time, last_time), (tomorrow_first, _) = await asyncio.gather(
+            _day_bounds(stop_name, direction, _day_kind(now)),
+            _day_bounds(stop_name, direction, _day_kind(now + timedelta(days=1))),
+        )
+    else:
+        first_time = last_time = tomorrow_first = None
 
     new_params = ""
     for param in params:
@@ -216,6 +228,8 @@ async def query_stop_bus(event):
         first_time=first_time,
         last_time=last_time,
         tomorrow_first=tomorrow_first,
+        limit=limit,
+        today_only=today_only,
         now=now,
     )
 
