@@ -24,7 +24,6 @@ from templates.messages.bus_message import (
     runs_today,
     service_state,
     split_note,
-    stops_bubble,
 )
 from templates.messages.flex_theme import FLEX_THEME
 
@@ -351,25 +350,21 @@ def test_direction_actions_exist_on_the_card_as_well_as_the_quick_reply():
     assert [item.action.data for item in message.quick_reply.items] == on_card
 
 
-async def test_stop_actions_exist_on_the_card_as_well_as_the_quick_reply():
+async def test_stop_selection_stays_a_quick_reply_only():
+    """八個站做成卡片的話，手機上會同時出現八列的卡和八顆晶片。
+
+    同一份清單出現兩次比電腦版走不下去更糟 —— 這一步刻意只留 Quick Reply，
+    電腦版的缺口是已知且接受的。
+    """
     stops = [{"name": "北校門口"}, {"name": "教育學院大樓&南門停車場"}]
     with patch.object(bus.nthuapi, "get", new=AsyncMock(return_value=stops)):
-        message = (await bus.select_stops(SimpleNamespace(params={"direction": "down"})))[0]
-    assert message.type == "flex"
-    on_card = [row.action.data for row in message.contents.body.contents]
-    assert on_card == [
+        messages = await bus.select_stops(SimpleNamespace(params={"direction": "down"}))
+    assert len(messages) == 1
+    assert messages[0].type == "text"
+    assert [item.action.data for item in messages[0].quick_reply.items] == [
         "@公車/查詢站點與方向 stop_name=北校門口 direction=down",
         "@公車/查詢站點與方向 stop_name=教育學院大樓&南門停車場 direction=down",
     ]
-    assert [item.action.data for item in message.quick_reply.items] == on_card
-
-
-def test_long_stop_names_stay_readable_because_rows_wrap():
-    """按鈕不會換行，長站名會被切掉，所以站點列用可點的 box。"""
-    bubble = stops_bubble(["教育學院大樓&南門停車場"], "up", "上山")
-    row = bubble["body"]["contents"][0]
-    assert row["type"] == "box"
-    assert row["contents"][0]["wrap"] is True
 
 
 @pytest.mark.parametrize(

@@ -17,7 +17,6 @@ from templates.messages.bus_message import (
     bus_reply,
     direction_bubble,
     direction_prompt,
-    stops_bubble,
 )
 
 STATIC_URL = "https://data.nthusa.tw"
@@ -159,16 +158,10 @@ async def select_stops(events):
             )
         )
 
-    direction_zh = DIRECTION_NAMES.get(direction, "上山")
-    return [
-        FlexMessage(
-            alt_text="請選擇你要搭乘的公車站點",
-            contents=FlexContainer.from_dict(
-                stops_bubble([stop["name"] for stop in stops_data], direction, direction_zh)
-            ),
-            quick_reply=QuickReply(items=quick_reply_items),
-        )
-    ]
+    # 八個站做成卡片的話，手機上會同時出現八列的卡和八顆 Quick Reply，
+    # 同一份清單出現兩次。保留較輕的 Quick Reply；代價是電腦版看不到。
+    quick_reply = QuickReply(items=quick_reply_items)
+    return [TextMessage(text="請選擇你要搭乘的公車站點", quick_reply=quick_reply)]
 
 
 @command_handler.add_command("查詢站點與方向")  # 處理使用者選擇站點後的查詢
