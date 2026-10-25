@@ -48,7 +48,7 @@ REFRESH = "@公車/查詢站點與方向 stop_name=綜二館 direction=up"
 
 
 def cards(arrivals, stop="綜二館", direction="上山", now=NOON):
-    return bus_arrival_carousel(arrivals, stop, direction, REFRESH, now)["contents"]
+    return bus_arrival_carousel(arrivals, stop, direction, now)["contents"]
 
 
 def body_text(card):
@@ -105,7 +105,7 @@ def test_same_line_collapses_into_one_card_with_later_arrivals_listed():
     )
     assert len(result) == 1
     rows = body_text(result[0])
-    assert rows[0] == "12:10 到站"
+    assert rows[0] == "預計 12:10 到站"
     assert "後續到站 12:25 · 12:40" in rows
 
 
@@ -216,12 +216,11 @@ def test_suspended_departures_never_reach_a_card():
         [arrival(arrive_time="12:10"), arrival(arrive_time="12:40", description="週五停駛")],
         "綜二館",
         "上山",
-        REFRESH,
         now=NOON,
         **BOUNDS,
     )
     rows = body_text(container["contents"][0])
-    assert rows[0] == "12:10 到站"
+    assert rows[0] == "預計 12:10 到站"
     assert not any("12:40" in row for row in rows)
 
 
@@ -267,7 +266,6 @@ def test_early_morning_shows_the_first_departure_instead_of_a_huge_countdown():
         [arrival(arrive_time="07:31")],
         "綜二館",
         "下山",
-        REFRESH,
         now=datetime(2026, 10, 23, 0, 30),
         **BOUNDS,
     )
@@ -283,7 +281,6 @@ def test_finished_notice_never_prints_a_last_departure_that_has_not_happened():
         [arrival(arrive_time="23:29", description="週五停駛")],
         "綜二館",
         "下山",
-        REFRESH,
         now=datetime(2026, 10, 23, 23, 3),
         **BOUNDS,
     )
@@ -294,9 +291,7 @@ def test_finished_notice_never_prints_a_last_departure_that_has_not_happened():
 
 
 def test_every_departure_suspended_falls_back_to_the_notice_bubble():
-    container = bus_reply(
-        [arrival(description="週五停駛")], "綜二館", "下山", REFRESH, now=NOON, **BOUNDS
-    )
+    container = bus_reply([arrival(description="週五停駛")], "綜二館", "下山", now=NOON, **BOUNDS)
     assert container["type"] == "bubble"
     rows = [item["text"] for item in container["body"]["contents"] if item["type"] == "text"]
     assert rows[0] == "末班車已過"
@@ -310,17 +305,17 @@ def test_suspended_departures_do_not_hide_the_ones_behind_them():
         arrival(arrive_time="12:20", description="週五停駛"),
         arrival(arrive_time="12:30"),
     ]
-    container = bus_reply(arrivals, "綜二館", "上山", REFRESH, limit=2, now=NOON, **BOUNDS)
+    container = bus_reply(arrivals, "綜二館", "上山", limit=2, now=NOON, **BOUNDS)
     assert container["type"] == "carousel"
-    assert body_text(container["contents"][0])[0] == "12:30 到站"
+    assert body_text(container["contents"][0])[0] == "預計 12:30 到站"
 
 
 def test_limit_counts_departures_that_actually_run():
     arrivals = [arrival(arrive_time=f"12:{minute}0") for minute in range(1, 6)]
     arrivals[0]["description"] = "週五停駛"
-    container = bus_reply(arrivals, "綜二館", "上山", REFRESH, limit=2, now=NOON, **BOUNDS)
+    container = bus_reply(arrivals, "綜二館", "上山", limit=2, now=NOON, **BOUNDS)
     rows = body_text(container["contents"][0])
-    assert rows[0] == "12:20 到站"
+    assert rows[0] == "預計 12:20 到站"
     assert "後續到站 12:30" in rows
 
 
@@ -330,7 +325,6 @@ def test_a_named_service_day_is_shown_as_a_timetable_not_judged_against_today():
         [arrival(arrive_time="07:31")],
         "綜二館",
         "下山",
-        REFRESH,
         today_only=False,
         now=datetime(2026, 10, 23, 0, 30),  # 凌晨，today_only 時會判成尚未發車
         first_time=None,
@@ -345,7 +339,6 @@ def test_a_named_service_day_keeps_departures_suspended_on_another_weekday():
         [arrival(description="週五停駛")],
         "綜二館",
         "下山",
-        REFRESH,
         today_only=False,
         now=NOON,
         first_time=None,
@@ -355,7 +348,7 @@ def test_a_named_service_day_keeps_departures_suspended_on_another_weekday():
 
 
 def test_real_departures_win_over_the_inferred_state():
-    container = bus_reply([arrival()], "綜二館", "上山", REFRESH, now=NOON, **BOUNDS)
+    container = bus_reply([arrival()], "綜二館", "上山", now=NOON, **BOUNDS)
     assert container["type"] == "carousel"
 
 
@@ -435,9 +428,12 @@ def test_long_waits_switch_to_hours(minutes, expected):
     assert countdown_text(minutes) == expected
 
 
-def test_every_card_carries_its_own_action_for_desktop_users():
-    card = cards([arrival()])[0]
-    assert card["footer"]["contents"][0]["action"]["data"] == REFRESH
+def test_arrival_cards_have_no_buttons_of_their_own():
+    """重新整理放在 Quick Reply —— 卡上再放一顆就是同一個動作出現兩次。"""
+    assert "footer" not in cards([arrival()])[0]
+
+
+def test_the_notice_bubble_still_offers_a_way_out():
     bubble = no_bus_bubble("綜二館", "下山", state="no_service", direction="down")
     assert bubble["footer"]["contents"][0]["action"]["data"] == "@公車/選擇站點 direction=down"
 
@@ -505,7 +501,6 @@ def test_dynamic_text_with_quotes_and_newlines_stays_a_valid_flex_container():
         [arrival(dep_stop='校門 "A"', description="第一行\n第二行")],
         '校門 "A"',
         "上山",
-        REFRESH,
         NOON,
     )
     assert FlexContainer.from_dict(container).to_dict() == container
@@ -609,7 +604,6 @@ def test_a_failed_timetable_lookup_does_not_claim_the_day_has_no_buses():
         [],
         "綜二館",
         "下山",
-        REFRESH,
         hours_known=False,
         first_time=None,
         last_time=None,
@@ -625,7 +619,6 @@ def test_an_empty_named_day_does_not_talk_about_today():
         [],
         "綜二館",
         "下山",
-        REFRESH,
         today_only=False,
         first_time=None,
         last_time=None,

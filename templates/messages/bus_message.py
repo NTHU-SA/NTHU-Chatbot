@@ -134,7 +134,7 @@ def countdown_text(minutes: int | None) -> str:
 
 
 def _action_footer(action: dict, ink: str) -> dict:
-    """LINE 電腦版不顯示 Quick Reply，所以每張卡都要有自己的出口。"""
+    """說明泡泡自己的出口；到站卡的動作全部放在 Quick Reply。"""
     return {
         "type": "box",
         "layout": "vertical",
@@ -239,7 +239,6 @@ def _route_card(
     direction_name: str,
     updated_at: str,
     now: datetime,
-    refresh_data: str,
 ) -> dict:
     route = FLEX_THEME["routes"].get(route_key) or {
         "ink": _color("muted"),
@@ -252,7 +251,7 @@ def _route_card(
     fare, note = split_note(first.get("description"))
     body = [
         {
-            **text(f"{first['arrive_time']} 到站", size="arrival", weight="bold"),
+            **text(f"預計 {first['arrive_time']} 到站", size="arrival", weight="bold"),
             "color": route["ink"],
         },
         text(
@@ -302,15 +301,6 @@ def _route_card(
             "backgroundColor": _color("surface"),
             "contents": body,
         },
-        "footer": _action_footer(
-            {
-                "type": "postback",
-                "label": "重新整理",
-                "data": refresh_data,
-                "displayText": "重新整理",
-            },
-            route["ink"],
-        ),
         "styles": {
             "body": {"backgroundColor": _color("background")},
             "footer": {"backgroundColor": _color("surface")},
@@ -322,7 +312,6 @@ def bus_arrival_carousel(
     arrivals: list[dict],
     stop_name: str,
     direction_name: str,
-    refresh_data: str,
     now: datetime | None = None,
 ) -> dict:
     """依路線分組，紅綠藍各一張。該站沒有的線不出現，所以張數是 1~3 不是固定 3。"""
@@ -336,7 +325,7 @@ def bus_arrival_carousel(
 
     updated_at = moment.strftime("%H:%M")
     cards = [
-        _route_card(key, grouped[key], stop_name, direction_name, updated_at, moment, refresh_data)
+        _route_card(key, grouped[key], stop_name, direction_name, updated_at, moment)
         for key in (*ROUTE_ORDER, UNKNOWN_ROUTE)
         if grouped.get(key)
     ]
@@ -401,7 +390,6 @@ def bus_reply(
     arrivals: list[dict],
     stop_name: str,
     direction_name: str,
-    refresh_data: str,
     *,
     direction: str = "up",
     first_time: str | None,
@@ -442,7 +430,7 @@ def bus_reply(
         # 查別的營運日、或連今日首末班都查不到時，不能宣稱「今天」怎麼樣
         if not runnable:
             return no_bus_bubble(stop_name, direction_name, state="unknown", direction=direction)
-        return bus_arrival_carousel(runnable, stop_name, direction_name, refresh_data, moment)
+        return bus_arrival_carousel(runnable, stop_name, direction_name, moment)
 
     state = service_state(first_time, last_time, moment)
     if state == "before_first":
@@ -457,7 +445,7 @@ def bus_reply(
             next_time=tomorrow_first,
             direction=direction,
         )
-    return bus_arrival_carousel(runnable, stop_name, direction_name, refresh_data, moment)
+    return bus_arrival_carousel(runnable, stop_name, direction_name, moment)
 
 
 def _menu_button(action: dict, *, primary: bool = False, external: bool = False) -> dict:

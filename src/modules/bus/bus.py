@@ -123,14 +123,14 @@ def select_route(params):
         items=[
             QuickReplyItem(
                 action=PostbackAction(
-                    label="🚍 我要上山",
+                    label="⬆️ 我要上山（台積館/南大校區）",
                     data="@公車/選擇站點 direction=up",
                     displayText="我要上山",
                 )
             ),
             QuickReplyItem(
                 action=PostbackAction(
-                    label="🚍 我要下山",
+                    label="⬇️ 我要下山（北校門/綜二）",
                     data="@公車/選擇站點 direction=down",
                     displayText="我要下山",
                 )
@@ -233,7 +233,6 @@ async def query_stop_bus(event):
         bus_stop_info,
         stop_name,
         direction_zh,
-        refresh_data,
         direction=direction,
         first_time=first_time,
         last_time=last_time,

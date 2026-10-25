@@ -73,7 +73,7 @@ async def test_bus_arrivals_use_detailed_schedules_and_escape_json():
     bubbles = messages[1].contents.contents
     assert len(bubbles) == 1
     rows = [item.text for item in bubbles[0].body.contents if item.type == "text"]
-    assert rows[0] == "12:05 到站"
+    assert rows[0] == "預計 12:05 到站"
     assert 'North "Gate" 12:00 發車' in rows
     assert "First line\nSecond line" in rows
 
