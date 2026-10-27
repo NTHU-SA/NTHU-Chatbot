@@ -385,13 +385,22 @@ def test_each_line_gets_its_own_colour_block_not_one_crowded_row():
         assert FLEX_THEME["routes"][family]["label"] in block["contents"][0]["text"]
 
 
-def test_direction_actions_exist_on_the_card_as_well_as_the_quick_reply():
-    """LINE 電腦版不顯示 Quick Reply，卡上必須有同一組動作才走得下去。"""
+def test_direction_actions_live_only_in_the_quick_reply():
+    """同一組動作放卡上又放 Quick Reply，手機上會出現兩次。"""
     message = bus.select_route(SimpleNamespace(params={}))[0]
     assert message.type == "flex"
-    on_card = [button.action.data for button in message.contents.footer.contents]
-    assert on_card == ["@公車/選擇站點 direction=up", "@公車/選擇站點 direction=down"]
-    assert [item.action.data for item in message.quick_reply.items] == on_card
+    assert message.contents.footer is None
+    assert [item.action.data for item in message.quick_reply.items] == [
+        "@公車/選擇站點 direction=up",
+        "@公車/選擇站點 direction=down",
+    ]
+
+
+def test_direction_quick_replies_name_where_each_one_goes():
+    message = bus.select_route(SimpleNamespace(params={}))[0]
+    labels = [item.action.label for item in message.quick_reply.items]
+    assert labels == ["⬆️ 我要上山（台積館/南大校區）", "⬇️ 我要下山（北校門/綜二）"]
+    assert all(len(label) <= 20 for label in labels)
 
 
 async def test_stop_selection_stays_a_quick_reply_only():

@@ -518,7 +518,7 @@ def direction_prompt() -> str:
 
 
 def direction_bubble() -> dict:
-    """三條線各一個色塊。按鈕留在卡上：電腦版不顯示 Quick Reply。"""
+    """三條線各一個色塊。方向按鈕在 Quick Reply，不放卡上 —— 同一組動作出現兩次太吵。"""
     return bubble(
         "搭校巴，先選方向",
         [
@@ -528,20 +528,6 @@ def direction_bubble() -> dict:
                 "layout": "vertical",
                 "spacing": FLEX_THEME["spacing"]["item_gap"],
                 "contents": [route_badge(line) for line in ROUTE_ORDER],
-            },
-        ],
-        [
-            {
-                "type": "postback",
-                "label": "我要上山",
-                "data": "@公車/選擇站點 direction=up",
-                "displayText": "我要上山",
-            },
-            {
-                "type": "postback",
-                "label": "我要下山",
-                "data": "@公車/選擇站點 direction=down",
-                "displayText": "我要下山",
             },
         ],
     )
