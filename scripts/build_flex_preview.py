@@ -19,6 +19,7 @@ from src.modules.bus import bus  # noqa: E402
 from src.modules.library import library  # noqa: E402
 from src.utils import announcecrawler  # noqa: E402
 from templates.messages import help_message, open_web_chat, system_message  # noqa: E402
+from templates.messages.bus_message import no_bus_bubble  # noqa: E402
 from templates.messages.friend_message import friend_message  # noqa: E402
 
 OUTPUT = ROOT / "frontend" / "flex-preview-data.js"
@@ -68,10 +69,28 @@ async def build_samples() -> list[dict]:
         [friend_message()],
     )
     add(
-        "bus-directions",
-        "公車紅・綠・藍線",
-        "紅／綠是校本部，藍線代表南大專車；選方向後沿用既有站點查詢。",
-        bus.select_route(SimpleNamespace(params={})),
+        "bus-menu",
+        "公車選單",
+        "五個選項收在一張卡，不必左右滑；最後一項會跳出 LINE。",
+        bus.bus_menu(SimpleNamespace(params={})),
+    )
+    add(
+        "bus-none",
+        "公車 · 沒有車的三種情況",
+        "寫死「末班車已過」在清晨會變成假資訊，所以分成三種說法。",
+        [
+            FlexMessage(
+                alt_text=alt,
+                contents=FlexContainer.from_dict(
+                    no_bus_bubble("綜二館", "下山", state=state, **extra)
+                ),
+            )
+            for state, alt, extra in [
+                ("after_last", "末班車已過", {"next_time": "08:49"}),
+                ("before_first", "尚未發車", {"today_time": "07:31"}),
+                ("no_service", "今日無班次", {}),
+            ]
+        ],
     )
 
     with (
@@ -110,6 +129,7 @@ async def build_samples() -> list[dict]:
                 ]
             ),
         ),
+        patch.object(bus, "_day_bounds", new=AsyncMock(return_value=("07:00", "22:00"))),
         patch.object(bus, "datetime") as clock,
     ):
         clock.now.return_value = datetime(2026, 10, 4, 8, 0)
@@ -146,6 +166,7 @@ async def build_samples() -> list[dict]:
                     ]
                 ),
             ),
+            patch.object(bus, "_day_bounds", new=AsyncMock(return_value=("07:00", "22:00"))),
             patch.object(bus, "datetime") as clock,
         ):
             clock.now.return_value = datetime(2026, 10, 4, 8, 0)

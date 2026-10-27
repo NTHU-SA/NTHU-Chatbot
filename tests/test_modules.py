@@ -50,36 +50,44 @@ async def test_bus_arrivals_use_detailed_schedules_and_escape_json():
         },
     ]
     original = copy.deepcopy(schedules)
-    with fake_api(bus, schedules) as get:
+    # 首末班要固定住：用合成班表推出來的話，結果會隨實際時鐘在
+    # 「尚未發車」與到站卡之間跳動。
+    with (
+        fake_api(bus, schedules) as get,
+        patch.object(bus, "_day_bounds", new=AsyncMock(return_value=("07:00", "22:00"))),
+    ):
         messages = await bus.query_stop_bus(command(stop_name="North Gate"))
 
-    get.assert_awaited_once_with(
-        "/buses/schedule",
-        params={
-            "day": "current",
-            "limit": 5,
-            "route": "all",
-            "direction": "up",
-            "stop": "North Gate",
-            "details": True,
-        },
-        cache=False,
-    )
+    schedule_call = get.await_args_list[0]
+    assert schedule_call.kwargs["cache"] is False
+    assert schedule_call.kwargs["params"] == {
+        "day": "current",
+        "limit": bus.API_FETCH_LIMIT,
+        "route": "all",
+        "direction": "up",
+        "stop": "North Gate",
+        "details": True,
+    }
     assert schedules == original
     assert len(messages) == 2
     bubbles = messages[1].contents.contents
     assert len(bubbles) == 1
-    assert bubbles[0].body.contents[0].contents[1].text == "12:05"
-    assert 'North "Gate"' in bubbles[0].footer.contents[0].text
-    assert "12:00" in bubbles[0].footer.contents[1].text
-    assert bubbles[0].footer.contents[2].text == "First line\nSecond line"
+    rows = [item.text for item in bubbles[0].body.contents if item.type == "text"]
+    assert rows[0] == "預計 12:05 到站"
+    assert 'North "Gate" 12:00 發車' in rows
+    assert "First line\nSecond line" in rows
 
 
-async def test_bus_empty_schedules_return_text_instead_of_empty_carousel():
+async def test_bus_empty_schedules_explain_why_there_is_nothing_to_show():
+    """空班表不再只回一句抱歉，而是說明是尚未發車還是末班已過。"""
     with fake_api(bus, []):
         messages = await bus.query_stop_bus(command(stop_name="North Gate"))
-    assert len(messages) == 1
+    assert len(messages) == 2
     assert messages[0].type == "text"
+    bubble = messages[1].contents
+    assert bubble.type == "bubble"
+    # 班表整個拿不到時首末班為 None，必定是「今日無班次」，與時鐘無關
+    assert bubble.body.contents[0].text == "今日無班次"
 
 
 # -- library --
