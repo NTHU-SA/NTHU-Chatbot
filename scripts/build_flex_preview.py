@@ -20,6 +20,7 @@ from src.modules.library import library  # noqa: E402
 from src.utils import announcecrawler  # noqa: E402
 from templates.messages import help_message, open_web_chat, system_message  # noqa: E402
 from templates.messages.friend_message import friend_message  # noqa: E402
+from templates.messages.onboarding_message import progress_card  # noqa: E402
 
 OUTPUT = ROOT / "frontend" / "flex-preview-data.js"
 PREVIEW_LIFF_ID = "0000000000-preview"
@@ -56,10 +57,14 @@ async def build_samples() -> list[dict]:
         ],
     )
     add(
-        "welcome",
-        "加好友歡迎",
-        "聊天是主動作，分享是次要動作。",
-        [open_web_chat(PREVIEW_LIFF_ID, greeting=True)],
+        "quest",
+        "新手任務進度",
+        "做完一個任務後接的卡。進度編在按鈕裡，不存；卡會留在聊天室，Quick Reply 不會。",
+        [
+            FlexMessage(
+                alt_text="新手任務進度", contents=FlexContainer.from_dict(progress_card({"bus"}))
+            )
+        ],
     )
     add(
         "friends",

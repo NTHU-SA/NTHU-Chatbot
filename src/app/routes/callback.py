@@ -1,9 +1,12 @@
+import asyncio
+
 from aiohttp import ClientError
 from fastapi import APIRouter, HTTPException, Request
 from google.api_core.exceptions import GoogleAPICallError
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
     ApiException,
+    QuickReply,
     ReplyMessageRequest,
     ShowLoadingAnimationRequest,
     TextMessage,
@@ -22,6 +25,7 @@ from src.app.handlers.command_handler import command_handler
 from src.application.models.identity import AccountDisabledError
 from src.application.services.usage_stats import FOLLOW, MESSAGE, POSTBACK, UNFOLLOW
 from templates.messages import open_web_chat
+from templates.messages.onboarding_message import welcome_quick_reply, welcome_text
 
 router = APIRouter()
 
@@ -207,35 +211,45 @@ async def handle_postback(event: PostbackEvent, state, user_id, writes):
         logger.warning("Postback 事件沒有產生任何回覆訊息。")
 
 
+PROFILE_TIMEOUT_SECONDS = 2
+
+
+async def _display_name(state, event: FollowEvent) -> str | None:
+    """拿使用者的顯示名稱，只用來稱呼，不存。
+
+    要用 LINE 的 userId —— `resolve_user` 換出來的是內部 id，LINE 不認得。
+    查不到或太慢就算了，歡迎訊息不該因此發不出去。
+    """
+    line_user_id = getattr(getattr(event, "source", None), "user_id", None)
+    if not line_user_id:
+        return None
+    try:
+        async with asyncio.timeout(PROFILE_TIMEOUT_SECONDS):
+            profile = await state.messaging_api.get_profile(line_user_id)
+    except (ApiException, ClientError, TimeoutError) as error:
+        logger.warning(
+            "Could not read the profile for the welcome message: {}", type(error).__name__
+        )
+        return None
+    return getattr(profile, "display_name", None) or None
+
+
 async def handle_follow(event: FollowEvent, state, writes):
     """
     處理追蹤事件（加入好友事件）。
 
-    當使用者加入好友時，發送歡迎訊息。
+    送新手任務的第一則：問候加三個任務。進度不存，編在按鈕裡。
     """
     count(state, writes, FOLLOW)
-
-    reply_token = event.reply_token
-    welcome_text = """初次見面！我是清華校園情報員！清華生活中的大小事，只要是你遇到的問題，我都會努力幫你解決唷！
-你可以點擊下方的選單~~ฅ'ω'ฅ
-🚩索取校巴時刻表
-🚩詢問校務相關問題💬
-🚩或讓本汪帶你在清大趴趴走！
-
-偷偷告訴你，你可以用左下角的鍵盤直接問我問題，我會給你一顆按鈕，點開就能和我聊天！
-隨時輸入「說明」可以查看使用方式。
-
-或是你感到無聊，想找找小遊戲，可以到下方選單點擊〝神奇海螺〞看看額外的功能唷！
-
-作為一隻狗狗，有時候會太熱情，如果覺得我有點吵的話，請將「提醒」功能關閉就好📵，千萬不要封鎖本汪好嗎，我一定會乖乖的喔！"""
-    messages = [
-        TextMessage(text=welcome_text),
-        open_web_chat(state.settings.liff_id, greeting=True),
-    ]
-
+    display_name = await _display_name(state, event)
     reply_message = ReplyMessageRequest(
-        reply_token=reply_token,
-        messages=messages,
+        reply_token=event.reply_token,
+        messages=[
+            TextMessage(
+                text=welcome_text(display_name),
+                quick_reply=QuickReply.from_dict(welcome_quick_reply()),
+            )
+        ],
         notificationDisabled=False,
     )
     await state.messaging_api.reply_message(reply_message)
