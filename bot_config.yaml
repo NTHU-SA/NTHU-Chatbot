@@ -18,3 +18,5 @@ modules:
     prefix: 地圖
   menu:
     prefix: 選單
+  onboarding:
+    prefix: 新手

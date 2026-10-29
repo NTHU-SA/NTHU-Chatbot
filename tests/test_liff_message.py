@@ -22,7 +22,3 @@ def test_bubble_variants():
     with_question = open_web_chat(LIFF_ID, "南大公車", session_key="ev-1")
     assert with_question.contents.body.contents[1].contents[0].text == "南大公車"
     assert "?s=ev-1&q=" in with_question.contents.footer.contents[0].action.uri
-
-    greeting = open_web_chat(LIFF_ID, greeting=True)
-    assert greeting.contents.footer.contents[0].action.label == "開始和本汪聊天"
-    assert "清華校園情報員" in greeting.alt_text

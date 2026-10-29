@@ -97,7 +97,7 @@ rich_menu_list = [
                 ),
                 RichMenuArea(
                     bounds=RichMenuBounds(x=900, y=270, width=700, height=300),
-                    action=MessageAction(label="校園公佈欄", text="@學生餐廳"),
+                    action=MessageAction(label="學生餐廳", text="@學生餐廳"),
                 ),
                 RichMenuArea(
                     bounds=RichMenuBounds(x=100, y=630, width=2300, height=300),

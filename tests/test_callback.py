@@ -4,6 +4,7 @@ import hmac
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -188,14 +189,33 @@ def test_help_command_renders_usage_bubble(post, webhook_app):
     assert "@說明" not in body_text
 
 
-def test_follow_sends_welcome_and_liff_button(post, webhook_app):
+def test_follow_sends_the_quest_welcome_and_stores_nothing(post, webhook_app):
+    """加好友只送一則文字：問候加三個任務。進度編在按鈕裡，不留個人紀錄。"""
     assert post([event(kind="follow")]).status_code == 200
     assert counted(webhook_app) == {"follows": 1}
     assert_nothing_stored_per_user(webhook_app)
-    messages = replied_messages(webhook_app)
-    assert [m.type for m in messages] == ["text", "flex"]
-    assert "清華校園情報員" in messages[0].text
-    assert messages[1].contents.footer.contents[0].action.uri == LIFF_BASE
+    (message,) = replied_messages(webhook_app)
+    assert message.type == "text"
+    assert "清華校園情報員" in message.text
+    assert "⬜ 任務 1" in message.text
+    assert message.quick_reply.items[0].action.data == "@新手/任務 n=bus"
+
+
+def test_welcome_greets_by_name_using_the_line_user_id(post, webhook_app):
+    """要用 LINE userId 查名字 —— 內部 id LINE 不認得，傳錯會永遠查不到。"""
+    webhook_app.state.messaging_api.get_profile.return_value = SimpleNamespace(display_name="小明")
+    assert post([event(kind="follow")]).status_code == 200
+    webhook_app.state.messaging_api.get_profile.assert_awaited_once_with("user-1")
+    (message,) = replied_messages(webhook_app)
+    assert message.text.startswith("小明，初次見面")
+
+
+@pytest.mark.parametrize("failure", [ApiException(status=500), TimeoutError()])
+def test_welcome_still_goes_out_when_the_profile_cannot_be_read(post, webhook_app, failure):
+    webhook_app.state.messaging_api.get_profile.side_effect = failure
+    assert post([event(kind="follow")]).status_code == 200
+    (message,) = replied_messages(webhook_app)
+    assert message.text.startswith("嗨！初次見面")
 
 
 def test_share_postback_returns_working_friend_and_share_links(post, webhook_app):
