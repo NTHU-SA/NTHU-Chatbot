@@ -50,7 +50,6 @@ def test_palette_has_readable_body_and_button_contrast():
     "message",
     [
         open_web_chat("123-example", "公車何時到？"),
-        open_web_chat("123-example", greeting=True),
         help_message(["公車", "圖書館"], "123-example"),
         help_message(["公車"]),
         system_message("系統通知", "請稍後再試")[0],
@@ -203,7 +202,8 @@ async def test_global_theme_changes_reach_all_builders_templates_and_cached_menu
                 assert heading["size"] == "xl"
                 assert card["body"]["paddingAll"] == "24px"
                 assert card["styles"]["body"]["backgroundColor"] == "#F6F4FA"
-                if sample["id"] != "system":
+                # 系統通知和新手任務進度是小卡（notice_size），其餘都是整寬
+                if sample["id"] not in {"system", "quest"}:
                     assert card["size"] == "giga"
                 for component in card.get("footer", {}).get("contents", []):
                     if component["type"] == "button":

@@ -4,7 +4,8 @@ from src.app.handlers.command_handler import command_handler
 from templates.messages import help_message
 
 # 不列在說明裡的模組：說明本身與選單
-HIDDEN_MODULES = {"help", "menu"}
+# onboarding 是新手任務按鈕串接用的，不是要學生自己打的指令
+HIDDEN_MODULES = {"help", "menu", "onboarding"}
 
 
 def visible_prefixes() -> list[str]:
