@@ -276,7 +276,7 @@ def test_early_morning_shows_the_first_departure_instead_of_a_huge_countdown():
 
 
 def test_finished_notice_never_prints_a_last_departure_that_has_not_happened():
-    """剩餘班次全停駛時也走 after_last，這時末班還沒到，印出來會自相矛盾。"""
+    """剩餘班次全停駛：末班其實還沒到，不能說「已過」也不能印出那個時間。"""
     bubble = bus_reply(
         [arrival(arrive_time="23:29", description="週五停駛")],
         "綜二館",
@@ -285,16 +285,17 @@ def test_finished_notice_never_prints_a_last_departure_that_has_not_happened():
         **BOUNDS,
     )
     rows = [item["text"] for item in bubble["body"]["contents"] if item["type"] == "text"]
-    assert rows[0] == "末班車已過"
+    assert rows[0] == "今日無班次"
     assert not any("23:29" in row for row in rows)
     assert rows[-1] == "明日首班 08:49"
 
 
-def test_every_departure_suspended_falls_back_to_the_notice_bubble():
+def test_every_departure_suspended_is_a_day_without_buses_not_a_missed_last_bus():
+    """末班車其實還沒到，只是今天不開；「末班車已過」會讓人以為自己錯過了。"""
     container = bus_reply([arrival(description="週五停駛")], "綜二館", "下山", now=NOON, **BOUNDS)
     assert container["type"] == "bubble"
     rows = [item["text"] for item in container["body"]["contents"] if item["type"] == "text"]
-    assert rows[0] == "末班車已過"
+    assert rows[0] == "今日無班次"
     assert "08:49" in rows[-1]
 
 
@@ -619,8 +620,8 @@ def test_a_failed_timetable_lookup_does_not_claim_the_day_has_no_buses():
         now=NOON,
     )
     rows = [row["text"] for row in bubble["body"]["contents"] if row["type"] == "text"]
-    assert rows[0] == "目前沒有班次"
-    assert "今日" not in rows[0]
+    assert rows[0] == "暫時查不到班次"
+    assert "今日" not in rows[0] and "沒有" not in rows[0]
 
 
 def test_an_empty_named_day_does_not_talk_about_today():
@@ -634,7 +635,7 @@ def test_an_empty_named_day_does_not_talk_about_today():
         now=NOON,
     )
     rows = [row["text"] for row in bubble["body"]["contents"] if row["type"] == "text"]
-    assert rows[0] == "目前沒有班次"
+    assert rows[0] == "暫時查不到班次"
 
 
 async def test_invalid_schedule_is_logged_and_reported_by_command_handler():

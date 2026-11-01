@@ -52,13 +52,13 @@ FARE_INK = "#B25E00"
 FARE_TINT = "#FDF0E2"
 
 NO_BUS_COPY = {
-    # 末班時間不顯示：剩餘班次全停駛時也會走這條，那時末班其實還沒到，
-    # 寫出來會變成「已過」配一個未來時間，自相矛盾。
     "after_last": ("末班車已過", None),
     "before_first": ("尚未發車", "今日首班"),
+    # 今天整天沒車：時刻表上沒有，或剩下的班次今天全部停駛。
     "no_service": ("今日無班次", None),
-    # 不知道首末班時不要猜。說「今日無班次」會在查詢失敗或查別的營運日時說謊。
-    "unknown": ("目前沒有班次", None),
+    # 不知道首末班時不要猜。這是「查不到」不是「沒有」：API 壞掉或查別的營運日
+    # 才會走到，字面要讓人知道該再試，不是當成事實。
+    "unknown": ("暫時查不到班次", None),
 }
 
 
@@ -437,6 +437,9 @@ def bus_reply(
         return no_bus_bubble(
             stop_name, direction_name, state=state, today_time=first_time, direction=direction
         )
+    if arrivals and not runnable:
+        # 時刻表上還有班次，但今天全部停駛：末班其實沒到，說「已過」不對
+        state = "no_service"
     if not runnable:
         return no_bus_bubble(
             stop_name,
