@@ -21,8 +21,9 @@ from templates.messages.bus_message import (
 )
 
 STATIC_URL = "https://data.nthusa.tw"
-# 多跟 API 要一些班次：停駛的濾掉之後才湊得滿使用者要的數量
-API_FETCH_LIMIT = 12
+# 多跟 API 要一些班次：停駛的濾掉之後才湊得滿使用者要的數量，而且每條線
+# 各一張卡 —— 班次少的線（例如南大專車）要在這個範圍內出現才會有卡
+API_FETCH_LIMIT = 30
 TZ = timezone(timedelta(hours=8))
 DIRECTION_NAMES = {"up": "上山", "down": "下山", "all": "雙向"}
 DAY_NAMES = {"current": "即時", "weekday": "平日", "weekend": "假日"}

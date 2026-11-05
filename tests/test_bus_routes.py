@@ -317,6 +317,20 @@ def test_suspended_departures_do_not_hide_the_ones_behind_them():
     assert body_text(container["contents"][0])[0] == "預計 12:30 到站"
 
 
+def test_limit_applies_per_line_so_a_frequent_line_does_not_hide_the_others():
+    """平日綜二館上山：前五班常常全是紅線，綠線、南大專車卻在後面幾班就有。"""
+    arrivals = [arrival(arrive_time=f"12:{minute}0", line="main_red") for minute in range(1, 6)]
+    arrivals += [
+        arrival(arrive_time="12:55", line="main_green"),
+        arrival(arrive_time="12:58", line="nanda_route_2"),
+    ]
+    container = bus_reply(arrivals, "綜二館", "上山", limit=2, now=NOON, **BOUNDS)
+    titles = [card["header"]["contents"][0]["text"] for card in container["contents"]]
+    assert titles == [CARD_ROUTE_LABEL[key] for key in ("red", "green", "blue")]
+    assert "後續到站 12:20" in body_text(container["contents"][0])
+    assert not any("12:30" in row for row in body_text(container["contents"][0]))
+
+
 def test_limit_counts_departures_that_actually_run():
     arrivals = [arrival(arrive_time=f"12:{minute}0") for minute in range(1, 6)]
     arrivals[0]["description"] = "週五停駛"

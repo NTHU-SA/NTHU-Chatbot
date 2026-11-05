@@ -392,6 +392,17 @@ def no_bus_bubble(
     }
 
 
+def _first_per_route(arrivals: list[dict], limit: int) -> list[dict]:
+    """每條線保留最早的 `limit` 班，順序不變。"""
+    kept, counts = [], {}
+    for item in arrivals:
+        key = ROUTE_COLORS.get(item.get("line"), UNKNOWN_ROUTE)
+        if counts.get(key, 0) < limit:
+            counts[key] = counts.get(key, 0) + 1
+            kept.append(item)
+    return kept
+
+
 def bus_reply(
     arrivals: list[dict],
     stop_name: str,
@@ -409,7 +420,8 @@ def bus_reply(
     """回傳到站輪播，或在尚未發車／沒有車時回傳說明泡泡。
 
     先濾掉今天停駛的班次再截斷到 `limit`：反過來的話，前幾班剛好都停駛就會
-    誤判成沒有車，其實後面還有。
+    誤判成沒有車，其實後面還有。`limit` 是每條線各自的班數：一條線一張卡，
+    全部合計截斷的話，班次密的線會把其他線整張擠掉。
 
     `today_only=False` 用於查詢指定營運日（平日／假日）而不是今天 —— 那時
     「現在幾點」和「今天星期幾」都不是判斷依據，所以停駛過濾與首末班判斷
@@ -430,7 +442,7 @@ def bus_reply(
     else:
         runnable = list(arrivals)
     if limit is not None:
-        runnable = runnable[:limit]
+        runnable = _first_per_route(runnable, limit)
 
     if not today_only or not hours_known:
         # 查別的營運日、或連今日首末班都查不到時，不能宣稱「今天」怎麼樣。
