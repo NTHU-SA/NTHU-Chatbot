@@ -29,25 +29,28 @@ DAY_NAMES = {"current": "即時", "weekday": "平日", "weekend": "假日"}
 
 
 def _stop_arrivals(schedules: list[dict], stop_name: str) -> list[dict]:
-    """Convert canonical detailed schedules to the arrival-card view model."""
+    """Convert canonical detailed schedules to the arrival-card view model.
+
+    Data API 3.0.1 起，帶 `stop` 查詢時每班車都有頂層的 `arrive_time`（到這一站
+    的時間），不必再從 `stops_time` 裡找。`stops_time` 只用來列出經過的站。
+    """
     if not isinstance(schedules, list):
         raise ValueError("Invalid bus schedule response")
     arrivals = []
     for schedule in schedules:
         departure = schedule["dep_info"]
-        stops = [item["stop"] for item in schedule["stops_time"]]
-        stop = next((item for item in schedule["stops_time"] if item["stop"] == stop_name), None)
-        if stop is None:
-            raise ValueError("Bus schedule omitted the requested stop")
+        arrive_time = schedule.get("arrive_time")
+        if not arrive_time:
+            raise ValueError("Bus schedule omitted the arrival time at the requested stop")
         arrivals.append(
             {
-                "arrive_time": stop["arrive_time"],
+                "arrive_time": arrive_time,
                 "dep_time": departure["time"],
                 "dep_stop": departure["dep_stop"],
                 "description": departure["description"],
                 "bus_type": departure["bus_type"],
                 "line": departure.get("line", ""),
-                "stops": stops,
+                "stops": [item["stop"] for item in schedule.get("stops_time", [])],
             }
         )
     return arrivals
@@ -64,7 +67,8 @@ async def _day_bounds(
     """當日首末班到站時間；查不到時回 `None`。
 
     `day=current` 只回「從現在起還剩的車」，所以判斷「尚未發車」或「末班車已過」
-    必須另外問整天的班表。這份班表是靜態的，沿用預設快取。
+    必須另外問整天的班表。這份班表是靜態的，沿用預設快取。只需要每班車到這一站
+    的時間（頂層 `arrive_time`），所以不要 `details`，回應小很多。
 
     回 `None`（查詢失敗）和回 `(None, None)`（那天真的沒有班次）是兩回事：
     前者不能拿來跟使用者說「今日無班次」。
@@ -78,19 +82,16 @@ async def _day_bounds(
                 "route": "all",
                 "direction": direction,
                 "stop": stop_name,
-                "details": True,
             },
         )
     except ValueError:
         return None
     if not isinstance(schedules, list):
         return None
-    times = sorted(
-        item["arrive_time"]
-        for schedule in schedules
-        for item in schedule["stops_time"]
-        if item["stop"] == stop_name
-    )
+    try:
+        times = sorted(schedule["arrive_time"] for schedule in schedules)
+    except KeyError, TypeError:
+        return None
     return (times[0], times[-1]) if times else (None, None)
 
 

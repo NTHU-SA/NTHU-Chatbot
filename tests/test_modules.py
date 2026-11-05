@@ -36,6 +36,7 @@ async def test_bus_stop_picker_uses_canonical_endpoint_without_mutating_cached_d
 async def test_bus_arrivals_use_detailed_schedules_and_escape_json():
     schedules = [
         {
+            "arrive_time": "12:05",
             "dep_info": {
                 "time": "12:00",
                 "dep_stop": 'North "Gate"',

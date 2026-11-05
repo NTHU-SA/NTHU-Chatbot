@@ -28,6 +28,7 @@ PREVIEW_LIFF_ID = "0000000000-preview"
 
 def _bus_schedule(stop: str, arrive_time: str, **departure) -> dict:
     return {
+        "arrive_time": arrive_time,
         "dep_info": departure,
         "stops_time": [{"stop": stop, "arrive_time": arrive_time}],
     }

@@ -457,7 +457,9 @@ def test_module_menu_replaces_the_generated_carousel_with_one_card():
 
 
 def detailed_schedule(line="main_red"):
+    """Data API 3.0.1 帶 `stop` 查詢的形狀：頂層 `arrive_time` 是到「綜二館」的時間。"""
     return {
+        "arrive_time": "08:10",
         "dep_info": {
             "time": "8:05",
             "line": line,
@@ -494,9 +496,18 @@ def test_missing_route_is_not_inferred_from_vehicle_type():
     assert result[0]["line"] == ""
 
 
-def test_missing_selected_stop_is_an_explicit_error():
-    with pytest.raises(ValueError, match="omitted the requested stop"):
-        bus._stop_arrivals([detailed_schedule()], "不存在的站")
+def test_the_stop_time_comes_from_the_top_level_arrive_time():
+    """`stops_time` 只拿來列站名；到站時間以 API 依 `stop` 算好的頂層欄位為準。"""
+    schedule = detailed_schedule()
+    schedule["arrive_time"] = "08:11"
+    assert bus._stop_arrivals([schedule], "綜二館")[0]["arrive_time"] == "08:11"
+
+
+def test_missing_arrival_time_is_an_explicit_error():
+    schedule = detailed_schedule()
+    del schedule["arrive_time"]
+    with pytest.raises(ValueError, match="omitted the arrival time"):
+        bus._stop_arrivals([schedule], "綜二館")
 
 
 @pytest.mark.parametrize("response", [None, {}, {"schedules": []}])
@@ -567,6 +578,8 @@ async def test_day_bounds_reuse_the_shared_cache_and_read_the_whole_day():
     assert "cache" not in get.await_args.kwargs
     assert get.await_args.kwargs["params"]["day"] == "weekday"
     assert get.await_args.kwargs["params"]["limit"] == 200
+    # 只要到站時間，不必拿整天每班車的停靠站清單
+    assert "details" not in get.await_args.kwargs["params"]
 
 
 async def test_legacy_postback_filters_are_translated_to_canonical_query_parameters():
@@ -607,6 +620,9 @@ async def test_day_bounds_report_a_failed_lookup_apart_from_an_empty_day():
         assert await bus._day_bounds("綜二館", "up", "weekday") is None
     with patch.object(bus.nthuapi, "get", new=AsyncMock(return_value=[])):
         assert await bus._day_bounds("綜二館", "up", "weekday") == (None, None)
+    # 沒有頂層 arrive_time（舊版 API）也是查不到，不是沒車
+    with patch.object(bus.nthuapi, "get", new=AsyncMock(return_value=[{"dep_info": {}}])):
+        assert await bus._day_bounds("綜二館", "up", "weekday") is None
 
 
 def test_a_failed_timetable_lookup_does_not_claim_the_day_has_no_buses():
@@ -642,8 +658,10 @@ async def test_invalid_schedule_is_logged_and_reported_by_command_handler():
     from src.app.handlers.command_handler import command_handler
     from src.app.handlers.command_handler import logger as command_logger
 
+    schedule = detailed_schedule()
+    del schedule["arrive_time"]
     with (
-        patch.object(bus.nthuapi, "get", new=AsyncMock(return_value=[detailed_schedule()])),
+        patch.object(bus.nthuapi, "get", new=AsyncMock(return_value=[schedule])),
         patch.object(command_logger, "error") as error,
     ):
         result = await command_handler.process_message(
