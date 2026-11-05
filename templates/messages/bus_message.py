@@ -47,10 +47,6 @@ _SUSPEND_ON = re.compile(r"週([一二三四五六日天])停駛")
 _FARE_HINT = ("付費", "收費")
 WEEKDAY_CHAR = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
 
-# 收費提醒需要自己的警示色：紅線的紅會在藍線卡上被誤讀成路線色
-FARE_INK = "#B25E00"
-FARE_TINT = "#FDF0E2"
-
 NO_BUS_COPY = {
     "after_last": ("末班車已過", None),
     "before_first": ("尚未發車", "今日首班"),
@@ -169,7 +165,7 @@ def fare_badge(note: str) -> dict:
     return {
         "type": "box",
         "layout": "vertical",
-        "backgroundColor": FARE_TINT,
+        "backgroundColor": _color("warning_tint"),
         "cornerRadius": FLEX_THEME["radii"]["badge"],
         "paddingAll": FLEX_THEME["spacing"]["row"],
         "margin": "md",
@@ -178,7 +174,7 @@ def fare_badge(note: str) -> dict:
                 "type": "text",
                 "text": "💰 " + note,
                 "size": FLEX_THEME["typography"]["caption"],
-                "color": FARE_INK,
+                "color": _color("warning"),
                 "weight": "bold",
                 "wrap": True,
             }

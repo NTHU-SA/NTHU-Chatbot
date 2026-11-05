@@ -11,8 +11,6 @@ from src.modules.bus import bus
 from templates.messages.bus_message import (
     BUS_TYPE_NAMES,
     CARD_ROUTE_LABEL,
-    FARE_INK,
-    FARE_TINT,
     UNKNOWN_LABEL,
     bus_arrival_carousel,
     bus_menu_bubble,
@@ -44,9 +42,6 @@ def arrival(**changes):
         "stops": ["北校門口", "綜二館", "台積館"],
         **changes,
     }
-
-
-REFRESH = "@公車/查詢站點與方向 stop_name=綜二館 direction=up"
 
 
 def cards(arrivals, stop="綜二館", direction="上山", now=NOON):
@@ -187,8 +182,8 @@ def test_duplicate_vehicle_note_does_not_appear_next_to_the_vehicle_name():
 def test_paid_routes_get_their_own_warning_badge_not_grey_small_print():
     card = cards([arrival(description="此為付費市區公車(83號公車直達兩校區)")])[0]
     badge = next(item for item in card["body"]["contents"] if item["type"] == "box")
-    assert badge["backgroundColor"] == FARE_TINT
-    assert badge["contents"][0]["color"] == FARE_INK
+    assert badge["backgroundColor"] == FLEX_THEME["colors"]["warning_tint"]
+    assert badge["contents"][0]["color"] == FLEX_THEME["colors"]["warning"]
     assert badge["contents"][0]["weight"] == "bold"
     assert badge["contents"][0]["text"].startswith("💰")
     # 標籤緊跟在倒數後面，不是滑到最底才看到
@@ -444,8 +439,7 @@ def test_direction_quick_replies_name_where_each_one_goes():
 async def test_stop_selection_stays_a_quick_reply_only():
     """八個站做成卡片的話，手機上會同時出現八列的卡和八顆晶片。
 
-    同一份清單出現兩次比電腦版走不下去更糟 —— 這一步刻意只留 Quick Reply，
-    電腦版的缺口是已知且接受的。
+    同一份清單出現兩次太吵 —— 這一步刻意只留 Quick Reply（LINE 電腦版也會顯示）。
     """
     stops = [{"name": "北校門口"}, {"name": "教育學院大樓&南門停車場"}]
     with patch.object(bus.nthuapi, "get", new=AsyncMock(return_value=stops)):

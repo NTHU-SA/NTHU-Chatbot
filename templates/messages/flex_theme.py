@@ -25,6 +25,9 @@ FLEX_THEME: FlexTheme = {
         "text": "#2D2935",
         "muted": "#696173",
         "line": "#DED9E7",
+        # 收費提醒的警示色：紅線的紅會在藍線卡上被誤讀成路線色。字色在底色上對比 ≥ 4.5
+        "warning": "#A35600",
+        "warning_tint": "#FDF0E2",
     },
     "typography": {
         "body": "sm",

@@ -177,7 +177,7 @@ async def select_stops(events):
         )
 
     # 八個站做成卡片的話，手機上會同時出現八列的卡和八顆 Quick Reply，
-    # 同一份清單出現兩次。保留較輕的 Quick Reply；代價是電腦版看不到。
+    # 同一份清單出現兩次，所以只留較輕的 Quick Reply（LINE 電腦版也會顯示）。
     quick_reply = QuickReply(items=quick_reply_items)
     return [TextMessage(text="請選擇你要搭乘的公車站點", quick_reply=quick_reply)]
 
