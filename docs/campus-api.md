@@ -10,7 +10,7 @@ AI 對話則透過 NTHU Data MCP（預設 `https://api.nthusa.tw/mcp`）查詢�
 
 | 功能 | 端點與資料處理 |
 | --- | --- |
-| 公車 | `/buses/stops` 取得站點；`/buses/schedule?stop=...&details=true` 回傳 `dep_info`、`stops_time` 與到所選站的頂層 `arrive_time`（Data API 3.0.1 起）。使用 `route`（all / main / nanda）、`limit` 篩選，保留已發車但尚未到站的班次；首末班另查整天時刻表（不帶 `details`） |
+| 公車 | `/buses/stops` 取得站點；`/buses/schedule?stop=...&details=true` 回傳 `dep_info`、`stops_time` 與到所選站的頂層 `arrive_time`（Data API 3.0.1 起）。以 `route`（all / main / nanda）篩選，向 API 要固定的 `API_FETCH_LIMIT` 班，使用者的 `limit` 在本地依每條線套用；保留已發車但尚未到站的班次；首末班另查整天時刻表（不帶 `details`） |
 | 餐廳 | `/dining` 保留建築與餐廳巢狀格式；以 `schedule` 篩選營業日 |
 | 圖書館 | `/libraries/spaces` 保留剩餘數量 0；`/libraries/rss/{rss_type}` 處理空頁與 nullable 連結 |
 | 地圖 | `/locations?name=...&fuzzy=true` 模糊搜尋，同一端點不帶參數時列出地點 |

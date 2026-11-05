@@ -439,8 +439,7 @@ def test_direction_quick_replies_name_where_each_one_goes():
 async def test_stop_selection_stays_a_quick_reply_only():
     """八個站做成卡片的話，手機上會同時出現八列的卡和八顆晶片。
 
-    同一份清單出現兩次比電腦版走不下去更糟 —— 這一步刻意只留 Quick Reply，
-    電腦版的缺口是已知且接受的。
+    同一份清單出現兩次太吵 —— 這一步刻意只留 Quick Reply（LINE 電腦版也會顯示）。
     """
     stops = [{"name": "北校門口"}, {"name": "教育學院大樓&南門停車場"}]
     with patch.object(bus.nthuapi, "get", new=AsyncMock(return_value=stops)):
