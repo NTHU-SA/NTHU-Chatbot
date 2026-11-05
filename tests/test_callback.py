@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -131,7 +131,7 @@ def test_group_text_gets_liff_button_without_question(post, webhook_app):
 def test_command_uses_command_handler_and_loading_animation(post, webhook_app):
     with patch(PROCESS_MESSAGE, new=AsyncMock(return_value="Command answer")) as process:
         assert post([event(text="@公車")]).status_code == 200
-    process.assert_awaited_once_with("@公車", TEST_USR)
+    process.assert_awaited_once_with("@公車", TEST_USR, run=ANY)
     loading = webhook_app.state.messaging_api.show_loading_animation.await_args.args[0]
     assert loading.chat_id == "user-1"
     (message,) = replied_messages(webhook_app)
@@ -145,7 +145,7 @@ def test_unbound_line_user_gets_the_same_service_and_nothing_is_created(post, we
     webhook_app.state.identity_service.find_line_user.return_value = None
     with patch(PROCESS_MESSAGE, new=AsyncMock(return_value="Command answer")) as process:
         assert post([event(text="@公車")]).status_code == 200
-    process.assert_awaited_once_with("@公車", None)
+    process.assert_awaited_once_with("@公車", None, run=ANY)
     webhook_app.state.messaging_api.show_loading_animation.assert_awaited_once()
     assert replied_messages(webhook_app)[0].text == "Command answer"
     assert counted(webhook_app) == {"messages": 1, "modules.bus": 1}
@@ -162,6 +162,27 @@ def test_disabled_module_replies_fixed_message(post, webhook_app):
     assert counted(webhook_app) == {"messages": 1}
 
 
+def test_a_quest_task_respects_the_disabled_switch_of_the_feature_it_runs(post, webhook_app):
+    """新手任務轉跑的指令也要經過停用檢查：停用中的功能不執行，任務也不打勾。"""
+    webhook_app.state.module_registry = StaticModuleRegistry(disabled={"library"})
+    payload = event(kind="postback")
+    payload["postback"] = {"data": "@新手/任務 n=library done=bus"}
+    with patch("src.modules.library.library.nthuapi.get", new=AsyncMock()) as library_api:
+        assert post([payload]).status_code == 200
+    library_api.assert_not_awaited()
+    notice, card = replied_messages(webhook_app)
+    assert notice.text == MODULE_DISABLED_MESSAGE
+    assert card.contents.footer.contents[0].action.data == "@新手/任務 n=library done=bus"
+    assert counted(webhook_app) == {"postbacks": 1, "modules.onboarding": 1}
+
+
+def test_a_quest_task_counts_the_feature_it_runs(post, webhook_app):
+    payload = event(kind="postback")
+    payload["postback"] = {"data": "@新手/任務 n=bus"}
+    assert post([payload]).status_code == 200
+    assert counted(webhook_app) == {"postbacks": 1, "modules.onboarding": 1, "modules.bus": 1}
+
+
 def test_disabled_account_gets_no_reply(post, webhook_app):
     webhook_app.state.identity_service.find_line_user.side_effect = AccountDisabledError("x")
     assert post([event(text="@公車")]).status_code == 200
@@ -172,7 +193,7 @@ def test_disabled_account_gets_no_reply(post, webhook_app):
 def test_help_keyword_routes_to_help_command(post, text):
     with patch(PROCESS_MESSAGE, new=AsyncMock(return_value="help")) as process:
         post([event(text=text)])
-    process.assert_awaited_once_with("@說明", TEST_USR)
+    process.assert_awaited_once_with("@說明", TEST_USR, run=ANY)
 
 
 def test_help_command_renders_usage_bubble(post, webhook_app):
@@ -209,7 +230,9 @@ def test_welcome_greets_by_name_using_the_line_user_id(post, webhook_app):
     assert greeting.text.startswith("小明，初次見面")
 
 
-@pytest.mark.parametrize("failure", [ApiException(status=500), TimeoutError()])
+@pytest.mark.parametrize(
+    "failure", [ApiException(status=500), TimeoutError(), ValueError("malformed profile")]
+)
 def test_welcome_still_goes_out_when_the_profile_cannot_be_read(post, webhook_app, failure):
     webhook_app.state.messaging_api.get_profile.side_effect = failure
     assert post([event(kind="follow")]).status_code == 200

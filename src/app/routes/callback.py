@@ -119,7 +119,12 @@ async def run_command(text: str, user_id: str | None, state, writes: BackgroundW
         return MODULE_DISABLED_MESSAGE
     if module:
         writes.spawn(state.usage_stats.record_module(module), "usage_stats")
-    return await command_handler.process_message(text, user_id)
+
+    async def run_inner(inner: str):
+        # 指令轉跑的指令（新手任務 → 公車）也要經過停用檢查與使用統計
+        return await run_command(inner, user_id, state, writes)
+
+    return await command_handler.process_message(text, user_id, run=run_inner)
 
 
 async def handle_message(event: MessageEvent, state, user_id, writes):
@@ -225,7 +230,8 @@ async def _display_name(state, event: FollowEvent) -> str | None:
     try:
         async with asyncio.timeout(PROFILE_TIMEOUT_SECONDS):
             profile = await state.messaging_api.get_profile(line_user_id)
-    except (ApiException, ClientError, TimeoutError) as error:
+    # ValueError：回應格式不對（SDK 的 pydantic 驗證錯誤）也一樣不帶名字
+    except (ApiException, ClientError, TimeoutError, ValueError) as error:
         logger.warning(
             "Could not read the profile for the welcome message: {}", type(error).__name__
         )

@@ -57,7 +57,7 @@ def welcome_text(display_name: str | None) -> str:
     return (
         f"{greeting}\n"
         "我是清華校園情報員，學生會做的校園助手。\n\n"
-        "本汪準備了三個新手任務，做完就是清華通了 👇\n"
+        "本汪準備了三個新手任務，每個都試一次就是清華通了 👇\n"
         "其他功能都在下方選單。"
     )
 
@@ -140,7 +140,7 @@ def progress_card(done: set[str]) -> dict:
 def reward_text() -> str:
     """任務按鈕是 postback，拿不到顯示名稱，所以稱「你」。"""
     return (
-        "🎉 三個任務全部完成！\n\n"
+        "🎉 三個任務都試過一次了！\n\n"
         "本汪授予你稱號：\n"
         f"🎓 {TITLE}\n\n"
         "從今天起，校園大小事問本汪就對了。"

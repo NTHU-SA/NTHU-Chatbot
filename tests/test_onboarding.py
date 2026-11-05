@@ -110,10 +110,41 @@ async def test_the_progress_card_survives_a_long_feature_reply():
 
 
 async def test_last_task_awards_the_title():
-    with patch.object(command_handler, "process_message", new=AsyncMock(return_value="今日菜單")):
+    menu = [TextMessage(text="今日菜單")]
+    with patch.object(command_handler, "process_message", new=AsyncMock(return_value=menu)):
         messages = await onboarding.start_task(pressed("@新手/任務 n=dining done=bus,library"))
     assert messages[0].text == "今日菜單"
     assert quest.TITLE in messages[-1].text
+
+
+async def test_a_feature_that_did_not_run_is_not_ticked_and_can_be_retried():
+    """指令處理器回純文字代表功能沒跑成（停用、找不到指令、例外）：同一顆按鈕再給一次。"""
+    failure = "處理訊息時發生錯誤，請稍後再試。"
+    with patch.object(command_handler, "process_message", new=AsyncMock(return_value=failure)):
+        notice, card = await onboarding.start_task(pressed("@新手/任務 n=library done=bus"))
+    assert notice.text == failure
+    lines = [row.text for row in card.contents.body.contents]
+    assert lines[1].startswith("⬜ 任務 2")
+    assert card.contents.footer.contents[0].action.data == "@新手/任務 n=library done=bus"
+
+
+async def test_the_callers_runner_is_used_for_the_feature():
+    """聊天室傳進來的 `run` 會套用停用檢查與使用統計，所以有就要用它。"""
+    event = pressed("@新手/任務 n=bus")
+    event.run = AsyncMock(return_value=[TextMessage(text="公車")])
+    with patch.object(command_handler, "process_message", new=AsyncMock()) as direct:
+        await onboarding.start_task(event)
+    event.run.assert_awaited_once_with("@公車/動態公車查詢")
+    direct.assert_not_awaited()
+
+
+async def test_moving_the_quick_reply_does_not_change_the_features_own_message():
+    """功能回覆可能是快取的共用物件：搬走 Quick Reply 不能改到原本那一則。"""
+    shared = bus.select_route(SimpleNamespace(params={}))[0]
+    with patch.object(command_handler, "process_message", new=AsyncMock(return_value=[shared])):
+        messages = await onboarding.start_task(pressed("@新手/任務 n=bus"))
+    assert messages[0].quick_reply is None
+    assert shared.quick_reply is not None
 
 
 async def test_unknown_task_points_back_to_the_start():
