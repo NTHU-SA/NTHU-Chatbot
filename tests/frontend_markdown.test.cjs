@@ -32,3 +32,27 @@ test("markers that are not bold stay literal", () => {
   assert.equal(inline("`**地點：**台北`"), "<code>**地點：**台北</code>");
   assert.equal(inline("\\*\\*地點：\\*\\*台北"), "**地點：**台北");
 });
+
+test("loose bold also works inside lists, tables, headings and quotes", () => {
+  const html = marked.parse(
+    "1. **地點：**台北\n\n| 項目 | 說明 |\n|---|---|\n| **時間：**平日 | x |\n\n## **公告：**停駛\n\n> **注意：**假日休息",
+  );
+  assert.match(html, /<li><strong>地點：<\/strong>台北<\/li>/);
+  assert.match(html, /<td><strong>時間：<\/strong>平日<\/td>/);
+  assert.match(html, /<h2>[^<]*<strong>公告：<\/strong>停駛<\/h2>/);
+  assert.match(html, /<blockquote>\n<p><strong>注意：<\/strong>假日休息<\/p>/);
+});
+
+test("code spans and links that start inside the markers keep marked's own reading", () => {
+  // the extension runs before code spans and links, so it must not cut them in half
+  assert.equal(inline("**a `b**` c"), "**a <code>b**</code> c");
+  assert.equal(inline("**[a**](http://x.com)d"), '**<a href="http://x.com">a**</a>d');
+});
+
+test("bold inside image alt text stays plain text", () => {
+  assert.equal(inline("![**地點：**台北](x.png)"), '<img src="x.png" alt="地點：台北">');
+});
+
+test("text inside loose bold is still escaped", () => {
+  assert.equal(inline("**a & <b：**c"), "<strong>a &amp; &lt;b：</strong>c");
+});

@@ -10,7 +10,10 @@ export const escapeHtml = (s) =>
 // `**地點：**台北` or `**「宿舍」**的` stay literal; Chinese replies bold labels
 // like that all the time. Any `**…**` on one line without `*` inside, not
 // padded with spaces, is strong here; everything else goes to the built-in rule.
-const LOOSE_STRONG = /^\*\*(?!\*)(?=\S)([^*\n]*?\S)\*\*(?!\*)/;
+// A backtick or bracket inside also goes to the built-in rule: this extension runs
+// before code spans and links, so it would otherwise cut `**a `b**` c` or
+// `**[a**](url)` in the middle of the code span or link.
+const LOOSE_STRONG = /^\*\*(?!\*)(?=\S)([^*\n`[\]]*?\S)\*\*(?!\*)/;
 marked.use({
   gfm: true,
   breaks: true,
@@ -21,12 +24,17 @@ marked.use({
       const i = src.indexOf("**");
       return i < 0 ? undefined : i;
     },
+    // Emits marked's own `strong` token, so the built-in renderers handle it:
+    // HTML as <strong>, and plain text (image alt) without markup.
     tokenizer(src) {
       const match = LOOSE_STRONG.exec(src);
-      if (match) return { type: "looseStrong", raw: match[0], tokens: this.lexer.inlineTokens(match[1]) };
-    },
-    renderer(token) {
-      return `<strong>${this.parser.parseInline(token.tokens)}</strong>`;
+      if (!match) return undefined;
+      return {
+        type: "strong",
+        raw: match[0],
+        text: match[1],
+        tokens: this.lexer.inlineTokens(match[1]),
+      };
     },
   }],
 });
