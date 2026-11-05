@@ -1,6 +1,6 @@
 [project]
 name = "nthu-chatbot"
-version = "0.2.0"
+version = "0.3.0"
 description = "國立清華大學學生會 LINE 校園助理（Messaging API webhook + LIFF 對話 API）"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
