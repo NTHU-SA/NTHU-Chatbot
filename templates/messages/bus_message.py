@@ -54,10 +54,16 @@ FARE_TINT = "#FDF0E2"
 NO_BUS_COPY = {
     "after_last": ("末班車已過", None),
     "before_first": ("尚未發車", "今日首班"),
-    # 今天整天沒車：時刻表上沒有，或剩下的班次今天全部停駛。
+    # 今天整天沒車：時刻表上今天就沒有班次。
     "no_service": ("今日無班次", None),
-    # 不知道首末班時不要猜。這是「查不到」不是「沒有」：API 壞掉或查別的營運日
-    # 才會走到，字面要讓人知道該再試，不是當成事實。
+    # 時刻表上還有車，但今天剩下的全部停駛。早一點可能有車開過，
+    # 所以不能說「今日無班次」，也不能說「末班車已過」。
+    "suspended": ("今日剩餘班次停駛", None),
+    # 查指定營運日（平日／假日）而那天的時刻表是空的。是事實不是故障，但與「今天」
+    # 無關；上方文字訊息已寫出是哪個營運日。
+    "no_runs": ("沒有班次", None),
+    # 不知道首末班時不要猜。這是「查不到」不是「沒有」：只有班表 API 失敗才會
+    # 走到，字面要讓人知道該再試，不是當成事實。
     "unknown": ("暫時查不到班次", None),
 }
 
@@ -427,9 +433,11 @@ def bus_reply(
         runnable = runnable[:limit]
 
     if not today_only or not hours_known:
-        # 查別的營運日、或連今日首末班都查不到時，不能宣稱「今天」怎麼樣
+        # 查別的營運日、或連今日首末班都查不到時，不能宣稱「今天」怎麼樣。
+        # 指定營運日的班表查到了是空的，就是那天沒車；今日首末班查不到才是不知道。
         if not runnable:
-            return no_bus_bubble(stop_name, direction_name, state="unknown", direction=direction)
+            state = "no_runs" if not today_only else "unknown"
+            return no_bus_bubble(stop_name, direction_name, state=state, direction=direction)
         return bus_arrival_carousel(runnable, stop_name, direction_name, moment)
 
     state = service_state(first_time, last_time, moment)
@@ -439,7 +447,7 @@ def bus_reply(
         )
     if arrivals and not runnable:
         # 時刻表上還有班次，但今天全部停駛：末班其實沒到，說「已過」不對
-        state = "no_service"
+        state = "suspended"
     if not runnable:
         return no_bus_bubble(
             stop_name,
