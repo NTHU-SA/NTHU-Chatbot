@@ -6,7 +6,30 @@ export const escapeHtml = (s) =>
 
 // Full Markdown via marked, then DOMPurify so LLM output can never inject
 // scripts/handlers. Links open in a new tab; only http(s)/mailto allowed.
-marked.use({ gfm: true, breaks: true });
+// CommonMark does not close `**` after punctuation when a letter follows, so
+// `**地點：**台北` or `**「宿舍」**的` stay literal; Chinese replies bold labels
+// like that all the time. Any `**…**` on one line without `*` inside, not
+// padded with spaces, is strong here; everything else goes to the built-in rule.
+const LOOSE_STRONG = /^\*\*(?!\*)(?=\S)([^*\n]*?\S)\*\*(?!\*)/;
+marked.use({
+  gfm: true,
+  breaks: true,
+  extensions: [{
+    name: "looseStrong",
+    level: "inline",
+    start(src) {
+      const i = src.indexOf("**");
+      return i < 0 ? undefined : i;
+    },
+    tokenizer(src) {
+      const match = LOOSE_STRONG.exec(src);
+      if (match) return { type: "looseStrong", raw: match[0], tokens: this.lexer.inlineTokens(match[1]) };
+    },
+    renderer(token) {
+      return `<strong>${this.parser.parseInline(token.tokens)}</strong>`;
+    },
+  }],
+});
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   if (node.tagName === "A") {
     node.setAttribute("target", "_blank");
