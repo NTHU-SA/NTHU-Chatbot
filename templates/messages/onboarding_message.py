@@ -5,16 +5,19 @@
 「做完」；文案用「開始任務」，不說謊。
 """
 
+from linebot.v3.messaging import FlexContainer, FlexMessage, TextMessage
+
 from .flex_theme import FLEX_THEME, text
 
 TITLE = "清華通"
 PREFIX = "@新手/任務"
 
 # (module id, 清單上的字, 按鈕, 按下去跑的指令)
+# 清單上的字要和指令真正給的東西一致：餐廳沒有「今天有什麼」的指令，所以是逛選單
 TASKS = (
     ("bus", "查一次校車", "🚌 開始任務 1", "@公車/動態公車查詢"),
-    ("library", "看圖書館剩幾個位子", "📚 開始任務 2", "@圖書館"),
-    ("dining", "看今天餐廳有什麼", "🍜 開始任務 3", "@學生餐廳"),
+    ("library", "看圖書館剩幾個位子", "📚 開始任務 2", "@圖書館/空間狀況"),
+    ("dining", "逛一次學生餐廳", "🍜 開始任務 3", "@學生餐廳"),
 )
 TASK_BY_MODULE = {task[0]: task for task in TASKS}
 
@@ -54,14 +57,24 @@ def welcome_text(display_name: str | None) -> str:
     return (
         f"{greeting}\n"
         "我是清華校園情報員，學生會做的校園助手。\n\n"
-        "本汪準備了三個新手任務，做完就是清華通了：\n\n"
-        + "\n".join(_checklist_lines(set()))
-        + "\n\n其他功能都在下方選單 👇"
+        "本汪準備了三個新手任務，做完就是清華通了 👇\n"
+        "其他功能都在下方選單。"
     )
 
 
-def welcome_quick_reply() -> dict:
-    return {"items": [{"type": "action", "action": task_postback(set(), TASKS[0])}]}
+def progress_message(done: set[str]) -> FlexMessage:
+    return FlexMessage(
+        alt_text="新手任務進度", contents=FlexContainer.from_dict(progress_card(done))
+    )
+
+
+def welcome_messages(display_name: str | None) -> list:
+    """問候加一張任務卡。
+
+    「開始任務 1」放在卡上不放 Quick Reply：Quick Reply 只要使用者先點了別的
+    （例如下方選單）就消失，而 `@新手` 不在說明裡，消失了就回不來。
+    """
+    return [TextMessage(text=welcome_text(display_name)), progress_message(set())]
 
 
 def progress_card(done: set[str]) -> dict:
@@ -124,11 +137,11 @@ def progress_card(done: set[str]) -> dict:
     return card
 
 
-def reward_text(display_name: str | None) -> str:
-    who = display_name or "你"
+def reward_text() -> str:
+    """任務按鈕是 postback，拿不到顯示名稱，所以稱「你」。"""
     return (
         "🎉 三個任務全部完成！\n\n"
-        f"本汪授予 {who} 稱號：\n"
+        "本汪授予你稱號：\n"
         f"🎓 {TITLE}\n\n"
         "從今天起，校園大小事問本汪就對了。"
     )

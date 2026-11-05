@@ -6,7 +6,6 @@ from google.api_core.exceptions import GoogleAPICallError
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
     ApiException,
-    QuickReply,
     ReplyMessageRequest,
     ShowLoadingAnimationRequest,
     TextMessage,
@@ -25,7 +24,7 @@ from src.app.handlers.command_handler import command_handler
 from src.application.models.identity import AccountDisabledError
 from src.application.services.usage_stats import FOLLOW, MESSAGE, POSTBACK, UNFOLLOW
 from templates.messages import open_web_chat
-from templates.messages.onboarding_message import welcome_quick_reply, welcome_text
+from templates.messages.onboarding_message import welcome_messages
 
 router = APIRouter()
 
@@ -238,18 +237,13 @@ async def handle_follow(event: FollowEvent, state, writes):
     """
     處理追蹤事件（加入好友事件）。
 
-    送新手任務的第一則：問候加三個任務。進度不存，編在按鈕裡。
+    送新手任務的第一則：問候加一張任務卡。進度不存，編在按鈕裡。
     """
     count(state, writes, FOLLOW)
     display_name = await _display_name(state, event)
     reply_message = ReplyMessageRequest(
         reply_token=event.reply_token,
-        messages=[
-            TextMessage(
-                text=welcome_text(display_name),
-                quick_reply=QuickReply.from_dict(welcome_quick_reply()),
-            )
-        ],
+        messages=welcome_messages(display_name),
         notificationDisabled=False,
     )
     await state.messaging_api.reply_message(reply_message)

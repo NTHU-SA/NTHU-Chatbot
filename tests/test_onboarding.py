@@ -7,6 +7,7 @@ from linebot.v3.messaging import TextMessage
 
 from src.app.handlers.command_handler import command_handler
 from src.modules import onboarding
+from src.modules.bus import bus
 from templates.messages import onboarding_message as quest
 
 
@@ -16,15 +17,18 @@ def pressed(data: str):
     return SimpleNamespace(user_id="user-1", params=params)
 
 
-def test_welcome_lists_three_unticked_tasks_and_one_button():
-    text = quest.welcome_text("小明")
-    assert text.startswith("小明，初次見面")
-    assert text.count("⬜") == 3 and "✅" not in text
-    assert len(text) <= 300  # 手機第一眼要看得完，不是公告
+def test_welcome_is_a_greeting_and_a_task_card_with_the_first_button():
+    """第一顆按鈕在卡上：Quick Reply 一點別的就消失，`@新手` 又不在說明裡。"""
+    greeting, card = quest.welcome_messages("小明")
+    assert greeting.text.startswith("小明，初次見面")
+    assert len(greeting.text) <= 300  # 手機第一眼要看得完，不是公告
+    assert greeting.quick_reply is None and card.quick_reply is None
 
-    (item,) = quest.welcome_quick_reply()["items"]
-    assert item["action"]["data"] == "@新手/任務 n=bus"
-    assert item["action"]["displayText"] == "開始任務 1"
+    lines = [row.text for row in card.contents.body.contents]
+    assert sum(line.startswith("⬜") for line in lines) == 3
+    (button,) = card.contents.footer.contents
+    assert button.action.data == "@新手/任務 n=bus"
+    assert button.action.display_text == "開始任務 1"
 
 
 def test_welcome_without_a_name_still_greets():
@@ -38,7 +42,7 @@ def test_progress_is_carried_in_the_next_button_not_stored():
     assert lines[:3] == [
         "✅ 任務 1　查一次校車",
         "✅ 任務 2　看圖書館剩幾個位子",
-        "⬜ 任務 3　看今天餐廳有什麼",
+        "⬜ 任務 3　逛一次學生餐廳",
     ]
     assert lines[3] == "最後一個了！"
     (button,) = card["footer"]["contents"]
@@ -73,6 +77,38 @@ async def test_task_button_runs_the_feature_then_appends_progress():
     assert button.action.data == "@新手/任務 n=library done=bus"
 
 
+async def test_the_features_quick_reply_moves_to_the_last_message():
+    """LINE 只顯示最後一則的 Quick Reply：公車的上山／下山要跟著搬到進度卡上。"""
+    # 用真的公車指令，不是假回覆：要守住的正是兩個 PR 接起來之後的形狀
+    with patch.object(
+        bus.nthuapi, "get", new=AsyncMock(side_effect=AssertionError("方向選擇不該打 API"))
+    ):
+        messages = await onboarding.start_task(pressed("@新手/任務 n=bus"))
+    assert [m.quick_reply is None for m in messages] == [True] * (len(messages) - 1) + [False]
+    assert messages[-1].alt_text == "新手任務進度"
+    datas = [item.action.data for item in messages[-1].quick_reply.items]
+    assert datas == ["@公車/選擇站點 direction=up", "@公車/選擇站點 direction=down"]
+
+
+def test_each_task_opens_what_its_checklist_line_promises():
+    """「看圖書館剩幾個位子」直接打開空間狀況，不是圖書館選單。"""
+    for module, *_rest, command in quest.TASKS:
+        _mod, _prefix, name, _params = command_handler.parse_command(command)
+        if module == "library":
+            assert name == "空間狀況"
+        if module == "bus":
+            assert name == "動態公車查詢"
+
+
+async def test_the_progress_card_survives_a_long_feature_reply():
+    feature = [TextMessage(text=str(index)) for index in range(5)]
+    with patch.object(command_handler, "process_message", new=AsyncMock(return_value=feature)):
+        messages = await onboarding.start_task(pressed("@新手/任務 n=bus"))
+    assert len(messages) == onboarding.MAX_REPLY_MESSAGES
+    assert [m.text for m in messages[:-1]] == ["0", "1", "2", "3"]
+    assert messages[-1].alt_text == "新手任務進度"
+
+
 async def test_last_task_awards_the_title():
     with patch.object(command_handler, "process_message", new=AsyncMock(return_value="今日菜單")):
         messages = await onboarding.start_task(pressed("@新手/任務 n=dining done=bus,library"))
@@ -88,9 +124,9 @@ async def test_unknown_task_points_back_to_the_start():
 
 
 async def test_restart_command_resends_the_welcome():
-    (message,) = await command_handler.process_message("@新手", "user-1")
-    assert "初次見面" in message.text
-    assert message.quick_reply.items[0].action.data == "@新手/任務 n=bus"
+    greeting, card = await command_handler.process_message("@新手", "user-1")
+    assert "初次見面" in greeting.text
+    assert card.contents.footer.contents[0].action.data == "@新手/任務 n=bus"
 
 
 def test_onboarding_is_hidden_from_help():

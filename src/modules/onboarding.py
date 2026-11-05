@@ -3,29 +3,25 @@
 把目標功能的回覆原樣轉出去，再接一張進度卡。進度編在按鈕裡，不存。
 """
 
-from linebot.v3.messaging import FlexContainer, FlexMessage, QuickReply, TextMessage
+from linebot.v3.messaging import TextMessage
 
 from src.app.handlers.command_handler import command_handler
 from templates.messages.onboarding_message import (
     TASK_BY_MODULE,
     next_task,
     parse_done,
-    progress_card,
+    progress_message,
     reward_text,
-    welcome_quick_reply,
-    welcome_text,
+    welcome_messages,
 )
+
+MAX_REPLY_MESSAGES = 5  # LINE 一次回覆最多五則
 
 
 @command_handler.add_default_menu()
 def restart(event):
     """直接輸入「@新手」從頭來。指令事件拿不到 LINE 的顯示名稱，用沒有名字的問候。"""
-    return [
-        TextMessage(
-            text=welcome_text(None),
-            quick_reply=QuickReply.from_dict(welcome_quick_reply()),
-        )
-    ]
+    return welcome_messages(None)
 
 
 @command_handler.add_command("任務")
@@ -41,13 +37,12 @@ async def start_task(event):
     feature = await command_handler.process_message(command, event.user_id)
     messages = [TextMessage(text=feature)] if isinstance(feature, str) else list(feature or [])
 
-    if next_task(done) is None:
-        messages.append(TextMessage(text=reward_text(None)))
-    else:
-        messages.append(
-            FlexMessage(
-                alt_text="新手任務進度",
-                contents=FlexContainer.from_dict(progress_card(done)),
-            )
-        )
-    return messages[:5]  # LINE 一次最多五則
+    tail = TextMessage(text=reward_text()) if next_task(done) is None else progress_message(done)
+    # LINE 只顯示最後一則的 Quick Reply。功能的下一步（例如公車的上山／下山）
+    # 常常只在 Quick Reply 上，後面接了進度卡就會被藏起來，所以搬到最後一則。
+    quick_reply = getattr(messages[-1], "quick_reply", None) if messages else None
+    if quick_reply is not None:
+        messages[-1].quick_reply = None
+        tail.quick_reply = quick_reply
+    # 進度卡一定要留：超過上限時截掉的是功能回覆的尾巴，不是下一步的按鈕
+    return messages[: MAX_REPLY_MESSAGES - 1] + [tail]
