@@ -40,6 +40,7 @@ def test_palette_has_readable_body_and_button_contrast():
     for background in ("surface", "background"):
         assert contrast(COLORS["brand"], COLORS[background]) >= 4.5
     assert contrast(COLORS["surface"], COLORS["brand"]) >= 4.5
+    assert contrast(COLORS["warning"], COLORS["warning_tint"]) >= 4.5
     for route in FLEX_THEME["routes"].values():
         assert contrast(route["ink"], route["tint"]) >= 4.5
         assert contrast(route["ink"], COLORS["surface"]) >= 4.5
