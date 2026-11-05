@@ -528,8 +528,15 @@ def direction_prompt() -> str:
     return "搭校巴，先選方向\n上山含往南大校區，下山含往校本部\n" + labels
 
 
+# 校方班表只分平日／假日，沒有行事曆：國定假日會照平日班表顯示
+HOLIDAY_NOTE = "國定假日與連假的班次以學校公告為準，可在公車選單的「最新資訊」查看。"
+
+
 def direction_bubble() -> dict:
-    """三條線各一個色塊。方向按鈕在 Quick Reply，不放卡上 —— 同一組動作出現兩次太吵。"""
+    """三條線各一個色塊。方向按鈕在 Quick Reply，不放卡上 —— 同一組動作出現兩次太吵。
+
+    每次查到站都會先經過這張卡，所以國定假日的提醒放在這裡。
+    """
     return bubble(
         "搭校巴，先選方向",
         [
@@ -540,5 +547,6 @@ def direction_bubble() -> dict:
                 "spacing": FLEX_THEME["spacing"]["item_gap"],
                 "contents": [route_badge(line) for line in ROUTE_ORDER],
             },
+            text(HOLIDAY_NOTE, size="caption", color="muted"),
         ],
     )

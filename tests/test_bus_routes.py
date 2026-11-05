@@ -392,6 +392,12 @@ def test_each_line_gets_its_own_colour_block_not_one_crowded_row():
         assert FLEX_THEME["routes"][family]["label"] in block["contents"][0]["text"]
 
 
+def test_direction_card_warns_that_national_holidays_follow_announcements():
+    """資料沒有國定假日：班表會照平日顯示，要讓人知道該去看公告。"""
+    rows = [item for item in direction_bubble()["body"]["contents"] if item["type"] == "text"]
+    assert any("國定假日" in row["text"] and "最新資訊" in row["text"] for row in rows)
+
+
 def test_direction_actions_live_only_in_the_quick_reply():
     """同一組動作放卡上又放 Quick Reply，手機上會出現兩次。"""
     message = bus.select_route(SimpleNamespace(params={}))[0]
