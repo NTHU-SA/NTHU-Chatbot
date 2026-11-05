@@ -10,7 +10,7 @@ AI 對話則透過 NTHU Data MCP（預設 `https://api.nthusa.tw/mcp`）查詢�
 
 | 功能 | 端點與資料處理 |
 | --- | --- |
-| 公車 | `/buses/stops` 取得站點；`/buses/schedule?stop=...&details=true` 回傳 `dep_info` 與 `stops_time`。使用 `route`（all / main / nanda）、`limit` 篩選，從所選站的 `arrive_time` 顯示到站時間，保留已發車但尚未到站的班次 |
+| 公車 | `/buses/stops` 取得站點；`/buses/schedule?stop=...&details=true` 回傳 `dep_info`、`stops_time` 與到所選站的頂層 `arrive_time`（Data API 3.0.1 起）。使用 `route`（all / main / nanda）、`limit` 篩選，保留已發車但尚未到站的班次；首末班另查整天時刻表（不帶 `details`） |
 | 餐廳 | `/dining` 保留建築與餐廳巢狀格式；以 `schedule` 篩選營業日 |
 | 圖書館 | `/libraries/spaces` 保留剩餘數量 0；`/libraries/rss/{rss_type}` 處理空頁與 nullable 連結 |
 | 地圖 | `/locations?name=...&fuzzy=true` 模糊搜尋，同一端點不帶參數時列出地點 |
@@ -22,7 +22,7 @@ AI 對話則透過 NTHU Data MCP（預設 `https://api.nthusa.tw/mcp`）查詢�
 公車路線代碼為 `main_red`、`main_green`、`nanda_route_1`、`nanda_route_2`，
 從詳細時刻表的 `dep_info.line` 直接讀取，不再額外查詢比對路線。
 既有 LINE postback 的 `bus_type` / `limits` 仍會轉成新參數。
-未提供路線時顯示「路線待確認」，不依車型猜測；缺少所選站點或格式錯誤時，
+未提供路線時顯示「路線待確認」，不依車型猜測；缺少到站時間或格式錯誤時，
 由指令處理器記錄錯誤並通知使用者稍後重試，不當成沒有班次。
 紅／綠／藍路線的介面分類見 [design.md](../design.md#公車紅綠藍線)。
 
