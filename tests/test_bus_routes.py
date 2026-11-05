@@ -28,6 +28,8 @@ from templates.messages.bus_message import (
 from templates.messages.flex_theme import FLEX_THEME
 
 NOON = datetime(2026, 10, 23, 12, 0)  # 星期五
+FRIDAY = NOON
+MONDAY = datetime(2026, 10, 26, 12, 0)
 BOUNDS = {"first_time": "07:31", "last_time": "23:29", "tomorrow_first": "08:49"}
 
 
@@ -232,13 +234,22 @@ def test_suspended_departures_never_reach_a_card():
     [
         (0, 30, "before_first"),
         (5, 30, "before_first"),
-        (7, 45, "after_last"),
+        # 首末班之間卻沒有車可顯示：即時查詢和班表對不上，不能說末班已過
+        (7, 45, "unknown"),
+        (23, 29, "after_last"),
         (23, 50, "after_last"),
     ],
 )
 def test_service_state_separates_not_yet_running_from_finished(hour, minute, state):
     moment = datetime(2026, 10, 23, hour, minute)
     assert service_state("07:31", "23:29", moment) == state
+
+
+def test_no_buses_before_the_last_one_is_unknown_and_suggests_nothing_for_tomorrow():
+    """即時查詢沒車、班表卻說還沒到末班：不說「末班車已過」，也不推薦明天。"""
+    bubble = bus_reply([], "綜二館", "上山", now=NOON, **BOUNDS)
+    rows = [item["text"] for item in bubble["body"]["contents"] if item["type"] == "text"]
+    assert rows == ["暫時查不到班次"]
 
 
 def test_missing_timetable_is_reported_as_no_service_not_as_a_finished_day():
@@ -599,7 +610,7 @@ async def test_canonical_filters_reach_the_api_without_extra_schedule_requests()
 async def test_day_bounds_reuse_the_shared_cache_and_read_the_whole_day():
     """首末班是靜態班表，不該每次查詢都重打一次。"""
     with patch.object(bus.nthuapi, "get", new=AsyncMock(return_value=[detailed_schedule()])) as get:
-        bounds = await bus._day_bounds("綜二館", "up", "weekday")
+        bounds = await bus._day_bounds("綜二館", "up", MONDAY)
     assert bounds == ("08:10", "08:10")
     assert "cache" not in get.await_args.kwargs
     assert get.await_args.kwargs["params"]["day"] == "weekday"
@@ -640,15 +651,28 @@ async def test_missing_stop_name_is_reported_without_calling_api():
     assert messages[0].type == "text"
 
 
+async def test_day_bounds_skip_runs_suspended_on_that_day():
+    """週五的「今日首班」不能是週五停駛的那班；其他天照算。"""
+    schedules = [
+        {"arrive_time": "07:20", "description": "週五停駛"},
+        {"arrive_time": "07:40", "description": ""},
+        {"arrive_time": "23:25", "description": "週五停駛"},
+        {"arrive_time": "22:00", "description": ""},
+    ]
+    with patch.object(bus.nthuapi, "get", new=AsyncMock(return_value=schedules)):
+        assert await bus._day_bounds("綜二館", "up", FRIDAY) == ("07:40", "22:00")
+        assert await bus._day_bounds("綜二館", "up", MONDAY) == ("07:20", "23:25")
+
+
 async def test_day_bounds_report_a_failed_lookup_apart_from_an_empty_day():
     """查不到和那天真的沒車是兩回事 —— 混在一起會把 API 故障說成「今日無班次」。"""
     with patch.object(bus.nthuapi, "get", new=AsyncMock(side_effect=ValueError("down"))):
-        assert await bus._day_bounds("綜二館", "up", "weekday") is None
+        assert await bus._day_bounds("綜二館", "up", MONDAY) is None
     with patch.object(bus.nthuapi, "get", new=AsyncMock(return_value=[])):
-        assert await bus._day_bounds("綜二館", "up", "weekday") == (None, None)
+        assert await bus._day_bounds("綜二館", "up", MONDAY) == (None, None)
     # 沒有頂層 arrive_time（舊版 API）也是查不到，不是沒車
     with patch.object(bus.nthuapi, "get", new=AsyncMock(return_value=[{"dep_info": {}}])):
-        assert await bus._day_bounds("綜二館", "up", "weekday") is None
+        assert await bus._day_bounds("綜二館", "up", MONDAY) is None
 
 
 def test_a_failed_timetable_lookup_does_not_claim_the_day_has_no_buses():

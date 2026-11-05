@@ -107,12 +107,18 @@ def split_note(description: str | None) -> tuple[str | None, str | None]:
 def service_state(
     first_time: str | None, last_time: str | None, now: datetime | None = None
 ) -> str:
-    """比對現在時刻與今日首末班，決定是哪一種「沒有車」。"""
+    """比對現在時刻與今日首末班，決定是哪一種「沒有車」。
+
+    還沒到末班卻沒有車可顯示，代表即時查詢和整天班表對不上；那時說「末班車已過」
+    是在陳述一件沒發生的事，改說查不到。
+    """
     if not first_time or not last_time:
         return "no_service"
     current = (now or datetime.now(TZ)).strftime("%H:%M")
     if current < first_time:
         return "before_first"
+    if current < last_time:
+        return "unknown"
     return "after_last"
 
 
@@ -465,7 +471,8 @@ def bus_reply(
             stop_name,
             direction_name,
             state=state,
-            next_time=tomorrow_first,
+            # 查不到時連「明日首班」也不提：不知道今天的狀況，就別推薦明天
+            next_time=None if state == "unknown" else tomorrow_first,
             direction=direction,
         )
     return bus_arrival_carousel(runnable, stop_name, direction_name, moment)

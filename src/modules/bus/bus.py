@@ -18,6 +18,7 @@ from templates.messages.bus_message import (
     bus_reply,
     direction_bubble,
     direction_prompt,
+    runs_today,
 )
 
 STATIC_URL = "https://data.nthusa.tw"
@@ -63,7 +64,7 @@ def _day_kind(moment: datetime) -> str:
 
 
 async def _day_bounds(
-    stop_name: str, direction: str, day: str
+    stop_name: str, direction: str, moment: datetime
 ) -> tuple[str | None, str | None] | None:
     """當日首末班到站時間；查不到時回 `None`。
 
@@ -73,12 +74,14 @@ async def _day_bounds(
 
     回 `None`（查詢失敗）和回 `(None, None)`（那天真的沒有班次）是兩回事：
     前者不能拿來跟使用者說「今日無班次」。
+
+    `moment` 那天停駛的班次不算：週五的「今日首班」不能是一班週五不開的車。
     """
     try:
         schedules = await nthuapi.get(
             "/buses/schedule",
             params={
-                "day": day,
+                "day": _day_kind(moment),
                 "limit": 200,
                 "route": "all",
                 "direction": direction,
@@ -90,7 +93,11 @@ async def _day_bounds(
     if not isinstance(schedules, list):
         return None
     try:
-        times = sorted(schedule["arrive_time"] for schedule in schedules)
+        times = sorted(
+            schedule["arrive_time"]
+            for schedule in schedules
+            if runs_today(schedule.get("description"), moment.weekday())
+        )
     except KeyError, TypeError:
         return None
     return (times[0], times[-1]) if times else (None, None)
@@ -217,8 +224,8 @@ async def query_stop_bus(event):
     hours_known = True
     if today_only:
         today_bounds, tomorrow_bounds = await asyncio.gather(
-            _day_bounds(stop_name, direction, _day_kind(now)),
-            _day_bounds(stop_name, direction, _day_kind(now + timedelta(days=1))),
+            _day_bounds(stop_name, direction, now),
+            _day_bounds(stop_name, direction, now + timedelta(days=1)),
         )
         hours_known = today_bounds is not None
         if today_bounds:
