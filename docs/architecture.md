@@ -109,7 +109,7 @@ webhook → LINE userId → identityLookup/{sha256(line:U…)} → NTHUSA ID（�
 | `conversations/{cid}` | `userId`、`channel`、`status`、`title`、`startedAt`、`lastMessageAt`、`messageCount`、`metadata.origin`；每人最多 50 個，超過時刪除最久未更新的 |
 | `conversations/{cid}/messages/{mid}` | `role`、`contentType`、`content`、`toolCalls`、`model`、`promptVersion`、`tokenUsage`、`latencyMs`、`createdAt` |
 | `usageStats/{YYYY-MM-DD}` | 聊天室每天的匿名總數：`messages`、`postbacks`、`follows`、`unfollows`、`modules`{moduleId}；不含任何使用者識別資料 |
-| `modules/{moduleId}` | `enabled: false` 暫停某個 `@` 指令模組（沒有文件代表啟用；快取 60 秒；沒有後台時在 Console 開關） |
+| `modules/{moduleId}` | `enabled: false` 暫停某個 `@` 指令模組（沒有文件代表啟用；快取 60 秒；沒有後台時在 Console 開關）。新手任務轉跑的功能也依該功能自己的開關 |
 
 - 每則訊息一份文件，不存成 array；讀取對話與訊息一律比對 `userId`，別人的對話當作不存在。
 - `tokenUsage`、`model`、`promptVersion`、`latencyMs` 只存在資料庫供成本與品質分析，不回傳前端。
