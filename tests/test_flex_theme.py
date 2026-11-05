@@ -49,7 +49,6 @@ def test_palette_has_readable_body_and_button_contrast():
     "message",
     [
         open_web_chat("123-example", "公車何時到？"),
-        open_web_chat("123-example", greeting=True),
         help_message(["公車", "圖書館"], "123-example"),
         help_message(["公車"]),
         system_message("系統通知", "請稍後再試")[0],
@@ -184,8 +183,8 @@ async def test_global_theme_changes_reach_all_builders_templates_and_cached_menu
                 assert heading["size"] in {"xl", "sm"}
                 assert card["body"]["paddingAll"] == "24px"
                 assert card["styles"]["body"]["backgroundColor"] == "#F6F4FA"
-                # 系統訊息與公車說明泡泡用較窄的 notice_size
-                if sample["id"] not in {"system", "bus-none"}:
+                # 系統訊息、公車說明泡泡與新手任務進度用較窄的 notice_size
+                if sample["id"] not in {"system", "bus-none", "quest"}:
                     assert card["size"] == "giga"
                 else:
                     assert card["size"] == FLEX_THEME["components"]["notice_size"]

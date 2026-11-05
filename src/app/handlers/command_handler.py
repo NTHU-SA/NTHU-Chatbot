@@ -47,12 +47,17 @@ class ModuleConfig:
 
 
 class CommandEvent:
-    """命令事件。"""
+    """命令事件。
 
-    def __init__(self, user_id, text, params):
+    `run` 是呼叫端執行 `@` 指令的入口（聊天室的 `run_command`）。指令要轉跑另一個指令時
+    （例如新手任務）用它，才會套用模組停用與使用統計；沒有時直接交給指令處理器。
+    """
+
+    def __init__(self, user_id, text, params, run=None):
         self.user_id = user_id
         self.message = text
         self.params = params
+        self.run = run
 
 
 class CommandHandlerError(Exception):
@@ -338,6 +343,7 @@ class CommandHandler:
         user_id: str,
         text: str,
         params: dict = None,
+        run=None,
     ):
         """執行命令。
 
@@ -350,7 +356,7 @@ class CommandHandler:
         if not module_config:
             raise ModuleNotFoundError(module)
 
-        command_event = CommandEvent(user_id=user_id, text=text, params=params or {})
+        command_event = CommandEvent(user_id=user_id, text=text, params=params or {}, run=run)
         # 只記錄模組名稱：指令名稱與參數都是使用者輸入的文字，不寫進 log
         logger.info("執行命令: {}", module)
 
@@ -378,15 +384,16 @@ class CommandHandler:
                     return module_config.default_reply(command_event)
             raise CommandNotFoundError(prefix, command_name)
 
-    async def process_message(self, message: str, user_id: str):
+    async def process_message(self, message: str, user_id: str, run=None):
         """處理訊息入口。
 
-        接收使用者輸入的訊息，解析命令並執行對應的處理函數。
+        接收使用者輸入的訊息，解析命令並執行對應的處理函數。`run` 會交給指令的
+        `CommandEvent.run`，見該處說明。
         """
         module, prefix, command_name, params = self.parse_command(message)
         try:
             return await self.execute_command(
-                module, prefix, command_name, user_id, message, params
+                module, prefix, command_name, user_id, message, params, run
             )
         except ModuleNotFoundError as e:
             # 例外訊息含使用者輸入的指令文字：只記錄類型
