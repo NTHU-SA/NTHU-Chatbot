@@ -1,4 +1,5 @@
 import copy
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -11,6 +12,12 @@ from src.utils import announcecrawler
 
 def command(**params):
     return SimpleNamespace(params=params)
+
+
+class _FixedNoon(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return cls(2026, 11, 4, 12, 0, tzinfo=tz)
 
 
 def fake_api(module, return_value=None):
@@ -52,10 +59,12 @@ async def test_bus_arrivals_use_detailed_schedules_and_escape_json():
     ]
     original = copy.deepcopy(schedules)
     # 首末班要固定住：用合成班表推出來的話，結果會隨實際時鐘在
-    # 「尚未發車」與到站卡之間跳動。
+    # 「尚未發車」與到站卡之間跳動。現在時間也固定在平日中午，否則在
+    # 首班車之前（例如台北凌晨）跑測試只會拿到「尚未發車」。
     with (
         fake_api(bus, schedules) as get,
         patch.object(bus, "_day_bounds", new=AsyncMock(return_value=("07:00", "22:00"))),
+        patch.object(bus, "datetime", _FixedNoon),
     ):
         messages = await bus.query_stop_bus(command(stop_name="North Gate"))
 
